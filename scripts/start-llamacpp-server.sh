@@ -78,6 +78,8 @@ if docker logs ws-llamacpp 2>&1 | egrep -qi "loaded CPU backend|compiled without
   echo "       LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full"
   echo "[next] Depois recrie apenas o serviço llama.cpp:"
   echo "       docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up -d --force-recreate llamacpp"
+  echo "[next] Se persistir CPU-only, use build local Vulkan:"
+  echo "       bash ./scripts/start-llamacpp-vulkan-build.sh"
 fi
 
 echo "[ok] Stack pronto para uso com llama.cpp"

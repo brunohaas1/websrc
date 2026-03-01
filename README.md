@@ -178,6 +178,15 @@ bash ./scripts/start-llamacpp-server.sh
 > com CasaOS em `8080`.
 > Se houver erro de pull de imagem, ajuste `LLAMACPP_IMAGE` no `.env.advanced`.
 
+Fallback robusto (build local com Vulkan habilitado):
+
+```bash
+bash ./scripts/start-llamacpp-vulkan-build.sh
+```
+
+Esse fluxo compila uma imagem local (`websrc-llamacpp:vulkan`) com
+`GGML_VULKAN=ON` para evitar binários sem suporte GPU.
+
 3. Acesse via proxy: `http://IP_DO_SERVIDOR`
 
 > Nota: este compose avançado já organiza serviços por responsabilidade e infraestrutura,

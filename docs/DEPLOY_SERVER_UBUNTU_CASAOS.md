@@ -82,6 +82,15 @@ Se ocorrer `manifest unknown` no pull da imagem, ajuste no `.env.advanced`:
 LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server
 ```
 
+Se subir mas continuar em CPU-only, use o fallback de build local Vulkan:
+
+```bash
+bash ./scripts/start-llamacpp-vulkan-build.sh
+```
+
+Esse script compila `llama.cpp` com `GGML_VULKAN=ON` e sobe o stack usando
+imagem local `websrc-llamacpp:vulkan`.
+
 1. Coloque o modelo GGUF em `./models` com nome:
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`

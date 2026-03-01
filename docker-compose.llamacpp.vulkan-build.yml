@@ -1,0 +1,6 @@
+services:
+  llamacpp:
+    image: websrc-llamacpp:vulkan
+    build:
+      context: .
+      dockerfile: infra/llamacpp-vulkan.Dockerfile
