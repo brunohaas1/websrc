@@ -42,7 +42,7 @@ services:
       - "${LLAMACPP_DRI_CARD:-/dev/dri/card0}:${LLAMACPP_DRI_CARD:-/dev/dri/card0}"
     environment:
       - GGML_VK_VISIBLE_DEVICES=0
-      - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-}
+      - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}
     ports:
       - "${LLAMACPP_HOST_PORT:-8081}:8080"
     expose:
