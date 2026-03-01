@@ -1,0 +1,13 @@
+services:
+  ollama:
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      - HSA_OVERRIDE_GFX_VERSION=8.0.3
+      - ROC_ENABLE_PRE_VEGA=1
