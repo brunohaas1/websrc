@@ -17,6 +17,13 @@ if [[ ! -f .env.advanced ]]; then
   echo "[ok] .env.advanced criado a partir de .env.llamacpp.example"
 fi
 
+set -a
+# shellcheck disable=SC1091
+source .env.advanced
+set +a
+
+LLAMACPP_HOST_PORT="${LLAMACPP_HOST_PORT:-8081}"
+
 echo "[1/3] Subindo stack com backend llama.cpp..."
 docker compose \
   -f docker-compose.advanced.yml \
@@ -28,6 +35,7 @@ docker compose ps
 
 echo "[3/3] Health checks:"
 curl -fsS http://127.0.0.1/health && echo
+curl -fsS "http://127.0.0.1:${LLAMACPP_HOST_PORT}/health" && echo
 curl -fsS http://127.0.0.1:8000/api/ai-observability && echo
 
 echo "[ok] Stack pronto para uso com llama.cpp"

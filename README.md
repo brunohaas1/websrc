@@ -174,6 +174,9 @@ cp .env.llamacpp.example .env.advanced
 bash ./scripts/start-llamacpp-server.sh
 ```
 
+> O `llama.cpp` fica exposto em `8081` por padrão (host), evitando conflito
+> com CasaOS em `8080`.
+
 3. Acesse via proxy: `http://IP_DO_SERVIDOR`
 
 > Nota: este compose avançado já organiza serviços por responsabilidade e infraestrutura,
@@ -259,6 +262,7 @@ AI_LOCAL_BACKEND=llama_cpp
 AI_LOCAL_URL=http://llamacpp:8080
 AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT=/v1/chat/completions
 AI_LOCAL_MODEL=llama-3.2-3b-instruct-q4_k_m
+LLAMACPP_HOST_PORT=8081
 AI_LOCAL_TIMEOUT_SECONDS=25
 AI_LOCAL_RETRIES=2
 AI_LOCAL_BACKOFF_MS=400

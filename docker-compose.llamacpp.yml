@@ -37,5 +37,7 @@ services:
       - /dev/dri
     environment:
       - GGML_VK_VISIBLE_DEVICES=0
+    ports:
+      - "${LLAMACPP_HOST_PORT:-8081}:8080"
     expose:
       - "8080"

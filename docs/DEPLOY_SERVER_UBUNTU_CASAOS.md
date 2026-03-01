@@ -73,6 +73,9 @@ bash ./scripts/start-llamacpp-server.sh
 Isso já sobe os serviços corretos (`api`, `worker`, `scheduler`, `redis`,
 `postgres`, `caddy`, `llamacpp`) sem depender do `ollama`.
 
+Por padrão, o `llama.cpp` é publicado na porta `8081` do host para não
+conflitar com o CasaOS em `8080`.
+
 1. Coloque o modelo GGUF em `./models` com nome:
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`
