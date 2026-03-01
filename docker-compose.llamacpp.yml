@@ -41,6 +41,7 @@ services:
       - /dev/dri
     environment:
       - GGML_VK_VISIBLE_DEVICES=0
+      - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-}
     ports:
       - "${LLAMACPP_HOST_PORT:-8081}:8080"
     expose:

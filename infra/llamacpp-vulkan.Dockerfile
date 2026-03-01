@@ -35,8 +35,11 @@ RUN apt-get update \
         curl \
         libgcc-s1 \
         libgomp1 \
+        libdrm2 \
+        mesa-vulkan-drivers \
         libvulkan1 \
         libstdc++6 \
+        vulkan-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

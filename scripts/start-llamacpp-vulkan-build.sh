@@ -27,3 +27,7 @@ docker compose -f docker-compose.advanced.yml stop ollama >/dev/null 2>&1 || tru
 
 echo "[ok] Stack iniciado. Verifique backend:" 
 docker logs ws-llamacpp 2>&1 | egrep -i "load_backend|vulkan|offload|gpu" | tail -n 40 || true
+echo "[info] Vulkan runtime dentro do container:"
+docker exec ws-llamacpp vulkaninfo --summary 2>/dev/null | head -n 40 || true
+echo "[info] Dispositivos listados pelo llama-server:"
+docker exec ws-llamacpp /app/llama-server --list-devices || true
