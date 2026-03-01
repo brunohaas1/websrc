@@ -187,6 +187,13 @@ bash ./scripts/start-llamacpp-vulkan-build.sh
 Esse fluxo compila uma imagem local (`websrc-llamacpp:vulkan`) com
 `GGML_VULKAN=ON` para evitar binários sem suporte GPU.
 
+Preset produção para RX580 (latência menor e menos fallback):
+
+```bash
+bash ./scripts/apply-rx580-prod-preset.sh
+bash ./scripts/start-llamacpp-vulkan-build.sh
+```
+
 3. Acesse via proxy: `http://IP_DO_SERVIDOR`
 
 > Nota: este compose avançado já organiza serviços por responsabilidade e infraestrutura,
