@@ -46,6 +46,6 @@ ls -l /dev/dri 2>/dev/null || true
 echo "[info] Nós DRM dentro do container:"
 docker exec ws-llamacpp ls -l /dev/dri 2>/dev/null || true
 echo "[info] Vulkan runtime dentro do container:"
-docker exec ws-llamacpp vulkaninfo --summary 2>/dev/null | head -n 40 || true
+docker exec ws-llamacpp sh -lc 'ls -l /usr/share/vulkan/icd.d || true; vulkaninfo --summary' | head -n 80 || true
 echo "[info] Dispositivos listados pelo llama-server:"
 docker exec ws-llamacpp /app/llama-server --list-devices || true
