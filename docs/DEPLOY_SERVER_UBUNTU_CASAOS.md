@@ -63,6 +63,16 @@ docker compose -f docker-compose.advanced.yml up -d --build
 
 ### Alternativa: `llama.cpp` (servidor próprio)
 
+Modo pronto para uso:
+
+```bash
+cp .env.llamacpp.example .env.advanced
+bash ./scripts/start-llamacpp-server.sh
+```
+
+Isso já sobe os serviços corretos (`api`, `worker`, `scheduler`, `redis`,
+`postgres`, `caddy`, `llamacpp`) sem depender do `ollama`.
+
 1. Coloque o modelo GGUF em `./models` com nome:
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`

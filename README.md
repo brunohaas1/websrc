@@ -142,6 +142,7 @@ Para evoluir este projeto em nível portfólio/profissional, use:
 - Plano de 14 dias com checklist diário: `docs/EVOLUTION_14_DAYS.md`
 - Compose avançado (api + worker + postgres + redis + caddy): `docker-compose.advanced.yml`
 - Exemplo de variáveis para arquitetura avançada: `.env.advanced.example`
+- Exemplo pronto para `llama.cpp`: `.env.llamacpp.example`
 
 ### Como testar o compose avançado
 
@@ -165,6 +166,13 @@ docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up 
 ```
 
 > Requer modelo GGUF em `./models` (ex.: `llama-3.2-3b-instruct-q4_k_m.gguf`).
+
+Fluxo turnkey no servidor (sem ajustes manuais):
+
+```bash
+cp .env.llamacpp.example .env.advanced
+bash ./scripts/start-llamacpp-server.sh
+```
 
 3. Acesse via proxy: `http://IP_DO_SERVIDOR`
 
