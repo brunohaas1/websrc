@@ -58,6 +58,13 @@ check_url "http://127.0.0.1:${LLAMACPP_HOST_PORT}/health" "llama.cpp" || true
 check_url "http://127.0.0.1/health" "api via caddy (80)" || true
 check_url "http://127.0.0.1:8000/api/ai-observability" "ai-observability via caddy (8000)" || true
 
+if ! curl -fsS "http://127.0.0.1:${LLAMACPP_HOST_PORT}/health" >/dev/null; then
+  echo "[warn] llama.cpp não respondeu no healthcheck final. Estado do container:"
+  docker compose ps llamacpp || true
+  echo "[warn] Últimos logs do llama.cpp:"
+  docker logs ws-llamacpp --tail 120 || true
+fi
+
 curl -fsS "http://127.0.0.1:${LLAMACPP_HOST_PORT}/health" && echo
 curl -fsS http://127.0.0.1/health && echo
 curl -fsS http://127.0.0.1:8000/api/ai-observability && echo

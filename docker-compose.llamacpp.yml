@@ -20,6 +20,8 @@ services:
     image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:full}
     container_name: ws-llamacpp
     restart: unless-stopped
+    entrypoint:
+      - /app/llama-server
     command:
       - -m
       - /models/llama-3.2-3b-instruct-q4_k_m.gguf
