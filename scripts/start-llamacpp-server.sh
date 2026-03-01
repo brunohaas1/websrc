@@ -17,11 +17,7 @@ if [[ ! -f .env.advanced ]]; then
   echo "[ok] .env.advanced criado a partir de .env.llamacpp.example"
 fi
 
-set -a
-# shellcheck disable=SC1091
-source .env.advanced
-set +a
-
+LLAMACPP_HOST_PORT="$(grep -E '^LLAMACPP_HOST_PORT=' .env.advanced 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d '\r' | xargs || true)"
 LLAMACPP_HOST_PORT="${LLAMACPP_HOST_PORT:-8081}"
 
 echo "[1/3] Subindo stack com backend llama.cpp..."
