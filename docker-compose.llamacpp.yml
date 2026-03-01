@@ -31,6 +31,8 @@ services:
       - "4096"
       - --n-predict
       - "256"
+      - --n-gpu-layers
+      - "${LLAMACPP_GPU_LAYERS:-35}"
     volumes:
       - ./models:/models
     devices:

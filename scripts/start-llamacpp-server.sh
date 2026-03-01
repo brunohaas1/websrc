@@ -62,4 +62,7 @@ curl -fsS "http://127.0.0.1:${LLAMACPP_HOST_PORT}/health" && echo
 curl -fsS http://127.0.0.1/health && echo
 curl -fsS http://127.0.0.1:8000/api/ai-observability && echo
 
+echo "[info] Diagnóstico de backend llama.cpp (últimas linhas relevantes):"
+docker logs ws-llamacpp 2>&1 | egrep -i "load_backend|vulkan|offload|gpu" | tail -n 20 || true
+
 echo "[ok] Stack pronto para uso com llama.cpp"
