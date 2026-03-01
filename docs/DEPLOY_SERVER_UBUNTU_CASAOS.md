@@ -91,6 +91,13 @@ bash ./scripts/start-llamacpp-vulkan-build.sh
 Esse script compila `llama.cpp` com `GGML_VULKAN=ON` e sobe o stack usando
 imagem local `websrc-llamacpp:vulkan`.
 
+Se o host usar `card1` (e não `card0`), você pode forçar no comando:
+
+```bash
+LLAMACPP_DRI_CARD=/dev/dri/card1 LLAMACPP_DRI_RENDER=/dev/dri/renderD128 \
+bash ./scripts/start-llamacpp-vulkan-build.sh
+```
+
 1. Coloque o modelo GGUF em `./models` com nome:
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`
