@@ -33,6 +33,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        libgcc-s1 \
+        libgomp1 \
         libvulkan1 \
         libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
