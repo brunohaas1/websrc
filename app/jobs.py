@@ -20,7 +20,11 @@ def _runtime_config(database_path: str, log_level: str) -> dict:
         "WEATHER_LON": Config.WEATHER_LON,
         "FEED_ENTRY_LIMIT": Config.FEED_ENTRY_LIMIT,
         "AI_LOCAL_ENABLED": Config.AI_LOCAL_ENABLED,
+        "AI_LOCAL_BACKEND": Config.AI_LOCAL_BACKEND,
         "AI_LOCAL_URL": Config.AI_LOCAL_URL,
+        "AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT": (
+            Config.AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT
+        ),
         "AI_LOCAL_MODEL": Config.AI_LOCAL_MODEL,
         "AI_LOCAL_TIMEOUT_SECONDS": Config.AI_LOCAL_TIMEOUT_SECONDS,
         "AI_LOCAL_RETRIES": Config.AI_LOCAL_RETRIES,

@@ -158,6 +158,14 @@ Se o servidor for AMD (ex.: RX580) e você quiser acelerar o Ollama por GPU:
 docker compose -f docker-compose.advanced.yml -f docker-compose.amd.yml up -d --build
 ```
 
+Se quiser usar `llama.cpp` (servidor próprio) no lugar de Ollama:
+
+```bash
+docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up -d --build
+```
+
+> Requer modelo GGUF em `./models` (ex.: `llama-3.2-3b-instruct-q4_k_m.gguf`).
+
 3. Acesse via proxy: `http://IP_DO_SERVIDOR`
 
 > Nota: este compose avançado já organiza serviços por responsabilidade e infraestrutura,
@@ -239,8 +247,10 @@ No `.env.advanced`:
 
 ```dotenv
 AI_LOCAL_ENABLED=1
-AI_LOCAL_URL=http://ollama:11434
-AI_LOCAL_MODEL=llama3.2:3b
+AI_LOCAL_BACKEND=llama_cpp
+AI_LOCAL_URL=http://llamacpp:8080
+AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT=/v1/chat/completions
+AI_LOCAL_MODEL=llama-3.2-3b-instruct-q4_k_m
 AI_LOCAL_TIMEOUT_SECONDS=25
 AI_LOCAL_RETRIES=2
 AI_LOCAL_BACKOFF_MS=400
@@ -257,6 +267,9 @@ Depois do stack subir, baixe o modelo no container `ws-ollama`:
 ```bash
 docker exec -it ws-ollama ollama pull llama3.2:3b
 ```
+
+Para `llama.cpp`, coloque o GGUF em `./models` antes de subir o
+`docker-compose.llamacpp.yml`.
 
 ### Como funciona
 

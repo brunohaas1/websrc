@@ -61,6 +61,28 @@ Ajuste no `.env.advanced` (mínimo):
 docker compose -f docker-compose.advanced.yml up -d --build
 ```
 
+### Alternativa: `llama.cpp` (servidor próprio)
+
+1. Coloque o modelo GGUF em `./models` com nome:
+
+- `llama-3.2-3b-instruct-q4_k_m.gguf`
+
+2. Suba com override do `llama.cpp`:
+
+```bash
+docker compose \
+	-f docker-compose.advanced.yml \
+	-f docker-compose.llamacpp.yml \
+	up -d --build
+```
+
+3. Verifique se o serviço subiu:
+
+```bash
+docker compose ps
+docker logs ws-llamacpp --tail 120
+```
+
 ### Se usar AMD (RX580) para acelerar Ollama
 
 Use o override AMD para mapear dispositivos da GPU no container:
@@ -90,6 +112,8 @@ docker compose -f docker-compose.advanced.yml ps
 docker exec -it ws-ollama ollama pull llama3.2:3b
 docker exec -it ws-ollama ollama list
 ```
+
+> Se estiver usando `llama.cpp`, este passo não é necessário.
 
 ## 6) Validar aplicação e pipeline de IA
 

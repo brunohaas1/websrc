@@ -33,7 +33,12 @@ class Config:
     WEATHER_LON = float(os.getenv("WEATHER_LON", "-51.9614"))
 
     AI_LOCAL_ENABLED = os.getenv("AI_LOCAL_ENABLED", "0") == "1"
+    AI_LOCAL_BACKEND = os.getenv("AI_LOCAL_BACKEND", "ollama")
     AI_LOCAL_URL = os.getenv("AI_LOCAL_URL", "http://127.0.0.1:11434")
+    AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT = os.getenv(
+        "AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT",
+        "/v1/chat/completions",
+    )
     AI_LOCAL_MODEL = os.getenv("AI_LOCAL_MODEL", "llama3.2:3b")
     AI_LOCAL_TIMEOUT_SECONDS = int(os.getenv("AI_LOCAL_TIMEOUT_SECONDS", "25"))
     AI_LOCAL_RETRIES = int(os.getenv("AI_LOCAL_RETRIES", "2"))

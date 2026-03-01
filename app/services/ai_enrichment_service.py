@@ -172,7 +172,16 @@ class LocalAIEnricher:
         self.app = app
         self.logger = logging.getLogger(self.__class__.__name__)
         self.enabled = app.config.get("AI_LOCAL_ENABLED", False)
+        self.backend = str(
+            app.config.get("AI_LOCAL_BACKEND", "ollama"),
+        ).strip().lower()
         self.url = app.config.get("AI_LOCAL_URL", "http://127.0.0.1:11434")
+        self.llamacpp_chat_endpoint = str(
+            app.config.get(
+                "AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT",
+                "/v1/chat/completions",
+            ),
+        )
         self.model = app.config.get("AI_LOCAL_MODEL", "qwen2.5:3b-instruct")
         self.timeout = int(app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 25))
         self.retries = int(app.config.get("AI_LOCAL_RETRIES", 2))
@@ -186,6 +195,81 @@ class LocalAIEnricher:
         self.min_adaptive_per_run = int(
             app.config.get("AI_LOCAL_ADAPTIVE_MIN_PER_RUN", 4),
         )
+
+    @staticmethod
+    def _extract_json_text(raw: str) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text).strip()
+            text = re.sub(r"```$", "", text).strip()
+
+        if text.startswith("{") and text.endswith("}"):
+            return text
+
+        match = re.search(r"\{[\s\S]*\}", text)
+        return match.group(0).strip() if match else text
+
+    def _request_model_raw(self, prompt: str) -> str:
+        backend = self.backend or "ollama"
+
+        if backend == "llama_cpp":
+            endpoint = self.llamacpp_chat_endpoint or "/v1/chat/completions"
+            url = f"{self.url.rstrip('/')}{endpoint}"
+            response = requests.post(
+                url,
+                timeout=self.timeout,
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Retorne somente JSON válido sem markdown."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "stream": False,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("Resposta sem choices no llama.cpp")
+
+            message = choices[0].get("message")
+            if not isinstance(message, dict):
+                raise ValueError("Resposta sem message no llama.cpp")
+
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Resposta vazia do llama.cpp")
+
+            return self._extract_json_text(content)
+
+        response = requests.post(
+            f"{self.url.rstrip('/')}/api/generate",
+            timeout=self.timeout,
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.1},
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        raw = payload.get("response")
+        if not raw:
+            raise ValueError("Resposta vazia da IA local")
+        return self._extract_json_text(str(raw))
 
     @staticmethod
     def _strip_html(text: str) -> str:
@@ -369,22 +453,8 @@ class LocalAIEnricher:
         for attempt in range(self.retries + 1):
             started_at = time.perf_counter()
             try:
-                response = requests.post(
-                    f"{self.url.rstrip('/')}/api/generate",
-                    timeout=self.timeout,
-                    json={
-                        "model": self.model,
-                        "prompt": self._build_prompt(item),
-                        "stream": False,
-                        "format": "json",
-                        "options": {"temperature": 0.1},
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-                raw = payload.get("response")
-                if not raw:
-                    raise ValueError("Resposta vazia da IA local")
+                prompt = self._build_prompt(item)
+                raw = self._request_model_raw(prompt)
 
                 parsed = json.loads(raw)
                 if not isinstance(parsed, dict):

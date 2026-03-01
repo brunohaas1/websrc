@@ -1,0 +1,41 @@
+services:
+  api:
+    depends_on:
+      - postgres
+      - redis
+      - llamacpp
+
+  worker:
+    depends_on:
+      - postgres
+      - redis
+      - llamacpp
+
+  scheduler:
+    depends_on:
+      - redis
+      - llamacpp
+
+  llamacpp:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: ws-llamacpp
+    restart: unless-stopped
+    command:
+      - -m
+      - /models/llama-3.2-3b-instruct-q4_k_m.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --ctx-size
+      - "4096"
+      - --n-predict
+      - "256"
+    volumes:
+      - ./models:/models
+    devices:
+      - /dev/dri
+    environment:
+      - GGML_VK_VISIBLE_DEVICES=0
+    expose:
+      - "8080"
