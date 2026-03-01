@@ -76,6 +76,12 @@ Isso já sobe os serviços corretos (`api`, `worker`, `scheduler`, `redis`,
 Por padrão, o `llama.cpp` é publicado na porta `8081` do host para não
 conflitar com o CasaOS em `8080`.
 
+Se ocorrer `manifest unknown` no pull da imagem, ajuste no `.env.advanced`:
+
+```dotenv
+LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+```
+
 1. Coloque o modelo GGUF em `./models` com nome:
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`

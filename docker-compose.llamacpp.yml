@@ -17,7 +17,7 @@ services:
       - llamacpp
 
   llamacpp:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     container_name: ws-llamacpp
     restart: unless-stopped
     command:
