@@ -1,0 +1,16 @@
+services:
+  webscraper-dashboard:
+    build: .
+    container_name: webscraper-dashboard
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_PATH=/app/data/dashboard.db
+      - SCRAPE_INTERVAL_MINUTES=30
+      - DAILY_INTERVAL_HOURS=24
+      - WEATHER_LAT=-23.5505
+      - WEATHER_LON=-46.6333
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data

@@ -1,0 +1,22 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Local runtime data
+data/*.db
+data/*.sqlite
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.advanced.example
+
+# OS/editor
+.DS_Store
+Thumbs.db
