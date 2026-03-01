@@ -65,4 +65,12 @@ curl -fsS http://127.0.0.1:8000/api/ai-observability && echo
 echo "[info] Diagnóstico de backend llama.cpp (últimas linhas relevantes):"
 docker logs ws-llamacpp 2>&1 | egrep -i "load_backend|vulkan|offload|gpu" | tail -n 20 || true
 
+if docker logs ws-llamacpp 2>&1 | egrep -qi "loaded CPU backend|compiled without GPU support|no usable GPU found"; then
+  echo "[warn] llama.cpp iniciou em CPU-only."
+  echo "[next] No servidor, ajuste .env.advanced para:"
+  echo "       LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full"
+  echo "[next] Depois recrie apenas o serviço llama.cpp:"
+  echo "       docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up -d --force-recreate llamacpp"
+fi
+
 echo "[ok] Stack pronto para uso com llama.cpp"

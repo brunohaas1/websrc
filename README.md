@@ -263,7 +263,7 @@ AI_LOCAL_BACKEND=llama_cpp
 AI_LOCAL_URL=http://llamacpp:8080
 AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT=/v1/chat/completions
 AI_LOCAL_MODEL=llama-3.2-3b-instruct-q4_k_m
-LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full
 LLAMACPP_HOST_PORT=8081
 LLAMACPP_GPU_LAYERS=35
 AI_LOCAL_TIMEOUT_SECONDS=25
@@ -285,6 +285,10 @@ docker exec -it ws-ollama ollama pull llama3.2:3b
 
 Para `llama.cpp`, coloque o GGUF em `./models` antes de subir o
 `docker-compose.llamacpp.yml`.
+
+Se o log mostrar `loaded CPU backend` e `compiled without GPU support`, use
+`LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full` no `.env.advanced` e recrie o
+serviço `llamacpp`.
 
 ### Como funciona
 
