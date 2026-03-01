@@ -38,7 +38,8 @@ services:
     volumes:
       - ./models:/models
     devices:
-      - /dev/dri
+      - "${LLAMACPP_DRI_RENDER:-/dev/dri/renderD128}:/dev/dri/renderD128"
+      - "${LLAMACPP_DRI_CARD:-/dev/dri/card0}:/dev/dri/card0"
     environment:
       - GGML_VK_VISIBLE_DEVICES=0
       - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-}
