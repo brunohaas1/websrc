@@ -145,6 +145,9 @@ Observação para RX580: em alguns hosts AMD Polaris, `HSA_OVERRIDE_GFX_VERSION=
 e `ROC_ENABLE_PRE_VEGA=1` podem ser necessários (já incluídos em
 `docker-compose.amd.yml`).
 
+O override também força `OLLAMA_LLM_LIBRARY=rocm` para tentar priorizar backend
+AMD/ROCm no Ollama.
+
 Se aparecer erro `Unable to find group render`, mantenha o override sem `group_add`
 (configuração atual do projeto) e suba novamente.
 
