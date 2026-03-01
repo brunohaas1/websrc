@@ -48,7 +48,7 @@ class JobCollector(RSSCollector):
                 parsed = feedparser.parse(feed["url"])
                 for entry in parsed.entries[:40]:
                     title = getattr(entry, "title", "(sem título)")
-                    summary = getattr(entry, "summary", "")
+                    summary = self._build_summary(entry, title)
                     location = getattr(entry, "location", "")
 
                     haystack = f"{title} {summary} {location}".lower()

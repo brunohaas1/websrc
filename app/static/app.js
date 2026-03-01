@@ -127,7 +127,15 @@ function renderItems(target, items, options = {}) {
 
 function resolveItemSummary(item) {
   const extra = item?.extra || {};
-  return extra.ai_summary || item?.summary || "";
+  const aiSummary = String(extra.ai_summary || "").trim();
+  if (aiSummary) return aiSummary;
+
+  const title = String(item?.title || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const summary = String(item?.summary || "").replace(/\s+/g, " ").trim();
+  if (!summary) return "";
+  if (title && summary.toLowerCase() === title) return "";
+
+  return summary;
 }
 
 function resolveItemScore(item) {
