@@ -47,8 +47,8 @@ class Config:
         "AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT",
         "/v1/chat/completions",
     )
-    AI_LOCAL_MODEL = os.getenv("AI_LOCAL_MODEL", "llama3.2:3b")
-    AI_LOCAL_TIMEOUT_SECONDS = int(os.getenv("AI_LOCAL_TIMEOUT_SECONDS", "25"))
+    AI_LOCAL_MODEL = os.getenv("AI_LOCAL_MODEL", "qwen2.5:7b-instruct")
+    AI_LOCAL_TIMEOUT_SECONDS = int(os.getenv("AI_LOCAL_TIMEOUT_SECONDS", "30"))
     AI_LOCAL_RETRIES = int(os.getenv("AI_LOCAL_RETRIES", "2"))
     AI_LOCAL_BACKOFF_MS = int(os.getenv("AI_LOCAL_BACKOFF_MS", "400"))
     AI_LOCAL_CIRCUIT_FAIL_THRESHOLD = int(

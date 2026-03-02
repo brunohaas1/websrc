@@ -101,7 +101,7 @@ services:
       - /app/llama-server
     command:
       - -m
-      - /models/llama-3.2-3b-instruct-q4_k_m.gguf
+      - /models/${LLAMACPP_MODEL:-Qwen2.5-7B-Instruct-Q4_K_M.gguf}
       - --host
       - 0.0.0.0
       - --port
@@ -109,7 +109,7 @@ services:
       - --ctx-size
       - "4096"
       - --n-predict
-      - "256"
+      - "384"
       - --n-gpu-layers
       - "${LLAMACPP_GPU_LAYERS:-35}"
     volumes:
