@@ -58,6 +58,15 @@
         <button id="themeToggle" class="theme-toggle" title="Alternar tema (T)">☀️</button>
         <button id="focusModeBtn" class="btn-small" title="Modo Focus (F)">🎯 Focus</button>
         <input type="color" id="accentColorPicker" value="#6366f1" title="Cor de destaque" class="accent-picker" />
+        <button id="notifBellBtn" class="btn-small notif-bell" title="Notificações">🔔 <span id="notifBadge" class="notif-badge" style="display:none">0</span></button>
+        <button id="shareDashBtn" class="btn-small" title="Compartilhar dashboard">🔗</button>
+        <select id="layoutPresetSelect" aria-label="Layout" title="Layout preset">
+          <option value="">Layout</option>
+          <option value="default">Padrão</option>
+          <option value="compact">Compacto</option>
+          <option value="analytics">Analytics</option>
+          <option value="minimal">Minimal</option>
+        </select>
       </div>
     </header>
 
@@ -197,7 +206,75 @@
         <div id="releaseCalendar" class="release-calendar"><div class="skeleton" style="height:120px"></div></div>
       </section>
 
+      <!-- New Round 5 Cards -->
+
+      <section class="card" draggable="true" data-card-id="system-uptime">
+        <h2>🖥️ System Uptime</h2>
+        <div id="uptimeContent"><div class="skeleton" style="height:80px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="cache-analytics">
+        <h2>📦 Cache Analytics</h2>
+        <div id="cacheContent"><div class="skeleton" style="height:80px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="workers">
+        <h2>⚙️ Workers RQ</h2>
+        <div id="workersContent"><div class="skeleton" style="height:80px"></div></div>
+      </section>
+
+      <section class="card wide" draggable="true" data-card-id="ai-chat">
+        <h2>💬 Chat com IA</h2>
+        <div id="aiChatContent">
+          <div id="aiChatMessages" class="ai-chat-messages"></div>
+          <form id="aiChatForm" class="inline-form">
+            <input id="aiChatInput" name="message" placeholder="Pergunte sobre seus dados..." autocomplete="off" required />
+            <button type="submit">Enviar</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="events-calendar">
+        <h2>📆 Calendário de Eventos</h2>
+        <div id="eventsCalendarContent"><div class="skeleton" style="height:120px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="webhooks">
+        <h2>🔗 Webhooks</h2>
+        <form id="webhookForm" class="inline-form">
+          <input name="name" placeholder="Nome" required />
+          <input name="url" type="url" placeholder="URL do webhook" required />
+          <button type="submit">Adicionar</button>
+        </form>
+        <div id="webhookList" class="list"></div>
+      </section>
+
     </main>
+
+    <!-- Notification Panel (slide-out) -->
+    <div id="notifPanel" class="notif-panel" style="display:none">
+      <div class="notif-panel-header">
+        <h3>🔔 Notificações</h3>
+        <button id="notifMarkAllRead" class="btn-small">Marcar todas lidas</button>
+        <button id="notifCloseBtn" class="btn-small">✕</button>
+      </div>
+      <div id="notifList" class="notif-list"></div>
+    </div>
+
+    <!-- Command Palette (Ctrl+K) -->
+    <div id="commandPalette" class="command-palette" style="display:none">
+      <input id="cmdInput" type="text" placeholder="Buscar comando..." autocomplete="off" />
+      <div id="cmdResults" class="cmd-results"></div>
+    </div>
+
+    <!-- PiP Container (for picture-in-picture charts) -->
+    <div id="pipContainer" class="pip-container" style="display:none">
+      <div class="pip-header">
+        <span id="pipTitle">Gráfico</span>
+        <button id="pipCloseBtn" class="btn-small">✕</button>
+      </div>
+      <canvas id="pipChart"></canvas>
+    </div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
   </body>

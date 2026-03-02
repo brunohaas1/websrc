@@ -94,3 +94,20 @@ class Config:
 
     # ── PDF Export ───────────────────────────────────────────
     PDF_EXPORT_ENABLED = os.getenv("PDF_EXPORT_ENABLED", "0") == "1"
+
+    # ── Shareable Dashboard ──────────────────────────────────
+    SHARE_TOKEN_SECRET = os.getenv("SHARE_TOKEN_SECRET", "") or secrets.token_hex(16)
+    SHARE_LINK_EXPIRY_HOURS = int(os.getenv("SHARE_LINK_EXPIRY_HOURS", "72"))
+
+    # ── Email Digest (SMTP) ──────────────────────────────────
+    SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "").strip()
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+    SMTP_FROM = os.getenv("SMTP_FROM", "").strip()
+    EMAIL_DIGEST_RECIPIENTS = os.getenv("EMAIL_DIGEST_RECIPIENTS", "").strip()
+    SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1") == "1"
+
+    # ── Webhook Outbound ─────────────────────────────────────
+    WEBHOOK_TIMEOUT_SECONDS = int(os.getenv("WEBHOOK_TIMEOUT_SECONDS", "10"))
+    WEBHOOK_MAX_RETRIES = int(os.getenv("WEBHOOK_MAX_RETRIES", "3"))

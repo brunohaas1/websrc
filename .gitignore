@@ -21,3 +21,4 @@ data/*.sqlite
 # OS/editor
 .DS_Store
 Thumbs.db
+node_modules/

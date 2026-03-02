@@ -1517,4 +1517,180 @@ class Repository:
         base["trending_topics"] = self.get_trending_topics()
         base["custom_feeds"] = self.list_custom_feeds()
         base["favorite_ids"] = list(self.get_favorite_ids())
+        base["unread_notifications"] = self.count_unread_notifications()
         return base
+
+    # ==================================================================
+    # Webhooks CRUD
+    # ==================================================================
+
+    def list_webhooks(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM webhooks ORDER BY created_at DESC",
+            ).fetchall()
+            result = []
+            for r in rows:
+                item = dict(r)
+                item["event_types"] = json_loads(item.get("event_types") or "[]")
+                result.append(item)
+            return result
+
+    def add_webhook(self, data: dict) -> int:
+        with get_connection(self.database_target) as conn:
+            query = (
+                "INSERT INTO webhooks (name, url, event_types, secret, active)"
+                " VALUES (?, ?, ?, ?, ?)"
+            )
+            if self.is_postgres:
+                query += " RETURNING id"
+            event_types = json_dumps(data.get("event_types", ["alert"]))
+            active = data.get("active", True)
+            if not self.is_postgres:
+                active = 1 if active else 0
+            cursor = conn.execute(
+                self._sql(query),
+                (data["name"], data["url"], event_types, data.get("secret"), active),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def delete_webhook(self, webhook_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                rows = conn.execute(
+                    self._sql("DELETE FROM webhooks WHERE id = ? RETURNING id"),
+                    (webhook_id,),
+                ).fetchall()
+                conn.commit()
+                return len(rows) > 0
+            cursor = conn.execute("DELETE FROM webhooks WHERE id = ?", (webhook_id,))
+            conn.commit()
+            return (cursor.rowcount or 0) > 0
+
+    def get_active_webhooks(self, event_type: str = "alert") -> list[dict[str, Any]]:
+        hooks = self.list_webhooks()
+        result = []
+        for h in hooks:
+            active = h.get("active")
+            if active in (True, 1):
+                types = h.get("event_types", [])
+                if event_type in types or "*" in types:
+                    result.append(h)
+        return result
+
+    # ==================================================================
+    # Shared Dashboards
+    # ==================================================================
+
+    def create_shared_dashboard(self, token: str, label: str, expires_at: str) -> int:
+        with get_connection(self.database_target) as conn:
+            query = (
+                "INSERT INTO shared_dashboards (token, label, expires_at)"
+                " VALUES (?, ?, ?)"
+            )
+            if self.is_postgres:
+                query += " RETURNING id"
+            cursor = conn.execute(self._sql(query), (token, label, expires_at))
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def get_shared_dashboard(self, token: str) -> dict | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM shared_dashboards WHERE token = ?"),
+                (token,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_shared_dashboards(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM shared_dashboards ORDER BY created_at DESC",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_shared_dashboard(self, share_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                rows = conn.execute(
+                    self._sql("DELETE FROM shared_dashboards WHERE id = ? RETURNING id"),
+                    (share_id,),
+                ).fetchall()
+                conn.commit()
+                return len(rows) > 0
+            cursor = conn.execute("DELETE FROM shared_dashboards WHERE id = ?", (share_id,))
+            conn.commit()
+            return (cursor.rowcount or 0) > 0
+
+    # ==================================================================
+    # Notifications
+    # ==================================================================
+
+    def add_notification(self, title: str, message: str, notif_type: str = "info") -> int:
+        with get_connection(self.database_target) as conn:
+            query = (
+                "INSERT INTO notifications (title, message, notif_type)"
+                " VALUES (?, ?, ?)"
+            )
+            if self.is_postgres:
+                query += " RETURNING id"
+            cursor = conn.execute(self._sql(query), (title, message, notif_type))
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_notifications(self, limit: int = 50) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?"),
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_unread_notifications(self) -> int:
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM notifications WHERE read = FALSE",
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM notifications WHERE read = 0",
+                ).fetchone()
+            return int(dict(row).get("cnt", 0)) if row else 0
+
+    def mark_notification_read(self, notif_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            val = True if self.is_postgres else 1
+            if self.is_postgres:
+                rows = conn.execute(
+                    self._sql("UPDATE notifications SET read = %s WHERE id = %s RETURNING id"),
+                    (val, notif_id),
+                ).fetchall()
+                conn.commit()
+                return len(rows) > 0
+            conn.execute("UPDATE notifications SET read = 1 WHERE id = ?", (notif_id,))
+            conn.commit()
+            return True
+
+    def mark_all_notifications_read(self) -> int:
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                cursor = conn.execute(
+                    "UPDATE notifications SET read = TRUE WHERE read = FALSE",
+                )
+                conn.commit()
+                return cursor.rowcount or 0
+            cursor = conn.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+            conn.commit()
+            return cursor.rowcount or 0
+

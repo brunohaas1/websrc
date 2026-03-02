@@ -1,7 +1,9 @@
 import logging
 import time
 import queue as _queue
-from datetime import datetime, timezone
+import json as _json
+import secrets
+from datetime import datetime, timezone, timedelta
 
 import feedparser
 import requests as http_requests
@@ -26,6 +28,31 @@ def register_routes(app: Flask) -> None:
     logger = logging.getLogger(__name__)
     repo = Repository(app.config["DATABASE_TARGET"])
     cache = get_cache(app.config)
+
+    # ── In-memory log buffer for log viewer ──────────────
+    import collections
+
+    class _BufferHandler(logging.Handler):
+        def __init__(self, buffer, maxlen=500):
+            super().__init__()
+            self.buffer = buffer
+        def emit(self, record):
+            try:
+                self.buffer.append({
+                    "level": record.levelname,
+                    "message": self.format(record),
+                    "logger": record.name,
+                    "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
+    log_buffer: collections.deque = collections.deque(maxlen=500)
+    app._log_buffer = log_buffer  # type: ignore[attr-defined]
+    buf_handler = _BufferHandler(log_buffer)
+    buf_handler.setFormatter(logging.Formatter("%(message)s"))
+    logging.getLogger().addHandler(buf_handler)
+
     limiter = Limiter(
         key_func=get_remote_address,
         app=app,
@@ -184,6 +211,21 @@ def register_routes(app: Flask) -> None:
                 message=alert.get("message", ""),
                 payload={"ai_reason": alert.get("ai_reason", ""), "source": alert.get("source", "")},
             )
+            # Notification center
+            repo.add_notification(
+                title=alert.get("title", ""),
+                message=alert.get("message", ""),
+                notif_type=alert.get("type", "info"),
+            )
+
+        # Fire webhooks
+        if alerts:
+            try:
+                fire_wh = getattr(app, "fire_webhooks", None)
+                if fire_wh:
+                    fire_wh("alert", {"alerts": alerts})
+            except Exception:
+                pass
 
         # Broadcast via SSE
         if alerts:
@@ -859,6 +901,597 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "Falha ao gerar relatório"}), 500
 
     # ==================================================================
+    # System Uptime / Health-check Dashboard (#1)
+    # ==================================================================
+
+    _boot_time = time.time()
+
+    @app.get("/api/system/uptime")
+    @limiter.limit("30/minute")
+    def system_uptime():
+        """Return uptime of each service component."""
+        uptime_s = time.time() - _boot_time
+        checks = {}
+
+        # API uptime
+        checks["api"] = {"status": "ok", "uptime_seconds": round(uptime_s, 1)}
+
+        # Postgres
+        try:
+            with get_connection(app.config["DATABASE_TARGET"]) as conn:
+                conn.execute("SELECT 1")
+            checks["postgres"] = {"status": "ok"}
+        except Exception as exc:
+            checks["postgres"] = {"status": "error", "detail": str(exc)[:100]}
+
+        # Redis
+        if app.config.get("QUEUE_ENABLED"):
+            try:
+                import redis as _redis
+                r = _redis.from_url(app.config["REDIS_URL"])
+                info = r.info("server")
+                checks["redis"] = {
+                    "status": "ok",
+                    "uptime_seconds": info.get("uptime_in_seconds", 0),
+                }
+            except Exception as exc:
+                checks["redis"] = {"status": "error", "detail": str(exc)[:100]}
+
+        # LLM
+        if app.config.get("AI_LOCAL_ENABLED"):
+            try:
+                import urllib.request
+                url = app.config["AI_LOCAL_URL"].rstrip("/") + "/health"
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    checks["llm"] = {"status": "ok" if resp.status == 200 else "degraded"}
+            except Exception as exc:
+                checks["llm"] = {"status": "error", "detail": str(exc)[:100]}
+
+        # RQ Workers
+        if app.config.get("QUEUE_ENABLED"):
+            try:
+                import redis as _redis
+                from rq import Worker
+                r = _redis.from_url(app.config["REDIS_URL"])
+                workers = Worker.all(connection=r)
+                checks["workers"] = {
+                    "status": "ok",
+                    "count": len(workers),
+                    "names": [w.name for w in workers[:10]],
+                }
+            except Exception:
+                checks["workers"] = {"status": "unknown"}
+
+        return jsonify({"boot_time": _boot_time, "uptime_seconds": round(uptime_s, 1), "services": checks})
+
+    # ==================================================================
+    # Log Viewer (#2)
+    # ==================================================================
+
+    @app.get("/api/logs")
+    @limiter.limit("10/minute")
+    @require_admin_key
+    def get_logs():
+        """Return recent application log entries."""
+        import collections
+        level_filter = request.args.get("level", "").upper()
+        limit = min(500, max(10, int(request.args.get("limit", "100"))))
+
+        # Read from in-memory log buffer (attached on startup)
+        entries = list(getattr(app, '_log_buffer', collections.deque()))
+        if level_filter:
+            entries = [e for e in entries if e.get("level", "").upper() == level_filter]
+        entries = entries[-limit:]
+        return jsonify({"entries": entries, "total": len(entries)})
+
+    # ==================================================================
+    # RQ Workers Info (#3)
+    # ==================================================================
+
+    @app.get("/api/workers")
+    @limiter.limit("10/minute")
+    def workers_info():
+        """Return info about RQ workers."""
+        if not app.config.get("QUEUE_ENABLED"):
+            return jsonify({"workers": [], "message": "Queue not enabled"})
+        try:
+            import redis as _redis
+            from rq import Worker, Queue as RQQueue
+            r = _redis.from_url(app.config["REDIS_URL"])
+            workers = Worker.all(connection=r)
+            q = RQQueue(connection=r)
+            return jsonify({
+                "workers": [
+                    {
+                        "name": w.name,
+                        "state": w.get_state(),
+                        "current_job": str(w.get_current_job()) if w.get_current_job() else None,
+                        "successful_job_count": w.successful_job_count,
+                        "failed_job_count": w.failed_job_count,
+                    }
+                    for w in workers
+                ],
+                "queue_length": q.count,
+                "failed_count": q.failed_job_registry.count if hasattr(q, "failed_job_registry") else 0,
+            })
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    # ==================================================================
+    # Cache Analytics (#4)
+    # ==================================================================
+
+    @app.get("/api/cache/stats")
+    @limiter.limit("10/minute")
+    def cache_stats():
+        """Return cache statistics."""
+        stats = cache.get_stats() if hasattr(cache, "get_stats") else {}
+        # Try Redis INFO if available
+        if app.config.get("QUEUE_ENABLED"):
+            try:
+                import redis as _redis
+                r = _redis.from_url(app.config["REDIS_URL"])
+                info = r.info("stats")
+                memory = r.info("memory")
+                stats["redis_hits"] = info.get("keyspace_hits", 0)
+                stats["redis_misses"] = info.get("keyspace_misses", 0)
+                total = stats["redis_hits"] + stats["redis_misses"]
+                stats["hit_rate_pct"] = round(stats["redis_hits"] / max(total, 1) * 100, 1)
+                stats["used_memory_human"] = memory.get("used_memory_human", "?")
+                stats["total_keys"] = r.dbsize()
+            except Exception as exc:
+                stats["redis_error"] = str(exc)[:100]
+        return jsonify(stats)
+
+    # ==================================================================
+    # Shareable Dashboard (#5)
+    # ==================================================================
+
+    @app.post("/api/share")
+    @limiter.limit("5/minute")
+    def create_share():
+        """Generate a shareable read-only dashboard link."""
+        payload = request.get_json(silent=True) or {}
+        label = sanitize_text(str(payload.get("label", "Dashboard share")), 120)
+        hours = min(720, max(1, int(payload.get("hours", app.config.get("SHARE_LINK_EXPIRY_HOURS", 72)))))
+        token = secrets.token_urlsafe(24)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+        share_id = repo.create_shared_dashboard(token, label, expires_at)
+        return jsonify({"ok": True, "id": share_id, "token": token, "expires_at": expires_at}), 201
+
+    @app.get("/api/shares")
+    @limiter.limit("10/minute")
+    def list_shares():
+        return jsonify(repo.list_shared_dashboards())
+
+    @app.delete("/api/shares/<int:share_id>")
+    @limiter.limit("10/minute")
+    def delete_share(share_id: int):
+        return jsonify({"ok": repo.delete_shared_dashboard(share_id)})
+
+    @app.get("/shared/<token>")
+    @limiter.limit("30/minute")
+    def shared_dashboard(token: str):
+        """Serve read-only shared dashboard."""
+        share = repo.get_shared_dashboard(token)
+        if not share:
+            return jsonify({"error": "Link inválido ou expirado"}), 404
+        expires_at = share.get("expires_at", "")
+        try:
+            exp_dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if exp_dt < datetime.now(timezone.utc):
+                return jsonify({"error": "Link expirado"}), 410
+        except Exception:
+            pass
+        return render_template("index.html")
+
+    @app.get("/api/shared/<token>/dashboard")
+    @limiter.limit("30/minute")
+    def shared_dashboard_data(token: str):
+        """Return dashboard data for shared link (read-only)."""
+        share = repo.get_shared_dashboard(token)
+        if not share:
+            return jsonify({"error": "Link inválido"}), 404
+        expires_at = share.get("expires_at", "")
+        try:
+            exp_dt = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if exp_dt < datetime.now(timezone.utc):
+                return jsonify({"error": "Link expirado"}), 410
+        except Exception:
+            pass
+        try:
+            snapshot = repo.get_dashboard_snapshot_extended()
+        except Exception:
+            snapshot = {}
+        return jsonify(snapshot)
+
+    # ==================================================================
+    # Notifications Center (#7)
+    # ==================================================================
+
+    @app.get("/api/notifications")
+    @limiter.limit("30/minute")
+    def list_notifications():
+        limit = min(200, max(1, int(request.args.get("limit", "50"))))
+        return jsonify(repo.list_notifications(limit))
+
+    @app.get("/api/notifications/unread-count")
+    @limiter.limit("60/minute")
+    def unread_notification_count():
+        return jsonify({"count": repo.count_unread_notifications()})
+
+    @app.patch("/api/notifications/<int:notif_id>/read")
+    @limiter.limit("60/minute")
+    def mark_notification_read(notif_id: int):
+        return jsonify({"ok": repo.mark_notification_read(notif_id)})
+
+    @app.post("/api/notifications/mark-all-read")
+    @limiter.limit("10/minute")
+    def mark_all_notifications_read():
+        count = repo.mark_all_notifications_read()
+        return jsonify({"ok": True, "count": count})
+
+    # ==================================================================
+    # AI Chat About Data (#12)
+    # ==================================================================
+
+    @app.post("/api/ai-chat")
+    @limiter.limit("6/minute")
+    def ai_chat():
+        """Chat with AI about dashboard data."""
+        if not app.config.get("AI_LOCAL_ENABLED"):
+            return jsonify({"error": "IA local não habilitada"}), 503
+
+        payload = request.get_json(silent=True)
+        if not payload or not payload.get("message"):
+            return jsonify({"error": "message obrigatório"}), 400
+
+        user_msg = sanitize_text(str(payload["message"]), 500)
+
+        # Build context from dashboard
+        try:
+            snapshot = cache.get("dashboard:snapshot") or repo.get_dashboard_snapshot()
+        except Exception:
+            snapshot = {}
+
+        context_parts = []
+        for section in ["news", "tech_ai", "jobs", "promotions"]:
+            items = snapshot.get(section, [])[:5]
+            if items:
+                titles = [it.get("title", "") for it in items]
+                context_parts.append(f"{section}: {'; '.join(titles)}")
+
+        prices = snapshot.get("prices", [])[:5]
+        if prices:
+            price_info = [f"{p.get('name', '')}: R${p.get('last_price', '?')}" for p in prices]
+            context_parts.append(f"preços: {'; '.join(price_info)}")
+
+        system_prompt = (
+            "Você é um assistente sobre dados do dashboard pessoal do usuário. "
+            "Responda em português de forma concisa. Dados atuais:\n"
+            + "\n".join(context_parts)
+        )
+
+        try:
+            ai_url = app.config["AI_LOCAL_URL"].rstrip("/")
+            endpoint = app.config.get("AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT", "/v1/chat/completions")
+            resp = http_requests.post(
+                f"{ai_url}{endpoint}",
+                json={
+                    "model": app.config.get("AI_LOCAL_MODEL", "qwen2.5:7b-instruct"),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "max_tokens": 300,
+                    "temperature": 0.7,
+                },
+                timeout=app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 30),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return jsonify({"reply": reply.strip()})
+        except Exception as exc:
+            logger.warning("AI chat error: %s", exc)
+            return jsonify({"error": "Falha na IA", "detail": str(exc)[:200]}), 502
+
+    # ==================================================================
+    # Sentiment Detection (#13) - enrichment hook
+    # ==================================================================
+
+    @app.get("/api/items/<int:item_id>/sentiment")
+    @limiter.limit("20/minute")
+    def get_item_sentiment(item_id: int):
+        """Get or compute sentiment for an item."""
+        from .utils import json_loads as _jl
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            row = conn.execute(
+                repo._sql("SELECT extra_json, title, summary FROM items WHERE id = ?"),
+                (item_id,),
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "Item não encontrado"}), 404
+        row = dict(row)
+        extra = _jl(row.get("extra_json")) or {}
+        if "sentiment" in extra:
+            return jsonify({"sentiment": extra["sentiment"]})
+
+        # Quick keyword-based sentiment
+        text = f"{row.get('title', '')} {row.get('summary', '')}".lower()
+        positive = sum(1 for w in ["bom", "ótimo", "excelente", "alta", "subiu", "growth", "good", "great", "success", "up", "novo", "lança"] if w in text)
+        negative = sum(1 for w in ["ruim", "queda", "crise", "erro", "falha", "bad", "down", "crash", "hack", "vulnerab", "ataque", "guerra"] if w in text)
+
+        if positive > negative:
+            sentiment = "positive"
+        elif negative > positive:
+            sentiment = "negative"
+        else:
+            sentiment = "neutral"
+
+        # Persist
+        extra["sentiment"] = sentiment
+        from .utils import json_dumps as _jd
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                repo._sql("UPDATE items SET extra_json = ? WHERE id = ?"),
+                (_jd(extra), item_id),
+            )
+            conn.commit()
+
+        return jsonify({"sentiment": sentiment})
+
+    # ==================================================================
+    # Price Trend Forecast (#14)
+    # ==================================================================
+
+    @app.get("/api/price-forecast/<int:watch_id>")
+    @limiter.limit("10/minute")
+    def price_forecast(watch_id: int):
+        """Simple linear regression forecast for price history."""
+        history = repo.get_price_history(watch_id)
+        if len(history) < 3:
+            return jsonify({"error": "Dados insuficientes (mínimo 3 pontos)"}), 400
+
+        # Simple linear regression
+        prices = [float(h["price"]) for h in history]
+        n = len(prices)
+        x = list(range(n))
+        x_mean = sum(x) / n
+        y_mean = sum(prices) / n
+
+        numerator = sum((x[i] - x_mean) * (prices[i] - y_mean) for i in range(n))
+        denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+
+        if denominator == 0:
+            slope = 0.0
+            intercept = y_mean
+        else:
+            slope = numerator / denominator
+            intercept = y_mean - slope * x_mean
+
+        # Forecast next 7 points
+        forecast = []
+        for i in range(1, 8):
+            val = intercept + slope * (n - 1 + i)
+            forecast.append(round(max(0, val), 2))
+
+        trend = "up" if slope > 0.01 else ("down" if slope < -0.01 else "stable")
+
+        return jsonify({
+            "watch_id": watch_id,
+            "trend": trend,
+            "slope": round(slope, 4),
+            "forecast_7d": forecast,
+            "current_price": prices[-1] if prices else None,
+            "data_points": n,
+        })
+
+    # ==================================================================
+    # Tags in price watch (#15)
+    # ==================================================================
+
+    @app.patch("/api/price-watch/<int:watch_id>/tags")
+    @limiter.limit("20/minute")
+    def update_price_watch_tags(watch_id: int):
+        payload = request.get_json(silent=True) or {}
+        tags = payload.get("tags", [])
+        if not isinstance(tags, list):
+            return jsonify({"error": "tags deve ser uma lista"}), 400
+        from .utils import json_dumps as _jd
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                repo._sql("UPDATE price_watches SET tags = ? WHERE id = ?"),
+                (_jd(tags), watch_id),
+            )
+            conn.commit()
+        cache.delete("dashboard:snapshot")
+        return jsonify({"ok": True})
+
+    # ==================================================================
+    # Webhooks CRUD (#16)
+    # ==================================================================
+
+    @app.get("/api/webhooks")
+    @limiter.limit("15/minute")
+    def list_webhooks():
+        return jsonify(repo.list_webhooks())
+
+    @app.post("/api/webhooks")
+    @limiter.limit("10/minute")
+    def add_webhook():
+        payload = request.get_json(silent=True)
+        if not payload:
+            return jsonify({"error": "Corpo JSON inválido"}), 400
+        name = sanitize_text(str(payload.get("name", "")), 120)
+        url = str(payload.get("url", "")).strip()
+        if not name or not url:
+            return jsonify({"error": "name e url obrigatórios"}), 400
+        if not is_safe_http_url(url):
+            return jsonify({"error": "URL inválida"}), 400
+        event_types = payload.get("event_types", ["alert"])
+        if not isinstance(event_types, list):
+            event_types = ["alert"]
+        wh_id = repo.add_webhook({
+            "name": name,
+            "url": url,
+            "event_types": event_types,
+            "secret": payload.get("secret"),
+            "active": payload.get("active", True),
+        })
+        return jsonify({"ok": True, "id": wh_id}), 201
+
+    @app.delete("/api/webhooks/<int:wh_id>")
+    @limiter.limit("10/minute")
+    def delete_webhook(wh_id: int):
+        return jsonify({"ok": repo.delete_webhook(wh_id)})
+
+    def fire_webhooks(event_type: str, payload: dict) -> None:
+        """Fire outbound webhooks for a given event type (non-blocking best-effort)."""
+        import threading
+
+        def _send(hook, data):
+            try:
+                headers = {"Content-Type": "application/json", "X-Webhook-Event": event_type}
+                if hook.get("secret"):
+                    import hashlib, hmac
+                    body = _json.dumps(data)
+                    sig = hmac.new(hook["secret"].encode(), body.encode(), hashlib.sha256).hexdigest()
+                    headers["X-Webhook-Signature"] = sig
+                http_requests.post(
+                    hook["url"],
+                    json=data,
+                    headers=headers,
+                    timeout=app.config.get("WEBHOOK_TIMEOUT_SECONDS", 10),
+                )
+            except Exception as exc:
+                logger.warning("Webhook %s failed: %s", hook.get("name"), exc)
+
+        hooks = repo.get_active_webhooks(event_type)
+        for hook in hooks:
+            threading.Thread(target=_send, args=(hook, payload), daemon=True).start()
+
+    # Attach to app for use elsewhere
+    app.fire_webhooks = fire_webhooks  # type: ignore[attr-defined]
+
+    # ==================================================================
+    # Email Digest (#11)
+    # ==================================================================
+
+    @app.post("/api/email-digest/send")
+    @limiter.limit("2/hour")
+    @require_admin_key
+    def send_email_digest():
+        """Send current daily digest via email."""
+        smtp_host = app.config.get("SMTP_HOST", "")
+        if not smtp_host:
+            return jsonify({"error": "SMTP não configurado"}), 503
+
+        recipients = [r.strip() for r in app.config.get("EMAIL_DIGEST_RECIPIENTS", "").split(",") if r.strip()]
+        if not recipients:
+            return jsonify({"error": "Nenhum destinatário configurado"}), 400
+
+        digest = repo.get_latest_digest()
+        if not digest:
+            return jsonify({"error": "Nenhum digest disponível"}), 404
+
+        subject = f"Dashboard Digest - {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+        body = digest.get("content", "Sem conteúdo")
+
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = app.config.get("SMTP_FROM", app.config.get("SMTP_USER", ""))
+            msg["To"] = ", ".join(recipients)
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+
+            port = int(app.config.get("SMTP_PORT", 587))
+            use_tls = app.config.get("SMTP_USE_TLS", True)
+
+            with smtplib.SMTP(smtp_host, port) as server:
+                if use_tls:
+                    server.starttls()
+                user = app.config.get("SMTP_USER", "")
+                pwd = app.config.get("SMTP_PASSWORD", "")
+                if user and pwd:
+                    server.login(user, pwd)
+                server.sendmail(msg["From"], recipients, msg.as_string())
+
+            return jsonify({"ok": True, "recipients": len(recipients)})
+        except Exception as exc:
+            logger.exception("Email digest error: %s", exc)
+            return jsonify({"error": str(exc)[:200]}), 500
+
+    # ==================================================================
+    # Layout Presets (#6)
+    # ==================================================================
+
+    @app.get("/api/layout-presets")
+    @limiter.limit("15/minute")
+    def get_layout_presets():
+        """Return built-in and saved layout presets."""
+        presets = [
+            {"id": "default", "name": "Padrão", "builtin": True},
+            {"id": "compact", "name": "Compacto", "builtin": True},
+            {"id": "analytics", "name": "Analytics", "builtin": True},
+            {"id": "minimal", "name": "Minimal", "builtin": True},
+        ]
+        return jsonify(presets)
+
+    # ==================================================================
+    # Events Calendar (#10)
+    # ==================================================================
+
+    @app.get("/api/events-calendar")
+    @limiter.limit("15/minute")
+    def events_calendar():
+        """Aggregate events from alerts, backups, digests for a calendar view."""
+        events = []
+
+        # Alerts as events
+        alerts = repo.list_alerts(limit=30)
+        for a in alerts:
+            events.append({
+                "type": "alert",
+                "title": a.get("title", "Alerta"),
+                "date": a.get("created_at", ""),
+                "color": "#ef4444",
+            })
+
+        # Digests
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            rows = conn.execute(
+                "SELECT digest_date, content FROM daily_digests ORDER BY digest_date DESC LIMIT 30",
+            ).fetchall()
+            for r in rows:
+                row = dict(r)
+                events.append({
+                    "type": "digest",
+                    "title": "Resumo Diário",
+                    "date": row.get("digest_date", ""),
+                    "color": "#3b82f6",
+                })
+
+        # Service monitor failures
+        monitors = repo.list_service_monitors()
+        for m in monitors:
+            if m.get("last_status") == "down":
+                events.append({
+                    "type": "monitor_down",
+                    "title": f"⚠ {m.get('name', '')} offline",
+                    "date": m.get("last_checked_at", ""),
+                    "color": "#f59e0b",
+                })
+
+        events.sort(key=lambda e: e.get("date", ""), reverse=True)
+        return jsonify(events[:50])
+
+    # ==================================================================
     # OpenAPI spec
     # ==================================================================
 
@@ -925,6 +1558,27 @@ def register_routes(app: Flask) -> None:
                 "/api/stream": {"get": {"summary": "SSE real-time stream", "tags": ["System"]}},
                 "/health": {"get": {"summary": "Health check", "tags": ["System"]}},
                 "/metrics": {"get": {"summary": "Prometheus metrics", "tags": ["System"]}},
+                "/api/system/uptime": {"get": {"summary": "System uptime dashboard", "tags": ["System"]}},
+                "/api/logs": {"get": {"summary": "Log viewer (admin)", "tags": ["System"]}},
+                "/api/workers": {"get": {"summary": "RQ workers info", "tags": ["System"]}},
+                "/api/cache/stats": {"get": {"summary": "Cache analytics", "tags": ["System"]}},
+                "/api/share": {"post": {"summary": "Create share link", "tags": ["Share"]}},
+                "/api/shares": {"get": {"summary": "List shares", "tags": ["Share"]}},
+                "/api/notifications": {"get": {"summary": "List notifications", "tags": ["Notifications"]}},
+                "/api/notifications/unread-count": {"get": {"summary": "Unread count", "tags": ["Notifications"]}},
+                "/api/notifications/mark-all-read": {"post": {"summary": "Mark all read", "tags": ["Notifications"]}},
+                "/api/ai-chat": {"post": {"summary": "Chat with AI", "tags": ["AI"]}},
+                "/api/price-forecast/{id}": {"get": {"summary": "Price trend forecast", "tags": ["Prices"]}},
+                "/api/price-watch/{id}/tags": {"patch": {"summary": "Update price tags", "tags": ["Prices"]}},
+                "/api/webhooks": {
+                    "get": {"summary": "List webhooks", "tags": ["Webhooks"]},
+                    "post": {"summary": "Add webhook", "tags": ["Webhooks"]},
+                },
+                "/api/webhooks/{id}": {"delete": {"summary": "Delete webhook", "tags": ["Webhooks"]}},
+                "/api/email-digest/send": {"post": {"summary": "Send email digest", "tags": ["Email"]}},
+                "/api/layout-presets": {"get": {"summary": "Layout presets", "tags": ["UI"]}},
+                "/api/events-calendar": {"get": {"summary": "Events calendar", "tags": ["Calendar"]}},
+                "/api/items/{id}/sentiment": {"get": {"summary": "Item sentiment", "tags": ["AI"]}},
             },
         }
         return jsonify(spec)

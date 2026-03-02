@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS price_watches (
     last_price REAL,
     currency TEXT DEFAULT 'BRL',
     active INTEGER DEFAULT 1,
+    tags TEXT DEFAULT '[]',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -150,6 +151,33 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS webhooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    event_types TEXT DEFAULT '["alert"]',
+    secret TEXT,
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS shared_dashboards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    label TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    notif_type TEXT DEFAULT 'info',
+    read INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_type_created
 ON items(item_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_read_created
@@ -166,6 +194,10 @@ CREATE INDEX IF NOT EXISTS idx_service_monitor_history_monitor_id
 ON service_monitor_history(monitor_id, checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
 ON currency_rates(pair, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_read
+ON notifications(read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
+ON shared_dashboards(token);
 """
 
 POSTGRES_SCHEMA = """
@@ -192,6 +224,7 @@ CREATE TABLE IF NOT EXISTS price_watches (
     last_price DOUBLE PRECISION,
     currency TEXT DEFAULT 'BRL',
     active BOOLEAN DEFAULT TRUE,
+    tags TEXT DEFAULT '[]',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -289,6 +322,33 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS webhooks (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    event_types TEXT DEFAULT '["alert"]',
+    secret TEXT,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS shared_dashboards (
+    id BIGSERIAL PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    label TEXT,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    notif_type TEXT DEFAULT 'info',
+    read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_type_created
 ON items(item_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_read_created
@@ -305,6 +365,10 @@ CREATE INDEX IF NOT EXISTS idx_service_monitor_history_monitor_id
 ON service_monitor_history(monitor_id, checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
 ON currency_rates(pair, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_read
+ON notifications(read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
+ON shared_dashboards(token);
 """
 
 

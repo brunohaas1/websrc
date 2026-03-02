@@ -1695,6 +1695,14 @@ function render() {
   renderReleaseCalendar(data.releases || []);
   renderPriceCharts(data.prices || []);
 
+  // Round 5 components
+  renderSystemUptime();
+  renderCacheAnalytics();
+  renderWorkers();
+  renderEventsCalendar();
+  renderWebhooks();
+  pollNotifCount();
+
   updateAllCardListHeights();
 }
 
@@ -1908,8 +1916,93 @@ function setupEvents() {
       case "delete-note":
         if (id) deleteNote(id);
         break;
+      case "delete-webhook":
+        if (id) deleteWebhook(id);
+        break;
     }
   });
+
+  // Notification bell
+  const notifBell = byId("notifBellBtn");
+  if (notifBell) notifBell.addEventListener("click", toggleNotifPanel);
+  const notifClose = byId("notifCloseBtn");
+  if (notifClose) notifClose.addEventListener("click", closeNotifPanel);
+  const notifMarkAll = byId("notifMarkAllRead");
+  if (notifMarkAll) notifMarkAll.addEventListener("click", markAllNotifRead);
+
+  // Share button
+  const shareBtn = byId("shareDashBtn");
+  if (shareBtn) shareBtn.addEventListener("click", createShareLink);
+
+  // AI Chat form
+  const aiChatForm = byId("aiChatForm");
+  if (aiChatForm) aiChatForm.addEventListener("submit", sendAiChat);
+
+  // Webhook form
+  const webhookForm = byId("webhookForm");
+  if (webhookForm) {
+    webhookForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(webhookForm);
+      const name = (fd.get("name") || "").trim();
+      const url = (fd.get("url") || "").trim();
+      if (!name || !url) return;
+      try {
+        const res = await fetch("/api/webhooks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, url, event_types: ["alert", "price_alert"] }),
+        });
+        if (res.ok) {
+          showToast("Webhook adicionado", "success");
+          webhookForm.reset();
+          renderWebhooks();
+        } else {
+          showToast("Erro ao adicionar webhook", "error");
+        }
+      } catch {
+        showToast("Erro de rede", "error");
+      }
+    });
+  }
+
+  // Command palette input
+  const cmdInput = byId("cmdInput");
+  if (cmdInput) {
+    cmdInput.addEventListener("input", (e) => renderCmdResults(e.target.value));
+    cmdInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const active = byId("cmdResults")?.querySelector(".cmd-active");
+        if (active) executeCommand(active.dataset.cmdId);
+      }
+      if (e.key === "Escape") closeCommandPalette();
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const items = [...(byId("cmdResults")?.querySelectorAll(".cmd-item") || [])];
+        const idx = items.findIndex(el => el.classList.contains("cmd-active"));
+        items.forEach(el => el.classList.remove("cmd-active"));
+        const next = e.key === "ArrowDown" ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
+        items[next]?.classList.add("cmd-active");
+      }
+    });
+  }
+  // Click on command item
+  byId("cmdResults")?.addEventListener("click", (e) => {
+    const item = e.target.closest(".cmd-item");
+    if (item?.dataset?.cmdId) executeCommand(item.dataset.cmdId);
+  });
+
+  // PiP close
+  const pipClose = byId("pipCloseBtn");
+  if (pipClose) pipClose.addEventListener("click", closePiP);
+
+  // Layout preset select
+  const layoutSelect = byId("layoutPresetSelect");
+  if (layoutSelect) {
+    layoutSelect.addEventListener("change", (e) => {
+      if (e.target.value) applyLayoutPreset(e.target.value);
+    });
+  }
 }
 
 function persistCardOrder() {
@@ -2474,11 +2567,18 @@ function initAccentColor() {
 
 function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
-    // Ctrl+K or Cmd+K → focus search
+    // Ctrl+K or Cmd+K → open command palette
     if ((e.ctrlKey || e.metaKey) && e.key === "k") {
       e.preventDefault();
-      const input = byId("searchInput");
-      if (input) { input.focus(); input.select(); }
+      toggleCommandPalette();
+      return;
+    }
+
+    // Escape → close overlays
+    if (e.key === "Escape") {
+      closeCommandPalette();
+      closePiP();
+      closeNotifPanel();
       return;
     }
 
@@ -2498,12 +2598,17 @@ function setupKeyboardShortcuts() {
 
     if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      showToast("Ctrl+K = busca · R = atualizar · T = tema · F = focus · ? = atalhos", "info", 5000);
+      showToast("Ctrl+K = paleta · R = atualizar · T = tema · F = focus · N = notif · ? = atalhos", "info", 5000);
     }
 
     if (e.key === "f" || e.key === "F") {
       e.preventDefault();
       toggleFocusMode();
+    }
+
+    if (e.key === "n" || e.key === "N") {
+      e.preventDefault();
+      toggleNotifPanel();
     }
   });
 }
@@ -2606,14 +2711,17 @@ function connectSSE() {
       }
       if (data.type === "alert") {
         showToast(data.message || "Novo alerta", "warning", 8000);
+        addLocalNotif("Alerta", data.message || "Novo alerta", "warning");
         fetchDashboard();
       }
       if (data.type === "price_alert") {
         showToast(`💰 ${data.message}`, "success", 10000);
+        addLocalNotif("Preço", data.message, "success");
       }
       if (data.type === "smart_alert") {
         showToast("🧠 Novos alertas inteligentes", "info", 6000);
         renderSmartAlerts(data.alerts || []);
+        addLocalNotif("Smart Alert", `${(data.alerts || []).length} alertas gerados`, "info");
         fetchDashboard();
       }
     } catch { /* ignore parse errors */ }
@@ -2622,9 +2730,532 @@ function connectSSE() {
   _sseSource.onerror = () => {
     _sseSource.close();
     _sseSource = null;
-    // Retry after 30s
     setTimeout(connectSSE, 30_000);
   };
+}
+
+/* ── Notification Center (#7) ─────────────────────────── */
+
+let _notifPanelOpen = false;
+
+function addLocalNotif(title, message, type = "info") {
+  pollNotifCount();
+}
+
+async function pollNotifCount() {
+  try {
+    const resp = await fetch("/api/notifications/unread-count");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const badge = byId("notifBadge");
+    if (!badge) return;
+    const count = data.count || 0;
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.style.display = count > 0 ? "inline-block" : "none";
+  } catch { /* ignore */ }
+}
+
+function toggleNotifPanel() {
+  _notifPanelOpen = !_notifPanelOpen;
+  const panel = byId("notifPanel");
+  if (!panel) return;
+  panel.style.display = _notifPanelOpen ? "flex" : "none";
+  if (_notifPanelOpen) loadNotifications();
+}
+
+function closeNotifPanel() {
+  _notifPanelOpen = false;
+  const panel = byId("notifPanel");
+  if (panel) panel.style.display = "none";
+}
+
+async function loadNotifications() {
+  const list = byId("notifList");
+  if (!list) return;
+  try {
+    const resp = await fetch("/api/notifications?limit=50");
+    const notifications = await resp.json();
+    if (!Array.isArray(notifications) || !notifications.length) {
+      list.innerHTML = "<small>Nenhuma notificação</small>";
+      return;
+    }
+    list.innerHTML = notifications.map(n => {
+      const readClass = (n.read === true || n.read === 1) ? "notif-read" : "notif-unread";
+      const icon = { info: "ℹ️", warning: "⚠️", danger: "🚨", success: "✅" }[n.notif_type] || "ℹ️";
+      return `
+        <div class="notif-item ${readClass}" data-notif-id="${n.id}">
+          <span class="notif-icon">${icon}</span>
+          <div class="notif-body">
+            <strong>${escapeHtml(n.title)}</strong>
+            <p>${escapeHtml(n.message)}</p>
+            <small>${timeAgo(n.created_at)}</small>
+          </div>
+        </div>`;
+    }).join("");
+  } catch {
+    list.innerHTML = "<small>Erro ao carregar</small>";
+  }
+}
+
+async function markAllNotifRead() {
+  try {
+    await fetch("/api/notifications/mark-all-read", { method: "POST" });
+    pollNotifCount();
+    loadNotifications();
+    showToast("Notificações marcadas como lidas", "success");
+  } catch { /* ignore */ }
+}
+
+/* ── Command Palette (#9) ─────────────────────────────── */
+
+let _cmdPaletteOpen = false;
+
+const CMD_REGISTRY = [
+  { id: "refresh", label: "🔄 Atualizar dados", keywords: "refresh atualizar", action: () => runNow() },
+  { id: "theme", label: "🎨 Alternar tema", keywords: "theme tema dark light", action: () => toggleTheme() },
+  { id: "focus", label: "🎯 Modo Focus", keywords: "focus foco hide", action: () => toggleFocusMode() },
+  { id: "notif", label: "🔔 Notificações", keywords: "notificações bell sino", action: () => toggleNotifPanel() },
+  { id: "share", label: "🔗 Compartilhar dashboard", keywords: "share compartilhar link", action: () => createShareLink() },
+  { id: "search", label: "🔍 Buscar", keywords: "search buscar pesquisar", action: () => { byId("searchInput")?.focus(); } },
+  { id: "shortcuts", label: "⌨️ Atalhos de teclado", keywords: "shortcuts atalhos keyboard", action: () => showToast("Ctrl+K = paleta · R = atualizar · T = tema · F = focus · N = notif", "info", 6000) },
+  { id: "export", label: "📄 Exportar PDF", keywords: "export pdf download", action: () => window.open("/api/export/pdf", "_blank") },
+  { id: "docs", label: "📚 API Docs", keywords: "documentation api swagger", action: () => window.open("/docs", "_blank") },
+  { id: "ai-chat", label: "💬 Chat com IA", keywords: "chat ia ai conversar", action: () => { byId("aiChatInput")?.focus(); scrollToCard("ai-chat"); } },
+  { id: "layout-default", label: "📐 Layout Padrão", keywords: "layout default padrao", action: () => applyLayoutPreset("default") },
+  { id: "layout-compact", label: "📐 Layout Compacto", keywords: "layout compact compacto", action: () => applyLayoutPreset("compact") },
+  { id: "layout-analytics", label: "📐 Layout Analytics", keywords: "layout analytics", action: () => applyLayoutPreset("analytics") },
+  { id: "layout-minimal", label: "📐 Layout Minimal", keywords: "layout minimal minimo", action: () => applyLayoutPreset("minimal") },
+];
+
+function toggleCommandPalette() {
+  _cmdPaletteOpen = !_cmdPaletteOpen;
+  const palette = byId("commandPalette");
+  if (!palette) return;
+  palette.style.display = _cmdPaletteOpen ? "flex" : "none";
+  if (_cmdPaletteOpen) {
+    const input = byId("cmdInput");
+    if (input) { input.value = ""; input.focus(); }
+    renderCmdResults("");
+  }
+}
+
+function closeCommandPalette() {
+  _cmdPaletteOpen = false;
+  const palette = byId("commandPalette");
+  if (palette) palette.style.display = "none";
+}
+
+function renderCmdResults(query) {
+  const container = byId("cmdResults");
+  if (!container) return;
+  const q = query.toLowerCase().trim();
+  const filtered = q
+    ? CMD_REGISTRY.filter(cmd => cmd.label.toLowerCase().includes(q) || cmd.keywords.includes(q))
+    : CMD_REGISTRY;
+
+  container.innerHTML = filtered.map((cmd, i) =>
+    `<div class="cmd-item${i === 0 ? " cmd-active" : ""}" data-cmd-id="${cmd.id}">${cmd.label}</div>`
+  ).join("") || "<div class='cmd-item'>Nenhum comando encontrado</div>";
+}
+
+function executeCommand(cmdId) {
+  const cmd = CMD_REGISTRY.find(c => c.id === cmdId);
+  if (cmd) cmd.action();
+  closeCommandPalette();
+}
+
+function scrollToCard(cardId) {
+  const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/* ── Picture-in-Picture Charts (#8) ───────────────────── */
+
+let _pipChartInstance = null;
+let _pipDragState = null;
+
+function openPiP(title, labels, data) {
+  const container = byId("pipContainer");
+  if (!container) return;
+  container.style.display = "block";
+  byId("pipTitle").textContent = title || "Gráfico";
+
+  if (_pipChartInstance) _pipChartInstance.destroy();
+
+  const ctx = byId("pipChart")?.getContext("2d");
+  if (!ctx || typeof Chart === "undefined") return;
+
+  _pipChartInstance = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: title,
+        data: data,
+        borderColor: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#6366f1",
+        backgroundColor: "rgba(99,102,241,0.1)",
+        tension: 0.3,
+        fill: true,
+        pointRadius: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false }, y: { display: true, ticks: { maxTicksLimit: 5 } } },
+    },
+  });
+}
+
+function closePiP() {
+  const container = byId("pipContainer");
+  if (container) container.style.display = "none";
+  if (_pipChartInstance) { _pipChartInstance.destroy(); _pipChartInstance = null; }
+}
+
+function setupPiPDrag() {
+  const container = byId("pipContainer");
+  if (!container) return;
+  const header = container.querySelector(".pip-header");
+  if (!header) return;
+
+  header.addEventListener("mousedown", (e) => {
+    _pipDragState = {
+      el: container,
+      startX: e.clientX - container.offsetLeft,
+      startY: e.clientY - container.offsetTop,
+    };
+    e.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!_pipDragState) return;
+    _pipDragState.el.style.left = `${e.clientX - _pipDragState.startX}px`;
+    _pipDragState.el.style.top = `${e.clientY - _pipDragState.startY}px`;
+  });
+
+  window.addEventListener("mouseup", () => { _pipDragState = null; });
+}
+
+/* ── Shareable Dashboard (#5) ─────────────────────────── */
+
+async function createShareLink() {
+  try {
+    const resp = await fetch("/api/share", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Dashboard share" }),
+    });
+    if (!resp.ok) {
+      showToast("Erro ao criar link", "error");
+      return;
+    }
+    const data = await resp.json();
+    const url = `${window.location.origin}/shared/${data.token}`;
+    await navigator.clipboard.writeText(url).catch(() => {});
+    showToast(`Link copiado! Expira em ${data.expires_at?.split("T")[0] || "3 dias"}`, "success", 6000);
+  } catch (err) {
+    showToast("Erro ao compartilhar", "error");
+  }
+}
+
+/* ── Layout Presets (#6) ──────────────────────────────── */
+
+const LAYOUT_PRESETS = {
+  default: {
+    spans: {},
+    hidden: [],
+  },
+  compact: {
+    spans: { "weather": 1, "alerts": 1, "prices": 1, "news": 1, "promotions": 1, "videos": 1, "jobs": 1 },
+    hidden: ["ai-observability", "release-calendar", "daily-digest"],
+  },
+  analytics: {
+    spans: { "ai-observability": 2, "currency": 1, "cache-analytics": 1, "system-uptime": 1, "workers": 1 },
+    hidden: ["promotions", "videos", "jobs"],
+  },
+  minimal: {
+    spans: { "news": 2, "weather": 1, "alerts": 1 },
+    hidden: ["ai-observability", "releases", "custom-feeds", "release-calendar", "service-monitor", "daily-digest", "trending", "webhooks", "workers", "cache-analytics", "system-uptime", "events-calendar"],
+  },
+};
+
+function applyLayoutPreset(presetId) {
+  const preset = LAYOUT_PRESETS[presetId];
+  if (!preset) return;
+
+  const grid = byId("dashboardGrid");
+  if (!grid) return;
+
+  // Reset all cards visibility
+  grid.querySelectorAll(".card[data-card-id]").forEach((card) => {
+    const cid = card.dataset.cardId;
+    card.style.display = "";
+    card.style.gridColumn = "";
+
+    if (preset.hidden.includes(cid)) {
+      card.style.display = "none";
+    }
+    const span = preset.spans[cid];
+    if (span) {
+      card.style.gridColumn = `span ${span}`;
+    }
+  });
+
+  persistCardSpans();
+  showToast(`Layout: ${presetId}`, "info");
+}
+
+/* ── System Uptime (#1) ───────────────────────────────── */
+
+async function renderSystemUptime() {
+  const el = byId("uptimeContent");
+  if (!el) return;
+  try {
+    const resp = await fetch("/api/system/uptime");
+    if (!resp.ok) { el.innerHTML = "<small>Indisponível</small>"; return; }
+    const data = await resp.json();
+    const services = data.services || {};
+    const uptime = formatDuration(data.uptime_seconds || 0);
+
+    let html = `<div class="uptime-summary"><strong>Uptime API:</strong> ${uptime}</div><div class="uptime-grid">`;
+    for (const [name, info] of Object.entries(services)) {
+      const statusClass = info.status === "ok" ? "status-ok" : (info.status === "error" ? "status-error" : "status-warn");
+      const extra = info.uptime_seconds ? ` (${formatDuration(info.uptime_seconds)})` : "";
+      const detail = info.count != null ? ` · ${info.count} workers` : "";
+      html += `<div class="uptime-item ${statusClass}"><span class="uptime-dot"></span><span>${name}${extra}${detail}</span></div>`;
+    }
+    html += "</div>";
+    el.innerHTML = html;
+  } catch { el.innerHTML = "<small>Erro</small>"; }
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+}
+
+/* ── Cache Analytics (#4) ─────────────────────────────── */
+
+async function renderCacheAnalytics() {
+  const el = byId("cacheContent");
+  if (!el) return;
+  try {
+    const resp = await fetch("/api/cache/stats");
+    if (!resp.ok) { el.innerHTML = "<small>Indisponível</small>"; return; }
+    const data = await resp.json();
+
+    let html = "<div class='cache-stats'>";
+    if (data.hit_rate_pct != null) {
+      html += `<div class="stat-row"><span>Hit Rate</span><strong>${data.hit_rate_pct}%</strong></div>`;
+    }
+    if (data.redis_hits != null) {
+      html += `<div class="stat-row"><span>Hits</span><strong>${data.redis_hits.toLocaleString()}</strong></div>`;
+      html += `<div class="stat-row"><span>Misses</span><strong>${data.redis_misses.toLocaleString()}</strong></div>`;
+    }
+    if (data.used_memory_human) {
+      html += `<div class="stat-row"><span>Memória Redis</span><strong>${data.used_memory_human}</strong></div>`;
+    }
+    if (data.total_keys != null) {
+      html += `<div class="stat-row"><span>Total Keys</span><strong>${data.total_keys}</strong></div>`;
+    }
+    html += "</div>";
+    el.innerHTML = html || "<small>Sem dados de cache</small>";
+  } catch { el.innerHTML = "<small>Erro</small>"; }
+}
+
+/* ── Workers RQ (#3) ──────────────────────────────────── */
+
+async function renderWorkers() {
+  const el = byId("workersContent");
+  if (!el) return;
+  try {
+    const resp = await fetch("/api/workers");
+    if (!resp.ok) { el.innerHTML = "<small>Indisponível</small>"; return; }
+    const data = await resp.json();
+
+    if (data.message) {
+      el.innerHTML = `<small>${escapeHtml(data.message)}</small>`;
+      return;
+    }
+
+    let html = `<div class="stat-row"><span>Fila</span><strong>${data.queue_length || 0} jobs</strong></div>`;
+    html += `<div class="stat-row"><span>Falhas</span><strong>${data.failed_count || 0}</strong></div>`;
+    const workers = data.workers || [];
+    if (!workers.length) {
+      html += "<small>Nenhum worker ativo</small>";
+    } else {
+      html += workers.map(w => {
+        const stateClass = w.state === "busy" ? "status-warn" : "status-ok";
+        return `<div class="worker-item ${stateClass}"><span class="uptime-dot"></span> ${escapeHtml(w.name)} (${w.state}) · ✓${w.successful_job_count || 0} ✕${w.failed_job_count || 0}</div>`;
+      }).join("");
+    }
+    el.innerHTML = html;
+  } catch { el.innerHTML = "<small>Erro</small>"; }
+}
+
+/* ── AI Chat (#12) ────────────────────────────────────── */
+
+async function sendAiChat(event) {
+  event.preventDefault();
+  const input = byId("aiChatInput");
+  const messages = byId("aiChatMessages");
+  if (!input || !messages) return;
+
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = "";
+
+  messages.innerHTML += `<div class="chat-msg chat-user"><strong>Você:</strong> ${escapeHtml(msg)}</div>`;
+  messages.innerHTML += `<div class="chat-msg chat-ai" id="chatLoading"><em>Pensando...</em></div>`;
+  messages.scrollTop = messages.scrollHeight;
+
+  try {
+    const resp = await fetch("/api/ai-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await resp.json();
+    const loading = byId("chatLoading");
+    if (loading) loading.remove();
+
+    if (data.reply) {
+      messages.innerHTML += `<div class="chat-msg chat-ai"><strong>IA:</strong> ${escapeHtml(data.reply)}</div>`;
+    } else {
+      messages.innerHTML += `<div class="chat-msg chat-ai"><em>Erro: ${escapeHtml(data.error || "Sem resposta")}</em></div>`;
+    }
+    messages.scrollTop = messages.scrollHeight;
+  } catch {
+    const loading = byId("chatLoading");
+    if (loading) loading.remove();
+    messages.innerHTML += `<div class="chat-msg chat-ai"><em>Erro de rede</em></div>`;
+  }
+}
+
+/* ── Events Calendar (#10) ────────────────────────────── */
+
+async function renderEventsCalendar() {
+  const el = byId("eventsCalendarContent");
+  if (!el) return;
+  try {
+    const resp = await fetch("/api/events-calendar");
+    if (!resp.ok) { el.innerHTML = "<small>Indisponível</small>"; return; }
+    const events = await resp.json();
+
+    if (!events.length) {
+      el.innerHTML = "<small>Nenhum evento registrado</small>";
+      return;
+    }
+
+    // Group by date
+    const byDate = {};
+    events.forEach(ev => {
+      const dateStr = (ev.date || "").split("T")[0] || "unknown";
+      if (!byDate[dateStr]) byDate[dateStr] = [];
+      byDate[dateStr].push(ev);
+    });
+
+    let html = '<div class="events-list">';
+    for (const [date, evs] of Object.entries(byDate).slice(0, 10)) {
+      html += `<div class="event-date-group"><strong>${date}</strong>`;
+      evs.forEach(ev => {
+        html += `<div class="event-item" style="border-left:3px solid ${ev.color || '#6366f1'}">${escapeHtml(ev.title)}</div>`;
+      });
+      html += "</div>";
+    }
+    html += "</div>";
+    el.innerHTML = html;
+  } catch { el.innerHTML = "<small>Erro</small>"; }
+}
+
+/* ── Webhooks UI (#16) ────────────────────────────────── */
+
+async function renderWebhooks() {
+  const el = byId("webhookList");
+  if (!el) return;
+  try {
+    const resp = await fetch("/api/webhooks");
+    const hooks = await resp.json();
+    if (!Array.isArray(hooks) || !hooks.length) {
+      el.innerHTML = "<small>Nenhum webhook configurado</small>";
+      return;
+    }
+    el.innerHTML = hooks.map(h => {
+      const active = (h.active === true || h.active === 1);
+      return `
+        <div class="item-row">
+          <span class="uptime-dot ${active ? 'status-ok' : 'status-error'}"></span>
+          <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" title="${escapeHtml(h.url)}">${escapeHtml(h.name)}</a>
+          <small>${(h.event_types || []).join(", ")}</small>
+          <button class="btn-small btn-danger" data-action="delete-webhook" data-id="${h.id}" title="Remover">✕</button>
+        </div>`;
+    }).join("");
+  } catch { el.innerHTML = "<small>Erro ao carregar</small>"; }
+}
+
+async function deleteWebhook(whId) {
+  try {
+    await fetch(`/api/webhooks/${whId}`, { method: "DELETE" });
+    showToast("Webhook removido", "success");
+    renderWebhooks();
+  } catch { showToast("Erro ao remover", "error"); }
+}
+
+/* ── Sentiment badges in items (#13) ──────────────────── */
+
+function sentimentBadge(item) {
+  const extra = typeof item.extra === "object" ? item.extra : {};
+  const sentiment = extra.sentiment || (item.extra_json ? (() => { try { return JSON.parse(item.extra_json).sentiment; } catch { return null; } })() : null);
+  if (!sentiment) return "";
+  const map = { positive: "😊", negative: "😟", neutral: "😐" };
+  const colors = { positive: "#22c55e", negative: "#ef4444", neutral: "#94a3b8" };
+  return `<span class="sentiment-badge" style="color:${colors[sentiment] || '#94a3b8'}" title="Sentimento: ${sentiment}">${map[sentiment] || "😐"}</span>`;
+}
+
+/* ── Price Forecast in charts (#14) ───────────────────── */
+
+async function addForecastToChart(watchId, chartInstance) {
+  try {
+    const resp = await fetch(`/api/price-forecast/${watchId}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.forecast_7d) return;
+
+    const existingLabels = chartInstance.data.labels || [];
+    const forecastLabels = data.forecast_7d.map((_, i) => `+${i + 1}d`);
+    const nullPadding = new Array(existingLabels.length).fill(null);
+    // Connect forecast from last real point
+    const lastReal = chartInstance.data.datasets[0]?.data?.slice(-1)[0];
+    nullPadding[nullPadding.length - 1] = lastReal;
+
+    chartInstance.data.labels = [...existingLabels, ...forecastLabels];
+    chartInstance.data.datasets.push({
+      label: `Previsão (${data.trend})`,
+      data: [...nullPadding, ...data.forecast_7d],
+      borderColor: data.trend === "up" ? "#22c55e" : data.trend === "down" ? "#ef4444" : "#94a3b8",
+      borderDash: [6, 3],
+      tension: 0.3,
+      pointRadius: 2,
+      fill: false,
+    });
+    chartInstance.update();
+  } catch { /* ignore */ }
+}
+
+/* ── Price Watch Tags (#15) ───────────────────────────── */
+
+function renderPriceWatchTags(watch) {
+  const tags = watch.tags || [];
+  let tagsArray = tags;
+  if (typeof tags === "string") {
+    try { tagsArray = JSON.parse(tags); } catch { tagsArray = []; }
+  }
+  if (!Array.isArray(tagsArray) || !tagsArray.length) return "";
+  return `<div class="price-tags">${tagsArray.map(t => `<span class="price-tag">${escapeHtml(t)}</span>`).join("")}</div>`;
 }
 
 /* ── PWA: Register service worker ─────────────────────── */
@@ -2656,6 +3287,8 @@ setupWebPush();
 scheduleLLMPolling();
 connectSSE();
 flushOfflineQueue();
+setupPiPDrag();
+pollNotifCount();
 fetchDashboard();
 scheduleDashboardPolling();
 document.addEventListener("visibilitychange", () => {

@@ -8,7 +8,7 @@ import requests
 
 from ..config import Config
 from ..repository import Repository
-from ..utils import json_dumps, json_loads
+
 
 
 logger = logging.getLogger(__name__)
