@@ -10,6 +10,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN addgroup --system appuser && adduser --system --ingroup appuser appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8000
 
 CMD ["python", "run.py"]

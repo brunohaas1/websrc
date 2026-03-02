@@ -88,13 +88,6 @@ YOUTUBE_CHANNEL_FEEDS = [
             "?user=BosonTreinamentos"
         ),
     },
-    {
-        "source": "Curso em Vídeo",
-        "url": (
-            "https://www.youtube.com/feeds/videos.xml"
-            "?user=cursosemvideo"
-        ),
-    },
 ]
 
 GITHUB_REPOS_TO_WATCH = [

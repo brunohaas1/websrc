@@ -83,7 +83,10 @@ def register_routes(app: Flask) -> None:
     def list_items():
         item_type = request.args.get("type")
         q = request.args.get("q")
-        limit = int(request.args.get("limit", "50"))
+        try:
+            limit = max(1, min(200, int(request.args.get("limit", "50"))))
+        except (TypeError, ValueError):
+            limit = 50
         cache_key = f"items:{item_type}:{q}:{limit}"
         cached = cache.get(cache_key)
         if cached is not None:
@@ -181,8 +184,20 @@ def register_routes(app: Flask) -> None:
     @app.post("/api/maintenance/ai-backfill")
     @limiter.limit("2/day")
     def ai_backfill_once():
-        batch_size = int(request.args.get("batch_size", "80"))
-        max_cycles = int(request.args.get("max_cycles", "120"))
+        try:
+            batch_size = max(
+                1,
+                min(500, int(request.args.get("batch_size", "80"))),
+            )
+        except (TypeError, ValueError):
+            batch_size = 80
+        try:
+            max_cycles = max(
+                1,
+                min(500, int(request.args.get("max_cycles", "120"))),
+            )
+        except (TypeError, ValueError):
+            max_cycles = 120
 
         queue = get_queue(app.config)
         if queue is not None:

@@ -1,6 +1,14 @@
 :80 {
   encode gzip
 
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy strict-origin-when-cross-origin
+    Permissions-Policy interest-cohort=()
+    X-XSS-Protection "1; mode=block"
+  }
+
   @health path /health
   reverse_proxy @health ws-api:8000
 

@@ -16,6 +16,7 @@ data/*.sqlite
 .env.*
 !.env.example
 !.env.advanced.example
+!.env.llamacpp.example
 
 # OS/editor
 .DS_Store

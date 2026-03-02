@@ -9,3 +9,4 @@ rq==1.16.2
 Flask-Limiter==3.8.0
 prometheus-client==0.21.1
 psycopg[binary]==3.2.3
+psycopg_pool==3.2.4

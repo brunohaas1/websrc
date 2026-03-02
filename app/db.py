@@ -5,9 +5,13 @@ from pathlib import Path
 try:
     import psycopg  # type: ignore[import-not-found]
     from psycopg.rows import dict_row  # type: ignore[import-not-found]
+    from psycopg_pool import ConnectionPool  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover - optional at import time
     psycopg = None
     dict_row = None
+    ConnectionPool = None  # type: ignore[assignment,misc]
+
+_pg_pool = None
 
 
 SQLITE_SCHEMA = """
@@ -142,6 +146,15 @@ def init_db(database_target: str) -> None:
             with conn.cursor() as cursor:
                 cursor.execute(POSTGRES_SCHEMA)
             conn.commit()
+
+        global _pg_pool
+        if ConnectionPool is not None and _pg_pool is None:
+            _pg_pool = ConnectionPool(
+                _postgres_dsn(database_target),
+                min_size=2,
+                max_size=10,
+                kwargs={"row_factory": dict_row},
+            )
         return
 
     db_path = Path(database_target)
@@ -155,6 +168,11 @@ def init_db(database_target: str) -> None:
 @contextmanager
 def get_connection(database_target: str):
     if is_postgres_target(database_target):
+        if _pg_pool is not None:
+            with _pg_pool.connection() as conn:
+                yield conn
+            return
+
         if psycopg is None or dict_row is None:
             raise RuntimeError(
                 "psycopg não instalado para DATABASE_URL PostgreSQL",

@@ -491,6 +491,7 @@ class Repository:
                   AND (
                       extra_json IS NULL
                       OR trim(extra_json) = ''
+                      OR extra_json !~ '^\\s*\\{'
                       OR (extra_json::jsonb ->> 'ai_summary') IS NULL
                       OR trim(extra_json::jsonb ->> 'ai_summary') = ''
                       OR (extra_json::jsonb ->> 'ai_category') IS NULL

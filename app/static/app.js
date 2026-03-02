@@ -13,6 +13,46 @@ const CARD_SPAN_KEY = "dashboard-card-span-v1";
 const CARD_MIN_HEIGHT = 90;
 const CARD_MAX_HEIGHT = 780;
 
+const TOPIC_KEYWORDS = {
+  ia: [
+    "ia", "ai", "inteligência artificial", "inteligencia artificial",
+    "machine learning", "modelo", "chatgpt", "llm",
+  ],
+  programacao: [
+    "programação", "programacao", "dev", "código", "codigo",
+    "software", "framework", "python", "javascript", "react",
+    "backend", "frontend",
+  ],
+  seguranca: [
+    "segurança", "seguranca", "ciber", "hacker", "vazamento",
+    "malware", "ransomware", "vulnerabilidade", "cve", "phishing",
+  ],
+  mobile: [
+    "android", "iphone", "ios", "smartphone", "celular",
+    "app", "aplicativo", "samsung", "xiaomi", "motorola",
+  ],
+  mercado: [
+    "mercado", "empresa", "negócio", "negocio", "investimento",
+    "receita", "lucro", "startup", "aquisição", "aquisicao", "economia",
+  ],
+  guerra_ucrania: [
+    "ucrânia", "ucrania", "ukraine", "kyiv", "kiev",
+    "zelensky", "rússia", "russia", "moscou", "moscow",
+    "putin", "donetsk", "crimeia", "crimea",
+  ],
+  guerra_ira: [
+    "irã", "ira", "iran", "teerã", "teera", "tehran",
+    "israel", "hamas", "hezbollah", "oriente médio",
+    "oriente medio", "middle east", "ataque", "míssil", "missil",
+  ],
+  brasil_hoje: [
+    "brasil", "brasileiro", "brasileira", "brasilia",
+    "rio de janeiro", "são paulo", "sao paulo", "g1",
+    "agência brasil", "agencia brasil", "economia brasileira",
+    "governo federal", "stf", "senado", "câmara", "camara",
+  ],
+};
+
 let draggingCardId = null;
 let resizingCard = null;
 let dashboardPollTimer = null;
@@ -20,14 +60,26 @@ let dashboardFetchInFlight = false;
 
 const byId = (id) => document.getElementById(id);
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.appendChild(document.createTextNode(String(text ?? "")));
+  return div.innerHTML;
+}
+
 async function fetchDashboard() {
   if (dashboardFetchInFlight) return;
 
   dashboardFetchInFlight = true;
   try {
     const response = await fetch("/api/dashboard");
+    if (!response.ok) {
+      console.error("Dashboard fetch failed:", response.status);
+      return;
+    }
     state.snapshot = await response.json();
     render();
+  } catch (err) {
+    console.error("Dashboard fetch error:", err);
   } finally {
     dashboardFetchInFlight = false;
   }
@@ -114,11 +166,11 @@ function renderItems(target, items, options = {}) {
     .map(
       (item) => `
         <article class="item">
-          ${showImage && item.image_url ? `<img class="item-image" src="${item.image_url}" alt="${item.title}" loading="lazy" />` : ""}
+          ${showImage && item.image_url ? `<img class="item-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.title)}" loading="lazy" />` : ""}
           ${buildItemBadges(item)}
-          <a href="${item.url}" target="_blank" rel="noreferrer">${item.title}</a>
-          <div class="item-summary">${toOneLineSummary(resolveItemSummary(item), summaryLength)}</div>
-          <small>${item.source ?? "fonte"} • ${fmtDate(item.published_at || item.created_at)}</small>
+          <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
+          <div class="item-summary">${escapeHtml(toOneLineSummary(resolveItemSummary(item), summaryLength))}</div>
+          <small>${escapeHtml(item.source ?? "fonte")} • ${fmtDate(item.published_at || item.created_at)}</small>
         </article>
       `
     )
@@ -162,7 +214,7 @@ function buildItemBadges(item) {
 
   const badges = [];
   if (typeof category === "string" && category.trim()) {
-    badges.push(`<span class="item-category">${category.replaceAll("_", " ")}</span>`);
+    badges.push(`<span class="item-category">${escapeHtml(category.replaceAll("_", " "))}</span>`);
   }
   if (Number.isFinite(score)) {
     badges.push(`<span class="item-score">Relevância ${score}</span>`);
@@ -194,122 +246,7 @@ function renderNews(newsItems) {
 function filterNewsByTopic(items) {
   if (!state.newsTopic) return items || [];
 
-  const topicKeywords = {
-    ia: [
-      "ia",
-      "ai",
-      "inteligência artificial",
-      "inteligencia artificial",
-      "machine learning",
-      "modelo",
-      "chatgpt",
-      "llm",
-    ],
-    programacao: [
-      "programação",
-      "programacao",
-      "dev",
-      "código",
-      "codigo",
-      "software",
-      "framework",
-      "python",
-      "javascript",
-      "react",
-      "backend",
-      "frontend",
-    ],
-    seguranca: [
-      "segurança",
-      "seguranca",
-      "ciber",
-      "hacker",
-      "vazamento",
-      "malware",
-      "ransomware",
-      "vulnerabilidade",
-      "cve",
-      "phishing",
-    ],
-    mobile: [
-      "android",
-      "iphone",
-      "ios",
-      "smartphone",
-      "celular",
-      "app",
-      "aplicativo",
-      "samsung",
-      "xiaomi",
-      "motorola",
-    ],
-    mercado: [
-      "mercado",
-      "empresa",
-      "negócio",
-      "negocio",
-      "investimento",
-      "receita",
-      "lucro",
-      "startup",
-      "aquisição",
-      "aquisicao",
-      "economia",
-    ],
-    guerra_ucrania: [
-      "ucrânia",
-      "ucrania",
-      "ukraine",
-      "kyiv",
-      "kiev",
-      "zelensky",
-      "rússia",
-      "russia",
-      "moscou",
-      "moscow",
-      "putin",
-      "donetsk",
-      "crimeia",
-      "crimea",
-    ],
-    guerra_ira: [
-      "irã",
-      "ira",
-      "iran",
-      "teerã",
-      "teera",
-      "tehran",
-      "israel",
-      "hamas",
-      "hezbollah",
-      "oriente médio",
-      "oriente medio",
-      "middle east",
-      "ataque",
-      "míssil",
-      "missil",
-    ],
-    brasil_hoje: [
-      "brasil",
-      "brasileiro",
-      "brasileira",
-      "brasilia",
-      "rio de janeiro",
-      "são paulo",
-      "sao paulo",
-      "g1",
-      "agência brasil",
-      "agencia brasil",
-      "economia brasileira",
-      "governo federal",
-      "stf",
-      "senado",
-      "câmara",
-      "camara",
-    ],
-  };
-
-  const keywords = topicKeywords[state.newsTopic] || [];
+  const keywords = TOPIC_KEYWORDS[state.newsTopic] || [];
   if (!keywords.length) return items || [];
 
   return (items || []).filter((item) => {
@@ -322,122 +259,7 @@ function filterNewsByTopic(items) {
 function computeTopicRelevanceScore(item) {
   if (!state.newsTopic) return null;
 
-  const topicKeywords = {
-    ia: [
-      "ia",
-      "ai",
-      "inteligência artificial",
-      "inteligencia artificial",
-      "machine learning",
-      "modelo",
-      "chatgpt",
-      "llm",
-    ],
-    programacao: [
-      "programação",
-      "programacao",
-      "dev",
-      "código",
-      "codigo",
-      "software",
-      "framework",
-      "python",
-      "javascript",
-      "react",
-      "backend",
-      "frontend",
-    ],
-    seguranca: [
-      "segurança",
-      "seguranca",
-      "ciber",
-      "hacker",
-      "vazamento",
-      "malware",
-      "ransomware",
-      "vulnerabilidade",
-      "cve",
-      "phishing",
-    ],
-    mobile: [
-      "android",
-      "iphone",
-      "ios",
-      "smartphone",
-      "celular",
-      "app",
-      "aplicativo",
-      "samsung",
-      "xiaomi",
-      "motorola",
-    ],
-    mercado: [
-      "mercado",
-      "empresa",
-      "negócio",
-      "negocio",
-      "investimento",
-      "receita",
-      "lucro",
-      "startup",
-      "aquisição",
-      "aquisicao",
-      "economia",
-    ],
-    guerra_ucrania: [
-      "ucrânia",
-      "ucrania",
-      "ukraine",
-      "kyiv",
-      "kiev",
-      "zelensky",
-      "rússia",
-      "russia",
-      "moscou",
-      "moscow",
-      "putin",
-      "donetsk",
-      "crimeia",
-      "crimea",
-    ],
-    guerra_ira: [
-      "irã",
-      "ira",
-      "iran",
-      "teerã",
-      "teera",
-      "tehran",
-      "israel",
-      "hamas",
-      "hezbollah",
-      "oriente médio",
-      "oriente medio",
-      "middle east",
-      "ataque",
-      "míssil",
-      "missil",
-    ],
-    brasil_hoje: [
-      "brasil",
-      "brasileiro",
-      "brasileira",
-      "brasilia",
-      "rio de janeiro",
-      "são paulo",
-      "sao paulo",
-      "g1",
-      "agência brasil",
-      "agencia brasil",
-      "economia brasileira",
-      "governo federal",
-      "stf",
-      "senado",
-      "câmara",
-      "camara",
-    ],
-  };
-
-  const keywords = topicKeywords[state.newsTopic] || [];
+  const keywords = TOPIC_KEYWORDS[state.newsTopic] || [];
   if (!keywords.length) return null;
 
   const title = String(item.title || "").toLowerCase();
@@ -504,10 +326,10 @@ function renderPrices(prices, maxItems) {
     .map(
       (watch) => `
         <article class="item">
-          <strong>${watch.name}</strong>
-          <div>Último preço: ${watch.last_price ?? "--"} ${watch.currency}</div>
-          <div>Alvo: ${watch.target_price} ${watch.currency}</div>
-          <small>${watch.product_url}</small>
+          <strong>${escapeHtml(watch.name)}</strong>
+          <div>Último preço: ${escapeHtml(watch.last_price ?? "--")} ${escapeHtml(watch.currency)}</div>
+          <div>Alvo: ${escapeHtml(watch.target_price)} ${escapeHtml(watch.currency)}</div>
+          <small>${escapeHtml(watch.product_url)}</small>
         </article>
       `
     )
@@ -754,23 +576,36 @@ async function addPriceWatch(event) {
   const payload = Object.fromEntries(new FormData(form).entries());
   payload.target_price = Number(payload.target_price);
 
-  const response = await fetch("/api/price-watch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const response = await fetch("/api/price-watch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  if (!response.ok) {
-    alert("Erro ao criar monitor de preço");
-    return;
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      alert(body.error || "Erro ao criar monitor de preço");
+      return;
+    }
+
+    form.reset();
+    await fetchDashboard();
+  } catch (err) {
+    console.error("Price watch error:", err);
+    alert("Erro de rede ao criar monitor de preço");
   }
-
-  form.reset();
-  await fetchDashboard();
 }
 
 async function runNow() {
-  await fetch("/api/run-now", { method: "POST" });
+  try {
+    const response = await fetch("/api/run-now", { method: "POST" });
+    if (!response.ok) {
+      console.error("run-now failed:", response.status);
+    }
+  } catch (err) {
+    console.error("run-now error:", err);
+  }
   await fetchDashboard();
 }
 

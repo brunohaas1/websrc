@@ -21,9 +21,10 @@ class BaseCollector(ABC):
             self.app.config.get("AI_LOCAL_MAX_ENRICH_PER_RUN", 12),
         )
 
-        candidate_count = sum(
-            1 for item in items if self.ai_enricher.should_enrich(item)
-        )
+        enrich_flags = [
+            self.ai_enricher.should_enrich(item) for item in items
+        ]
+        candidate_count = sum(1 for flag in enrich_flags if flag)
         adaptive_limit = self.ai_enricher.adaptive_limit(
             base_limit,
             candidate_count,
@@ -31,16 +32,12 @@ class BaseCollector(ABC):
 
         enriched_inserts = 0
 
-        for item in items:
+        for item, is_candidate in zip(items, enrich_flags):
             if self.repo.item_exists(item):
                 continue
 
             enriched_item = item
-            candidate = self.ai_enricher.should_enrich(item)
-            should_enrich = (
-                candidate
-                and enriched_inserts < adaptive_limit
-            )
+            should_enrich = is_candidate and enriched_inserts < adaptive_limit
             if should_enrich:
                 enriched_item = self.ai_enricher.enrich_item(item)
 

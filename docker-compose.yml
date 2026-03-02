@@ -47,6 +47,7 @@ services:
     container_name: ws-scheduler
     command: python -m app.scheduler_main
     restart: unless-stopped
+    stop_grace_period: 15s
     env_file:
       - .env.advanced
     environment:
@@ -55,6 +56,7 @@ services:
       - DATABASE_URL=postgresql+psycopg://dashboard:dashboard@postgres:5432/dashboard
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      - postgres
       - redis
     volumes:
       - ./data:/app/data
