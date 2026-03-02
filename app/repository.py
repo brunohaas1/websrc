@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -15,6 +16,41 @@ except Exception:  # pragma: no cover - optional import
 
 
 class Repository:
+    SEMANTIC_STOPWORDS = {
+        "a",
+        "as",
+        "o",
+        "os",
+        "de",
+        "da",
+        "do",
+        "das",
+        "dos",
+        "e",
+        "em",
+        "no",
+        "na",
+        "nos",
+        "nas",
+        "um",
+        "uma",
+        "the",
+        "and",
+        "of",
+        "to",
+        "for",
+        "in",
+        "on",
+        "with",
+    }
+
+    PREFERRED_AI_CATEGORIES = {
+        "ia",
+        "programacao",
+        "seguranca",
+        "open_source",
+    }
+
     def __init__(self, database_target: str):
         self.database_target = database_target
         self.is_postgres = is_postgres_target(database_target)
@@ -129,7 +165,9 @@ class Repository:
         with get_connection(self.database_target) as conn:
             rows = conn.execute(self._sql(query), params).fetchall()
             items = [self._item_row_to_dict(row) for row in rows]
-            return self._dedupe_items(items, limit)
+            deduped = self._dedupe_items(items, over_fetch_limit)
+            ranked = self._rank_items(deduped, item_type=item_type, q=q)
+            return ranked[:limit]
 
     def get_dashboard_snapshot(self) -> dict[str, Any]:
         promotions = self.list_items("promotion", 40)
@@ -568,6 +606,65 @@ class Repository:
         return normalized.strip()
 
     @staticmethod
+    def _semantic_title_key(title: str) -> str:
+        normalized = Repository._normalize_title_for_dedupe(title)
+        if not normalized:
+            return ""
+
+        tokens = re.findall(r"[a-z0-9à-ÿ]+", normalized)
+        filtered = [
+            token
+            for token in tokens
+            if token not in Repository.SEMANTIC_STOPWORDS
+        ]
+        if len(filtered) < 3:
+            return ""
+
+        return " ".join(filtered[:8])
+
+    @classmethod
+    def _rank_items(
+        cls,
+        items: list[dict[str, Any]],
+        item_type: str | None,
+        q: str | None,
+    ) -> list[dict[str, Any]]:
+        if q:
+            return items
+
+        if item_type not in {"news", "tech_ai", "youtube", "release", "job"}:
+            return items
+
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for index, item in enumerate(items):
+            extra = item.get("extra")
+            if not isinstance(extra, dict):
+                extra = {}
+
+            ai_score = int(extra.get("ai_score") or 0)
+            ai_category = str(extra.get("ai_category") or "").strip().lower()
+            ai_reason = str(extra.get("ai_reason") or "").strip().lower()
+
+            recency_bonus = max(0, 40 - index) * 0.35
+            category_bonus = (
+                12.0
+                if ai_category in cls.PREFERRED_AI_CATEGORIES
+                else 0.0
+            )
+            model_bonus = 8.0 if ai_reason == "local-ai" else 0.0
+
+            rank_score = (
+                ai_score * 1.2
+                + recency_bonus
+                + category_bonus
+                + model_bonus
+            )
+            ranked.append((rank_score, item))
+
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in ranked]
+
+    @staticmethod
     def _dedupe_items(
         items: list[dict[str, Any]],
         limit: int,
@@ -575,6 +672,7 @@ class Repository:
         unique: list[dict[str, Any]] = []
         seen_url: set[str] = set()
         seen_title: set[tuple[str, str]] = set()
+        seen_semantic: set[tuple[str, str]] = set()
 
         for item in items:
             item_type = str(item.get("item_type") or "")
@@ -582,6 +680,7 @@ class Repository:
             title = Repository._normalize_title_for_dedupe(
                 str(item.get("title") or ""),
             )
+            semantic_title = Repository._semantic_title_key(title)
             url = Repository._normalize_url_for_dedupe(
                 str(item.get("url") or ""),
             )
@@ -589,6 +688,7 @@ class Repository:
             url_key = f"{item_type}|{url}" if url else ""
             title_key = (item_type, title)
             source_title_key = (f"{item_type}:{source}", title)
+            semantic_key = (item_type, semantic_title)
 
             if url_key and url_key in seen_url:
                 continue
@@ -596,12 +696,16 @@ class Repository:
                 continue
             if title and source_title_key in seen_title:
                 continue
+            if semantic_title and semantic_key in seen_semantic:
+                continue
 
             if url_key:
                 seen_url.add(url_key)
             if title:
                 seen_title.add(title_key)
                 seen_title.add(source_title_key)
+            if semantic_title:
+                seen_semantic.add(semantic_key)
 
             unique.append(item)
             if len(unique) >= limit:

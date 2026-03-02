@@ -333,10 +333,11 @@ button:hover {
 
 .item-image {
   width: 100%;
-  max-height: 140px;
-  object-fit: cover;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
   border-radius: 8px;
   margin-bottom: 8px;
+  background: rgba(2, 6, 23, 0.45);
   border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
