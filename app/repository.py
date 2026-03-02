@@ -2016,7 +2016,7 @@ class Repository:
                     data.get("name", data["symbol"]),
                     data.get("asset_type", "stock"),
                     data.get("target_price"),
-                    1 if data.get("alert_above") else 0,
+                    bool(data.get("alert_above")),
                     data.get("notes"),
                 ),
             )
