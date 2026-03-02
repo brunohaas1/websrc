@@ -14,7 +14,6 @@ services:
     depends_on:
       - postgres
       - redis
-      - llamacpp
     expose:
       - "8000"
     volumes:
@@ -40,7 +39,6 @@ services:
     depends_on:
       - postgres
       - redis
-      - llamacpp
     volumes:
       - ./data:/app/data
 
@@ -58,7 +56,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
-      - llamacpp
     volumes:
       - ./data:/app/data
 
