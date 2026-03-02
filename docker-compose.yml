@@ -117,7 +117,6 @@ services:
       - ./models:/models
     devices:
       - "${LLAMACPP_DRI_RENDER:-/dev/dri/renderD128}:${LLAMACPP_DRI_RENDER:-/dev/dri/renderD128}"
-      - "${LLAMACPP_DRI_CARD:-/dev/dri/card0}:${LLAMACPP_DRI_CARD:-/dev/dri/card0}"
     environment:
       - GGML_VK_VISIBLE_DEVICES=0
       - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}

@@ -21,23 +21,17 @@ LLAMACPP_HOST_PORT="$(grep -E '^LLAMACPP_HOST_PORT=' .env.advanced 2>/dev/null |
 LLAMACPP_HOST_PORT="${LLAMACPP_HOST_PORT:-8081}"
 
 LLAMACPP_DRI_RENDER="$(grep -E '^LLAMACPP_DRI_RENDER=' .env.advanced 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d '\r' | xargs || true)"
-LLAMACPP_DRI_CARD="$(grep -E '^LLAMACPP_DRI_CARD=' .env.advanced 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"' | tr -d '\r' | xargs || true)"
 
 if [[ -z "${LLAMACPP_DRI_RENDER}" ]]; then
   LLAMACPP_DRI_RENDER="$(find /dev/dri -maxdepth 1 -type c -name 'renderD*' | sort | head -n1 || true)"
 fi
 
-if [[ -z "${LLAMACPP_DRI_CARD}" ]]; then
-  LLAMACPP_DRI_CARD="$(find /dev/dri -maxdepth 1 -type c -name 'card*' | sort | head -n1 || true)"
-fi
-
-if [[ -z "${LLAMACPP_DRI_RENDER}" || -z "${LLAMACPP_DRI_CARD}" ]]; then
+if [[ -z "${LLAMACPP_DRI_RENDER}" ]]; then
   echo "[warn] Não foi possível detectar nós DRM automaticamente."
-  echo "[warn] Defina LLAMACPP_DRI_RENDER e LLAMACPP_DRI_CARD no .env.advanced."
+  echo "[warn] Defina LLAMACPP_DRI_RENDER no .env.advanced."
 fi
 
 echo "[info] DRI render: ${LLAMACPP_DRI_RENDER:-<vazio>}"
-echo "[info] DRI card:   ${LLAMACPP_DRI_CARD:-<vazio>}"
 
 check_url() {
   local url="$1"
@@ -60,7 +54,7 @@ check_url() {
 }
 
 echo "[1/3] Subindo stack com backend llama.cpp..."
-LLAMACPP_DRI_RENDER="${LLAMACPP_DRI_RENDER}" LLAMACPP_DRI_CARD="${LLAMACPP_DRI_CARD}" docker compose \
+LLAMACPP_DRI_RENDER="${LLAMACPP_DRI_RENDER}" docker compose --env-file .env.advanced \
   up -d --build api worker scheduler redis postgres caddy llamacpp
 
 echo "[2/3] Status dos serviços:"

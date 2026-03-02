@@ -84,7 +84,7 @@ Acesse: http://localhost:8000
 ## 6) Como rodar com Docker (recomendado)
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env.advanced up -d --build
 ```
 
 Acesse: http://IP_DO_SERVIDOR:8000
@@ -275,7 +275,6 @@ LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full
 LLAMACPP_HOST_PORT=8081
 LLAMACPP_GPU_LAYERS=35
 LLAMACPP_DRI_RENDER=/dev/dri/renderD128
-LLAMACPP_DRI_CARD=/dev/dri/card0
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
 AI_LOCAL_TIMEOUT_SECONDS=25
 AI_LOCAL_RETRIES=2

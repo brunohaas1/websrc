@@ -58,7 +58,7 @@ Ajuste no `.env.advanced` (mínimo):
 ## 4) Subir stack avançado
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env.advanced up -d --build
 ```
 
 ### Alternativa: `llama.cpp` (servidor próprio)
@@ -91,10 +91,10 @@ bash ./scripts/start-llamacpp-vulkan-build.sh
 Esse script compila `llama.cpp` com `GGML_VULKAN=ON` e sobe o stack usando
 imagem local `websrc-llamacpp:vulkan`.
 
-Se o host usar `card1` (e não `card0`), você pode forçar no comando:
+Se necessário, você pode forçar o nó DRM render no comando:
 
 ```bash
-LLAMACPP_DRI_CARD=/dev/dri/card1 LLAMACPP_DRI_RENDER=/dev/dri/renderD128 \
+LLAMACPP_DRI_RENDER=/dev/dri/renderD128 \
 bash ./scripts/start-llamacpp-vulkan-build.sh
 ```
 
@@ -105,7 +105,7 @@ bash ./scripts/start-llamacpp-vulkan-build.sh
 2. Suba stack (o `llama.cpp` já está integrado):
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env.advanced up -d --build
 ```
 
 3. Verifique se o serviço subiu:
