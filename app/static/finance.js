@@ -235,7 +235,7 @@ function renderPortfolio(portfolio) {
           <td class="text-right mono ${pnlCls}">${formatBRL(pnl)}</td>
           <td class="text-right mono ${pnlCls}">${formatPct(pnlPct)}</td>
           <td class="text-center">
-            <button class="fin-del-btn" onclick="deleteAsset(${p.asset_id})" title="Remover">🗑️</button>
+            <button class="fin-del-btn" data-action="deleteAsset" data-id="${p.asset_id}" title="Remover">🗑️</button>
           </td>
         </tr>
       `;
@@ -290,7 +290,7 @@ function renderTransactions(txns) {
           <td class="text-right mono">${formatBRL(t.fees)}</td>
           <td>${escapeHtml(t.notes || "")}</td>
           <td class="text-center">
-            <button class="fin-del-btn" onclick="deleteTransaction(${t.id})" title="Excluir">🗑️</button>
+            <button class="fin-del-btn" data-action="deleteTransaction" data-id="${t.id}" title="Excluir">🗑️</button>
           </td>
         </tr>
       `;
@@ -338,7 +338,7 @@ function renderWatchlist(watchlist) {
           <span class="fin-badge ${typeCls}">${escapeHtml(w.asset_type)}</span>
           <span class="fin-wl-name">${escapeHtml(w.name)}</span>
           <span class="fin-wl-target">${targetStr} ${dir}</span>
-          <button class="fin-del-btn" onclick="deleteWatchlistItem(${w.id})" title="Remover">🗑️</button>
+          <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">🗑️</button>
         </div>
       `;
     })
@@ -366,8 +366,8 @@ function renderGoals(goals) {
           <div class="fin-goal-header">
             <span class="fin-goal-name">${escapeHtml(g.name)}</span>
             <div class="fin-goal-actions">
-              <button class="fin-del-btn" onclick="openEditGoalModal(${g.id})" title="Editar">✏️</button>
-              <button class="fin-del-btn" onclick="deleteGoal(${g.id})" title="Excluir">🗑️</button>
+              <button class="fin-del-btn" data-action="openEditGoalModal" data-id="${g.id}" title="Editar">✏️</button>
+              <button class="fin-del-btn" data-action="deleteGoal" data-id="${g.id}" title="Excluir">🗑️</button>
             </div>
           </div>
           <div class="fin-goal-amounts">
@@ -1383,5 +1383,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // AI analysis type buttons
   document.querySelectorAll(".fin-ai-btn[data-type]").forEach((btn) => {
     btn.addEventListener("click", () => requestAIAnalysis(btn.dataset.type));
+  });
+
+  // ── Event delegation for dynamic buttons (CSP-safe) ──
+  const actionMap = { deleteAsset, deleteTransaction, deleteWatchlistItem, deleteGoal, openEditGoalModal };
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const fn = actionMap[btn.dataset.action];
+    if (fn) fn(Number(btn.dataset.id));
   });
 });
