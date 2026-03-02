@@ -7,10 +7,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Config:
     APP_NAME = "Personal Web Scraper Dashboard"
+    DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
     DATABASE_PATH = os.getenv(
         "DATABASE_PATH",
         str(BASE_DIR / "data" / "dashboard.db"),
     )
+    DATABASE_TARGET = DATABASE_URL or DATABASE_PATH
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_JSON = os.getenv("LOG_JSON", "1") == "1"
     APP_ROLE = os.getenv("APP_ROLE", "all")

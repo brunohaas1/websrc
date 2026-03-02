@@ -154,6 +154,18 @@ docker logs ws-worker --tail 120
 docker logs ws-api --tail 120
 ```
 
+Manutenção (resumos antigos duplicados):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/maintenance/cleanup-summaries
+```
+
+Check diário de saúde/performance:
+
+```bash
+bash ./scripts/daily-health-check.sh
+```
+
 ## 7) CasaOS (se preferir interface)
 
 - Crie app custom com `docker-compose.advanced.yml`

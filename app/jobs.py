@@ -12,9 +12,10 @@ class RuntimeApp:
     config: dict
 
 
-def _runtime_config(database_path: str, log_level: str) -> dict:
+def _runtime_config(database_target: str, log_level: str) -> dict:
     return {
-        "DATABASE_PATH": database_path,
+        "DATABASE_TARGET": database_target,
+        "DATABASE_PATH": database_target,
         "LOG_LEVEL": log_level,
         "WEATHER_LAT": Config.WEATHER_LAT,
         "WEATHER_LON": Config.WEATHER_LON,
@@ -40,15 +41,15 @@ def _runtime_config(database_path: str, log_level: str) -> dict:
     }
 
 
-def run_frequent_scrape(database_path: str, log_level: str = "INFO") -> None:
+def run_frequent_scrape(database_target: str, log_level: str = "INFO") -> None:
     setup_logging(log_level, log_json=Config.LOG_JSON)
-    app = RuntimeApp(config=_runtime_config(database_path, log_level))
+    app = RuntimeApp(config=_runtime_config(database_target, log_level))
     orchestrator = ScrapeOrchestrator(app)
     orchestrator.run_frequent_jobs()
 
 
-def run_daily_scrape(database_path: str, log_level: str = "INFO") -> None:
+def run_daily_scrape(database_target: str, log_level: str = "INFO") -> None:
     setup_logging(log_level, log_json=Config.LOG_JSON)
-    app = RuntimeApp(config=_runtime_config(database_path, log_level))
+    app = RuntimeApp(config=_runtime_config(database_target, log_level))
     orchestrator = ScrapeOrchestrator(app)
     orchestrator.run_daily_jobs()

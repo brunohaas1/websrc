@@ -21,7 +21,7 @@ from .weather_service import WeatherCollector
 class ScrapeOrchestrator:
     def __init__(self, app):
         self.app = app
-        self.repo = Repository(app.config["DATABASE_PATH"])
+        self.repo = Repository(app.config["DATABASE_TARGET"])
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.news_collector = RSSCollector(app, self.repo, NEWS_FEEDS, "news")

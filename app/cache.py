@@ -27,6 +27,9 @@ class MemoryTTLCache:
             json.dumps(value, ensure_ascii=False),
         )
 
+    def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+
 
 class RedisJSONCache:
     def __init__(self, redis_client):
@@ -43,6 +46,9 @@ class RedisJSONCache:
     def set(self, key: str, value: Any, ttl: int) -> None:
         payload = json.dumps(value, ensure_ascii=False)
         self.redis.setex(key, ttl, payload)
+
+    def delete(self, key: str) -> None:
+        self.redis.delete(key)
 
 
 def get_cache(config):

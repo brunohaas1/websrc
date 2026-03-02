@@ -58,7 +58,7 @@ class ScraperScheduler:
 
         return self.queue.enqueue(
             run_frequent_scrape,
-            self.app.config["DATABASE_PATH"],
+            self.app.config["DATABASE_TARGET"],
             self.app.config["LOG_LEVEL"],
             job_timeout="10m",
         )
@@ -70,7 +70,7 @@ class ScraperScheduler:
 
         return self.queue.enqueue(
             run_daily_scrape,
-            self.app.config["DATABASE_PATH"],
+            self.app.config["DATABASE_TARGET"],
             self.app.config["LOG_LEVEL"],
             job_timeout="20m",
         )

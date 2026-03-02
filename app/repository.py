@@ -4,13 +4,36 @@ import sqlite3
 from typing import Any
 from urllib.parse import urlparse
 
-from .db import get_connection
+from .db import get_connection, is_postgres_target
 from .utils import json_dumps, json_loads, to_dedup_key
+
+try:
+    from psycopg import errors as psycopg_errors  # pyright: ignore
+except Exception:  # pragma: no cover - optional import
+    psycopg_errors = None
 
 
 class Repository:
-    def __init__(self, database_path: str):
-        self.database_path = database_path
+    def __init__(self, database_target: str):
+        self.database_target = database_target
+        self.is_postgres = is_postgres_target(database_target)
+
+    def _sql(self, query: str) -> str:
+        if not self.is_postgres:
+            return query
+        return query.replace("?", "%s")
+
+    def _is_unique_violation(self, exc: Exception) -> bool:
+        if isinstance(exc, sqlite3.IntegrityError):
+            return True
+
+        if psycopg_errors is not None and isinstance(
+            exc,
+            psycopg_errors.UniqueViolation,
+        ):
+            return True
+
+        return "unique" in str(exc).lower()
 
     def upsert_item(self, item: dict[str, Any]) -> bool:
         dedup_key = to_dedup_key(
@@ -19,10 +42,11 @@ class Repository:
             url=item["url"],
             title=item["title"],
         )
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             try:
                 conn.execute(
-                    """
+                    self._sql(
+                        """
                     INSERT INTO items (
                         item_type,
                         source,
@@ -35,6 +59,7 @@ class Repository:
                         dedup_key
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
+                    ),
                     (
                         item["item_type"],
                         item["source"],
@@ -49,8 +74,11 @@ class Repository:
                 )
                 conn.commit()
                 return True
-            except sqlite3.IntegrityError:
-                return False
+            except Exception as exc:
+                if self._is_unique_violation(exc):
+                    conn.rollback()
+                    return False
+                raise
 
     def item_exists(self, item: dict[str, Any]) -> bool:
         dedup_key = to_dedup_key(
@@ -59,9 +87,9 @@ class Repository:
             url=item["url"],
             title=item["title"],
         )
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             row = conn.execute(
-                "SELECT 1 FROM items WHERE dedup_key = ? LIMIT 1",
+                self._sql("SELECT 1 FROM items WHERE dedup_key = ? LIMIT 1"),
                 (dedup_key,),
             ).fetchone()
             return row is not None
@@ -87,8 +115,8 @@ class Repository:
         over_fetch_limit = max(limit * 5, 80)
         params.append(over_fetch_limit)
 
-        with get_connection(self.database_path) as conn:
-            rows = conn.execute(query, params).fetchall()
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(self._sql(query), params).fetchall()
             items = [self._item_row_to_dict(row) for row in rows]
             return self._dedupe_items(items, limit)
 
@@ -112,9 +140,105 @@ class Repository:
     def get_ai_observability(self) -> dict[str, Any]:
         observed_types = ("news", "tech_ai", "youtube", "job", "release")
 
-        with get_connection(self.database_path) as conn:
-            totals_row = conn.execute(
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                totals_query = """
+                SELECT
+                    COUNT(*) AS total_items,
+                    SUM(
+                        CASE
+                            WHEN (extra_json::jsonb ->> 'ai_summary')
+                                 IS NOT NULL
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS enriched_items,
+                    AVG(
+                        CASE
+                            WHEN (
+                                extra_json::jsonb ->> 'ai_latency_ms'
+                            )::float > 0
+                            THEN (extra_json::jsonb ->> 'ai_latency_ms')::float
+                            ELSE NULL
+                        END
+                    ) AS avg_ai_latency_ms
+                FROM items
+                WHERE item_type IN (%s, %s, %s, %s, %s)
+                  AND created_at >= NOW() - INTERVAL '24 hours'
                 """
+
+                fallback_query = """
+                SELECT
+                    to_char(
+                        date_trunc('hour', created_at),
+                        'YYYY-MM-DD HH24:00'
+                    )
+                        AS hour,
+                    COUNT(*) AS total,
+                    SUM(
+                        CASE
+                               WHEN (extra_json::jsonb ->> 'ai_reason')
+                                   LIKE 'fallback%'
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS fallback
+                FROM items
+                WHERE item_type IN (%s, %s, %s, %s, %s)
+                  AND created_at >= NOW() - INTERVAL '24 hours'
+                GROUP BY hour
+                ORDER BY hour DESC
+                LIMIT 12
+                """
+
+                source_query = """
+                SELECT
+                    lower(trim(source)) AS source,
+                    SUM(
+                        CASE
+                               WHEN (extra_json::jsonb ->> 'ai_summary')
+                                   IS NOT NULL
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS enriched_items,
+                    SUM(
+                        CASE
+                               WHEN (extra_json::jsonb ->> 'ai_reason')
+                                   = 'local-ai'
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS model_success
+                FROM items
+                WHERE item_type IN (%s, %s, %s, %s, %s)
+                  AND created_at >= NOW() - INTERVAL '24 hours'
+                GROUP BY source
+                HAVING SUM(
+                    CASE
+                        WHEN (extra_json::jsonb ->> 'ai_summary') IS NOT NULL
+                        THEN 1
+                        ELSE 0
+                    END
+                ) > 0
+                ORDER BY enriched_items DESC
+                LIMIT 10
+                """
+
+                reason_query = """
+                SELECT
+                    COALESCE((extra_json::jsonb ->> 'ai_reason'), 'sem-motivo')
+                        AS reason,
+                    COUNT(*) AS total
+                FROM items
+                WHERE item_type IN (%s, %s, %s, %s, %s)
+                  AND created_at >= NOW() - INTERVAL '24 hours'
+                GROUP BY reason
+                ORDER BY total DESC
+                LIMIT 10
+                """
+            else:
+                totals_query = """
                 SELECT
                     COUNT(*) AS total_items,
                     SUM(
@@ -140,12 +264,8 @@ class Repository:
                 FROM items
                 WHERE item_type IN (?, ?, ?, ?, ?)
                   AND datetime(created_at) >= datetime('now', '-24 hours')
-                """,
-                observed_types,
-            ).fetchall()
-
-            fallback_rows = conn.execute(
-                """
+                                """
+                fallback_query = """
                 SELECT
                     strftime('%Y-%m-%d %H:00', created_at) AS hour,
                     COUNT(*) AS total,
@@ -163,12 +283,9 @@ class Repository:
                 GROUP BY hour
                 ORDER BY hour DESC
                 LIMIT 12
-                """,
-                observed_types,
-            ).fetchall()
-
-            source_rows = conn.execute(
                 """
+
+                source_query = """
                 SELECT
                     lower(trim(source)) AS source,
                     SUM(
@@ -198,7 +315,41 @@ class Repository:
                 HAVING enriched_items > 0
                 ORDER BY enriched_items DESC
                 LIMIT 10
-                """,
+                """
+
+                reason_query = """
+                SELECT
+                    COALESCE(
+                        json_extract(extra_json, '$.ai_reason'),
+                        'sem-motivo'
+                    )
+                        AS reason,
+                    COUNT(*) AS total
+                FROM items
+                WHERE item_type IN (?, ?, ?, ?, ?)
+                  AND datetime(created_at) >= datetime('now', '-24 hours')
+                GROUP BY reason
+                ORDER BY total DESC
+                LIMIT 10
+                """
+
+            totals_row = conn.execute(
+                self._sql(totals_query),
+                observed_types,
+            ).fetchall()
+
+            fallback_rows = conn.execute(
+                self._sql(fallback_query),
+                observed_types,
+            ).fetchall()
+
+            source_rows = conn.execute(
+                self._sql(source_query),
+                observed_types,
+            ).fetchall()
+
+            reason_rows = conn.execute(
+                self._sql(reason_query),
                 observed_types,
             ).fetchall()
 
@@ -238,6 +389,15 @@ class Repository:
                 }
             )
 
+        reason_breakdown = []
+        for row in reason_rows:
+            reason_breakdown.append(
+                {
+                    "reason": row["reason"] or "sem-motivo",
+                    "total": int(row["total"] or 0),
+                }
+            )
+
         return {
             "window_hours": 24,
             "total_items": total,
@@ -254,12 +414,12 @@ class Repository:
             ),
             "fallback_rate_by_hour": fallback_rate_by_hour[:12],
             "source_accuracy": source_accuracy[:10],
+            "reason_breakdown": reason_breakdown[:10],
         }
 
     def add_price_watch(self, payload: dict[str, Any]) -> int:
-        with get_connection(self.database_path) as conn:
-            cursor = conn.execute(
-                """
+        with get_connection(self.database_target) as conn:
+            query = """
                 INSERT INTO price_watches (
                     name,
                     product_url,
@@ -269,7 +429,12 @@ class Repository:
                     active
                 )
                 VALUES (?, ?, ?, ?, ?, 1)
-                """,
+            """
+            if self.is_postgres:
+                query += " RETURNING id"
+
+            cursor = conn.execute(
+                self._sql(query),
                 (
                     payload["name"],
                     payload["product_url"],
@@ -279,30 +444,48 @@ class Repository:
                 ),
             )
             conn.commit()
-            return int(cursor.lastrowid or 0)
+            if self.is_postgres:
+                row = cursor.fetchone()
+                inserted_id = row["id"] if row else 0
+            else:
+                inserted_id = (
+                    cursor.lastrowid
+                    if hasattr(cursor, "lastrowid")
+                    else 0
+                )
+            return int(inserted_id or 0)
 
     def list_price_watches(self) -> list[dict[str, Any]]:
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             rows = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT * FROM price_watches
                 ORDER BY updated_at DESC
-                """
+                """,
+                ),
             ).fetchall()
             return [dict(row) for row in rows]
 
     def record_price(self, watch_id: int, price: float) -> None:
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             conn.execute(
-                "INSERT INTO price_history (watch_id, price) VALUES (?, ?)",
+                self._sql(
+                    (
+                        "INSERT INTO price_history "
+                        "(watch_id, price) VALUES (?, ?)"
+                    ),
+                ),
                 (watch_id, price),
             )
             conn.execute(
-                """
+                self._sql(
+                    """
                 UPDATE price_watches
                 SET last_price = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
+                ),
                 (price, watch_id),
             )
             conn.commit()
@@ -312,15 +495,17 @@ class Repository:
         watch_id: int,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             rows = conn.execute(
-                """
+                self._sql(
+                    """
                 SELECT watch_id, price, captured_at
                 FROM price_history
                 WHERE watch_id = ?
                 ORDER BY captured_at DESC
                 LIMIT ?
                 """,
+                ),
                 (watch_id, limit),
             ).fetchall()
             return [dict(row) for row in rows]
@@ -332,20 +517,24 @@ class Repository:
         message: str,
         payload: dict[str, Any] | None = None,
     ) -> None:
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             conn.execute(
-                """
+                self._sql(
+                    """
                 INSERT INTO alerts (alert_type, title, message, payload_json)
                 VALUES (?, ?, ?, ?)
                 """,
+                ),
                 (alert_type, title, message, json_dumps(payload or {})),
             )
             conn.commit()
 
     def list_alerts(self, limit: int = 30) -> list[dict[str, Any]]:
-        with get_connection(self.database_path) as conn:
+        with get_connection(self.database_target) as conn:
             rows = conn.execute(
-                "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?",
+                self._sql(
+                    "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?",
+                ),
                 (limit,),
             ).fetchall()
             data = []
@@ -357,7 +546,7 @@ class Repository:
             return data
 
     @staticmethod
-    def _item_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    def _item_row_to_dict(row: Any) -> dict[str, Any]:
         result = dict(row)
         result["extra"] = json_loads(result.get("extra_json"))
         if result.get("item_type") == "promotion":
@@ -403,6 +592,50 @@ class Repository:
             unique.append(item)
 
         return unique
+
+    def cleanup_duplicate_summaries(self) -> dict[str, int]:
+        updated = 0
+        scanned = 0
+
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, title, summary
+                    FROM items
+                    WHERE summary IS NOT NULL AND trim(summary) <> ''
+                    """,
+                ),
+            ).fetchall()
+
+            for row in rows:
+                scanned += 1
+                item_id = row["id"]
+                title = " ".join(str(row["title"] or "").split()).strip()
+                summary = " ".join(str(row["summary"] or "").split()).strip()
+                if not title or not summary:
+                    continue
+
+                title_low = title.lower().rstrip(" .:-–—")
+                summary_low = summary.lower()
+                normalized = summary
+                if summary_low == title.lower():
+                    normalized = ""
+                elif summary_low.startswith(title_low):
+                    normalized = summary[len(title):].lstrip(" .:-–—").strip()
+
+                if normalized == summary:
+                    continue
+
+                conn.execute(
+                    self._sql("UPDATE items SET summary = ? WHERE id = ?"),
+                    (normalized, item_id),
+                )
+                updated += 1
+
+            conn.commit()
+
+        return {"scanned": scanned, "updated": updated}
 
     @staticmethod
     def _normalize_url_for_dedupe(url: str) -> str:

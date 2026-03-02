@@ -559,6 +559,9 @@ function renderAIObservability(metrics) {
   const fallbackByHour = Array.isArray(data.fallback_rate_by_hour)
     ? data.fallback_rate_by_hour
     : [];
+  const reasons = Array.isArray(data.reason_breakdown)
+    ? data.reason_breakdown
+    : [];
 
   const topSources = sources
     .slice(0, 5)
@@ -584,6 +587,18 @@ function renderAIObservability(metrics) {
     )
     .join("");
 
+  const reasonRows = reasons
+    .slice(0, 5)
+    .map(
+      (entry) => `
+        <li>
+          <strong>${entry.reason}</strong>
+          <span>${entry.total} ocorrências</span>
+        </li>
+      `
+    )
+    .join("");
+
   target.innerHTML = `
     <div class="ai-metric-row">
       <span>Enriquecidos (24h)</span>
@@ -600,6 +615,10 @@ function renderAIObservability(metrics) {
     <div class="ai-observability-block">
       <h3>Fallback por hora</h3>
       <ul>${fallbackRows || "<li><span>Sem dados</span></li>"}</ul>
+    </div>
+    <div class="ai-observability-block">
+      <h3>Motivos de fallback</h3>
+      <ul>${reasonRows || "<li><span>Sem dados</span></li>"}</ul>
     </div>
   `;
 }

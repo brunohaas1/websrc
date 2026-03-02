@@ -161,6 +161,28 @@ class LocalAIEnricher:
         "dev",
     }
 
+    SOURCE_PROMPT_HINTS = {
+        "g1 tecnologia": (
+            "Fonte jornalística de tecnologia; "
+            "priorize resumo factual do lead."
+        ),
+        "g1 brasil": (
+            "Notícias gerais do Brasil; priorize contexto nacional e "
+            "política/economia quando aplicável."
+        ),
+        "openai blog": (
+            "Fonte institucional de produto/pesquisa; "
+            "priorize lançamento, impacto e público-alvo."
+        ),
+        "remoteok python": (
+            "Vaga remota; destaque stack, senioridade e "
+            "localização quando houver."
+        ),
+        "filipe deschamps": (
+            "Conteúdo em vídeo; priorize tema central e relevância para devs."
+        ),
+    }
+
     _source_model_attempts: dict[str, int] = defaultdict(int)
     _source_model_successes: dict[str, int] = defaultdict(int)
     _recent_model_latencies_ms: deque[float] = deque(maxlen=180)
@@ -287,6 +309,13 @@ class LocalAIEnricher:
         source = self._strip_html(str(item.get("source") or ""))
         item_type = self._strip_html(str(item.get("item_type") or ""))
 
+        source_lower = source.lower().strip()
+        source_hint = ""
+        for key, hint in self.SOURCE_PROMPT_HINTS.items():
+            if key in source_lower:
+                source_hint = hint
+                break
+
         categories = ", ".join(self.CATEGORIES)
         return (
             "Classifique o item e responda APENAS JSON válido (sem markdown). "
@@ -297,6 +326,7 @@ class LocalAIEnricher:
             "relevance_score deve ser inteiro de 0 a 100. "
             f"Item type: {item_type}. "
             f"Source: {source}. "
+            f"{f'Hint: {source_hint}. ' if source_hint else ''}"
             f"Title: {title}. "
             f"Summary: {summary}."
         )

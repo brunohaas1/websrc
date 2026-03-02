@@ -14,7 +14,7 @@ from .security import (
 
 
 def register_routes(app: Flask) -> None:
-    repo = Repository(app.config["DATABASE_PATH"])
+    repo = Repository(app.config["DATABASE_TARGET"])
     cache = get_cache(app.config)
     limiter = Limiter(
         key_func=get_remote_address,
@@ -122,13 +122,13 @@ def register_routes(app: Flask) -> None:
 
             frequent = queue.enqueue(
                 run_frequent_scrape,
-                app.config["DATABASE_PATH"],
+                app.config["DATABASE_TARGET"],
                 app.config["LOG_LEVEL"],
                 job_timeout="10m",
             )
             daily = queue.enqueue(
                 run_daily_scrape,
-                app.config["DATABASE_PATH"],
+                app.config["DATABASE_TARGET"],
                 app.config["LOG_LEVEL"],
                 job_timeout="20m",
             )
@@ -146,3 +146,11 @@ def register_routes(app: Flask) -> None:
 
         scheduler.run_all_now()
         return jsonify({"ok": True, "message": "Coleta executada."})
+
+    @app.post("/api/maintenance/cleanup-summaries")
+    @limiter.limit("2/day")
+    def cleanup_summaries():
+        payload = repo.cleanup_duplicate_summaries()
+        cache.delete("dashboard:snapshot")
+        cache.delete("ai:observability")
+        return jsonify({"ok": True, **payload})

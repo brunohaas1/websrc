@@ -40,7 +40,10 @@ class JobCollector(RSSCollector):
                 "summary": summary,
                 "image_url": None,
                 "published_at": published,
-                "extra": {"location": getattr(entry, "location", "") or "Remote"},
+                "extra": {
+                    "location": getattr(entry, "location", "")
+                    or "Remote"
+                },
             }
 
         for feed in self.feeds:
@@ -52,8 +55,12 @@ class JobCollector(RSSCollector):
                     location = getattr(entry, "location", "")
 
                     haystack = f"{title} {summary} {location}".lower()
-                    has_brazil_match = any(term in haystack for term in BRAZIL_TERMS)
-                    has_latam_match = any(term in haystack for term in LATAM_TERMS)
+                    has_brazil_match = any(
+                        term in haystack for term in BRAZIL_TERMS
+                    )
+                    has_latam_match = any(
+                        term in haystack for term in LATAM_TERMS
+                    )
 
                     published = None
                     if getattr(entry, "published", None):

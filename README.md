@@ -127,12 +127,14 @@ docker compose up -d --build
 - Cache da API: `CACHE_TTL_SECONDS`
 - Limites de API: `API_RATE_LIMIT_DEFAULT`, `API_RATE_LIMIT_RUN_NOW`
 - Formato de logs: `LOG_JSON=1` (JSON) ou `LOG_JSON=0` (texto)
+- Banco: `DATABASE_URL` (Postgres) ou `DATABASE_PATH` (SQLite fallback)
+- Health diário: `bash ./scripts/daily-health-check.sh`
+- Limpeza de resumos duplicados: `bash ./scripts/cleanup-duplicate-summaries.sh`
 
 ## 9) Próximos passos sugeridos
 
 - Adicionar autenticação (login simples)
 - Enviar alertas para Telegram/Discord/Email
-- Migrar de SQLite para Postgres quando crescer
 - Criar testes automatizados dos coletores
 
 ## 10) Evolução profissional (roadmap executável)

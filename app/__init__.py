@@ -19,7 +19,7 @@ def create_app(start_scheduler: bool = True) -> Flask:
         log_json=app.config["LOG_JSON"],
     )
 
-    init_db(app.config["DATABASE_PATH"])
+    init_db(app.config["DATABASE_TARGET"])
     register_routes(app)
 
     @app.before_request
