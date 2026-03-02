@@ -4,6 +4,12 @@ __pycache__/
 *.pyd
 *.db
 .env
+.env.*
 .venv/
 .git/
 data/
+models/
+*.gguf
+node_modules/
+*.md
+*.log
