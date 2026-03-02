@@ -976,9 +976,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             '- {"action":"add_asset","symbol":"PETR4","name":"Petrobras PN",'
             '"asset_type":"stock","currency":"BRL"}\n'
             '- {"action":"buy","symbol":"PETR4","quantity":100,"price":35.50,'
-            '"fees":4.90,"date":"2026-01-15","notes":"..."}\n'
+            '"date":"2026-01-15","notes":"..."}\n'
             '- {"action":"sell","symbol":"PETR4","quantity":50,"price":40.00,'
-            '"fees":4.90,"date":"2026-01-15"}\n'
+            '"date":"2026-01-15"}\n'
             '- {"action":"add_watchlist","symbol":"VALE3","name":"Vale SA",'
             '"asset_type":"stock","target_price":68.00,"alert_above":false}\n'
             '- {"action":"add_goal","name":"Reserva de emergência",'
@@ -989,6 +989,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "- Sempre confirme ao usuário o que foi feito após o bloco de ações.\n"
             "- asset_type pode ser: stock, fii, etf, crypto, fund, renda-fixa\n"
             "- Se o usuário não informar o preço ou quantidade, PERGUNTE antes de criar.\n"
+            "- fees (taxas/corretagem) deve ser 0 a menos que o usuário informe explicitamente.\n"
             "- Se for apenas uma pergunta/análise, NÃO inclua o bloco actions.\n"
             "- Use markdown na resposta textual.\n\n"
             "Dados financeiros atuais do usuário:\n"

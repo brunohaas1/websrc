@@ -23,7 +23,7 @@
         </div>
         <div class="topbar-tools">
           <a href="/" class="btn-icon" title="Voltar ao Dashboard">🏠</a>
-          <button class="btn-icon" title="Importar Excel/CSV" onclick="openImportModal()">📥</button>
+          <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV">📥</button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
           <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
         </div>
@@ -92,8 +92,8 @@
       <section class="fin-card fin-wide" id="finPortfolioCard">
         <h2>
           💼 Meu Portfólio
-          <button class="btn-text" onclick="openAddAssetModal()" title="Adicionar ativo">➕ Ativo</button>
-          <button class="btn-text" onclick="openImportModal()" title="Importar Excel/CSV">📥 Importar</button>
+          <button id="btnAddAsset" class="btn-text" title="Adicionar ativo">➕ Ativo</button>
+          <button id="btnImportPortfolio" class="btn-text" title="Importar Excel/CSV">📥 Importar</button>
         </h2>
         <div id="finPortfolioContent" class="fin-card-body">
           <div class="skeleton" style="height:120px"></div>
@@ -104,7 +104,7 @@
       <section class="fin-card fin-wide" id="finTransactionsCard">
         <h2>
           🔄 Transações
-          <button class="btn-text" onclick="openAddTransactionModal()" title="Nova transação">➕ Nova</button>
+          <button id="btnAddTransaction" class="btn-text" title="Nova transação">➕ Nova</button>
         </h2>
         <div id="finTransactionsContent" class="fin-card-body">
           <div class="skeleton" style="height:100px"></div>
@@ -115,7 +115,7 @@
       <section class="fin-card" id="finWatchlistCard">
         <h2>
           👁️ Watchlist
-          <button class="btn-text" onclick="openAddWatchlistModal()" title="Adicionar à watchlist">➕ Adicionar</button>
+          <button id="btnAddWatchlist" class="btn-text" title="Adicionar à watchlist">➕ Adicionar</button>
         </h2>
         <div id="finWatchlistContent" class="fin-card-body">
           <div class="skeleton" style="height:100px"></div>
@@ -126,7 +126,7 @@
       <section class="fin-card" id="finGoalsCard">
         <h2>
           🎯 Metas Financeiras
-          <button class="btn-text" onclick="openAddGoalModal()" title="Nova meta">➕ Nova</button>
+          <button id="btnAddGoal" class="btn-text" title="Nova meta">➕ Nova</button>
         </h2>
         <div id="finGoalsContent" class="fin-card-body">
           <div class="skeleton" style="height:100px"></div>
@@ -145,17 +145,17 @@
       <section class="fin-card fin-wide" id="finAICard">
         <h2>🧠 Análise IA <span class="fin-ai-hint">💡 Dica: peça para a IA cadastrar ativos, transações, metas — ex: "comprei 100 PETR4 a R$35"</span></h2>
         <div class="fin-ai-toolbar">
-          <button class="fin-ai-btn active" data-type="general" onclick="requestAIAnalysis('general')">📋 Geral</button>
-          <button class="fin-ai-btn" data-type="risk" onclick="requestAIAnalysis('risk')">⚠️ Risco</button>
-          <button class="fin-ai-btn" data-type="allocation" onclick="requestAIAnalysis('allocation')">🍩 Alocação</button>
-          <button class="fin-ai-btn" data-type="performance" onclick="requestAIAnalysis('performance')">📈 Performance</button>
+          <button class="fin-ai-btn active" data-type="general">📋 Geral</button>
+          <button class="fin-ai-btn" data-type="risk">⚠️ Risco</button>
+          <button class="fin-ai-btn" data-type="allocation">🍩 Alocação</button>
+          <button class="fin-ai-btn" data-type="performance">📈 Performance</button>
         </div>
         <div id="finAIContent" class="fin-card-body fin-ai-content">
           <p class="fin-ai-placeholder">Clique em um tipo de análise acima para a IA avaliar seu portfólio.</p>
         </div>
         <div class="fin-ai-chat">
           <input id="finAIChatInput" type="text" placeholder="Pergunte sobre suas finanças..." autocomplete="off" />
-          <button id="finAIChatSend" onclick="sendFinAIChat()">Enviar</button>
+          <button id="finAIChatSend">Enviar</button>
         </div>
         <div id="finAIChatHistory" class="fin-ai-chat-history"></div>
       </section>
@@ -163,11 +163,11 @@
     </main>
 
     <!-- ── Modals ─────────────────────────────────────── -->
-    <div id="finModalOverlay" class="fin-modal-overlay" style="display:none" onclick="closeFinModal()">
-      <div class="fin-modal" onclick="event.stopPropagation()">
+    <div id="finModalOverlay" class="fin-modal-overlay" style="display:none">
+      <div class="fin-modal">
         <div class="fin-modal-header">
           <h3 id="finModalTitle">Modal</h3>
-          <button class="btn-icon" onclick="closeFinModal()">✕</button>
+          <button id="finModalClose" class="btn-icon">✕</button>
         </div>
         <div id="finModalBody" class="fin-modal-body"></div>
       </div>

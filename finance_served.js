@@ -1359,29 +1359,4 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.key === "Enter") sendFinAIChat();
     });
   }
-
-  // ── Button bindings (CSP-safe, no inline onclick) ────
-  const bind = (id, fn) => { const el = byId(id); if (el) el.addEventListener("click", fn); };
-
-  bind("btnImportTop", openImportModal);
-  bind("btnImportPortfolio", openImportModal);
-  bind("btnAddAsset", openAddAssetModal);
-  bind("btnAddTransaction", openAddTransactionModal);
-  bind("btnAddWatchlist", openAddWatchlistModal);
-  bind("btnAddGoal", openAddGoalModal);
-  bind("finAIChatSend", sendFinAIChat);
-  bind("finModalClose", closeFinModal);
-
-  // Modal overlay: close on background click
-  const overlay = byId("finModalOverlay");
-  if (overlay) {
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeFinModal();
-    });
-  }
-
-  // AI analysis type buttons
-  document.querySelectorAll(".fin-ai-btn[data-type]").forEach((btn) => {
-    btn.addEventListener("click", () => requestAIAnalysis(btn.dataset.type));
-  });
 });
