@@ -255,7 +255,7 @@ Para parar tudo:
 ./scripts/stop-all.ps1
 ```
 
-## 11) IA local para resumo/categoria/relevância (Ollama)
+## 11) IA local para resumo/categoria/relevância (llama.cpp)
 
 O projeto suporta enriquecimento local dos itens com:
 
@@ -288,13 +288,7 @@ AI_LOCAL_ADAPTIVE_MIN_PER_RUN=5
 AI_LOCAL_MAX_ENRICH_PER_RUN=16
 ```
 
-### Preparar modelo no Ollama
-
-Depois do stack subir, baixe o modelo no container `ws-ollama`:
-
-```bash
-docker exec -it ws-ollama ollama pull llama3.2:3b
-```
+### Preparar modelo
 
 Para `llama.cpp`, coloque o GGUF em `./models` antes de subir o
 `docker-compose.llamacpp.yml`.

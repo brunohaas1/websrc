@@ -52,7 +52,7 @@ Ajuste no `.env.advanced` (mínimo):
 
 - `SECRET_KEY`
 - `CORS_ALLOWED_ORIGINS`
-- `AI_LOCAL_MODEL=llama3.2:3b`
+- `AI_LOCAL_MODEL=llama-3.2-3b-instruct-q4_k_m`
 - (Opcional economia) `FEED_ENTRY_LIMIT=25`
 
 ## 4) Subir stack avançado
@@ -118,14 +118,13 @@ docker compose ps
 docker logs ws-llamacpp --tail 120
 ```
 
-## 5) Baixar modelo local no Ollama
+## 5) Preparar modelo local (`llama.cpp`)
+
+Coloque o GGUF em `./models` com o nome esperado pelo projeto:
 
 ```bash
-docker exec -it ws-ollama ollama pull llama3.2:3b
-docker exec -it ws-ollama ollama list
+ls -lh ./models/llama-3.2-3b-instruct-q4_k_m.gguf
 ```
-
-> Se estiver usando `llama.cpp`, este passo não é necessário.
 
 ## 6) Validar aplicação e pipeline de IA
 
@@ -160,7 +159,7 @@ docker logs ws-api --tail 120
 - Crie app custom com `docker-compose.advanced.yml`
 - Monte volume persistente para `./data:/app/data`
 - Deixe restart policy `unless-stopped`
-- Depois execute o pull do modelo no container `ws-ollama`
+- Garanta que o arquivo GGUF esteja em `./models`
 
 ## 8) Rollback rápido
 
@@ -193,7 +192,7 @@ docker compose -f docker-compose.advanced.yml down
 
 ## 10) Dica para RX580 (8GB)
 
-A latência só melhora se o container usar GPU de fato. No servidor, valide se Ollama está usando aceleração e monitore latência com:
+A latência só melhora se o container usar GPU de fato. No servidor, valide se `llama.cpp` está usando Vulkan e monitore latência com:
 
 ```bash
 curl http://127.0.0.1:8000/api/ai-observability
