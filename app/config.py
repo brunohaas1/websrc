@@ -24,8 +24,14 @@ class Config:
     API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "120/minute")
     API_RATE_LIMIT_RUN_NOW = os.getenv("API_RATE_LIMIT_RUN_NOW", "6/minute")
 
-    SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "30"))
-    DAILY_INTERVAL_HOURS = int(os.getenv("DAILY_INTERVAL_HOURS", "24"))
+    SCRAPE_INTERVAL_MINUTES = max(
+        1,
+        int(os.getenv("SCRAPE_INTERVAL_MINUTES", "30")),
+    )
+    DAILY_INTERVAL_HOURS = max(
+        1,
+        int(os.getenv("DAILY_INTERVAL_HOURS", "24")),
+    )
     FEED_ENTRY_LIMIT = int(os.getenv("FEED_ENTRY_LIMIT", "30"))
 
     WEATHER_CITY = os.getenv("WEATHER_CITY", "Lajeado")

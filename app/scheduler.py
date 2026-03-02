@@ -31,12 +31,20 @@ class ScraperScheduler:
             "interval",
             minutes=interval,
             id="frequent",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
         )
         self.scheduler.add_job(
             self.enqueue_daily,
             "interval",
             hours=daily_hours,
             id="daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
         )
 
         self.scheduler.start()
