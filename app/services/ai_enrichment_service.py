@@ -183,6 +183,14 @@ class LocalAIEnricher:
         ),
     }
 
+    SOURCE_POLICY = {
+        "github": {
+            "mode": "fallback",
+            "category": "open_source",
+            "reason": "fallback-source-policy",
+        },
+    }
+
     _source_model_attempts: dict[str, int] = defaultdict(int)
     _source_model_successes: dict[str, int] = defaultdict(int)
     _recent_model_latencies_ms: deque[float] = deque(maxlen=180)
@@ -377,6 +385,13 @@ class LocalAIEnricher:
         source = self._strip_html(str(item.get("source") or ""))
         combined = f"{title} {summary} {source}".lower()
 
+        preferred_category = None
+        source_lower = source.lower().strip()
+        for key, policy in self.SOURCE_POLICY.items():
+            if key in source_lower:
+                preferred_category = policy.get("category")
+                break
+
         best_category = "outros"
         best_score = 0
         for category, keywords in self.KEYWORDS_BY_CATEGORY.items():
@@ -384,6 +399,9 @@ class LocalAIEnricher:
             if matches > best_score:
                 best_score = matches
                 best_category = category
+
+        if preferred_category and best_score == 0:
+            best_category = str(preferred_category)
 
         relevance = min(100, 35 + best_score * 12)
         clean_summary = summary
@@ -408,6 +426,17 @@ class LocalAIEnricher:
             "reason": "fallback-heuristic",
             "heuristic_matches": best_score,
         }
+
+    def _source_policy_for(self, source: str) -> dict[str, Any] | None:
+        source_lower = str(source or "").strip().lower()
+        if not source_lower:
+            return None
+
+        for key, policy in self.SOURCE_POLICY.items():
+            if key in source_lower:
+                return policy
+
+        return None
 
     def _is_circuit_open(self) -> bool:
         return time.time() < self.__class__._circuit_open_until
@@ -481,6 +510,10 @@ class LocalAIEnricher:
         title = self._strip_html(str(item.get("title") or "")).lower()
         summary = self._strip_html(str(item.get("summary") or "")).lower()
         source = self._strip_html(str(item.get("source") or "")).lower()
+
+        if len(title) < 8 and len(summary) < 20:
+            return False
+
         text = f"{title} {summary} {source}"
 
         matches = sum(
@@ -526,8 +559,20 @@ class LocalAIEnricher:
     ) -> tuple[dict[str, Any] | None, str, float | None]:
         source = str(item.get("source") or "desconhecida").strip().lower()
 
+        source_policy = self._source_policy_for(source)
+        if source_policy and source_policy.get("mode") == "fallback":
+            reason = str(
+                source_policy.get("reason") or "fallback-source-policy",
+            )
+            return None, reason, None
+
         if self._is_circuit_open():
             return None, "fallback-circuit-open", None
+
+        source_attempts = self.__class__._source_model_attempts.get(source, 0)
+        source_success_rate = self._source_success_rate(source)
+        if source_attempts >= 12 and source_success_rate < 0.25:
+            return None, "fallback-low-success-rate", None
 
         self._register_model_attempt(source)
 
