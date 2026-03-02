@@ -153,12 +153,6 @@ Para evoluir este projeto em nível portfólio/profissional, use:
 docker compose -f docker-compose.advanced.yml up -d --build
 ```
 
-Se o servidor for AMD (ex.: RX580) e você quiser acelerar o Ollama por GPU:
-
-```bash
-docker compose -f docker-compose.advanced.yml -f docker-compose.amd.yml up -d --build
-```
-
 Se quiser usar `llama.cpp` (servidor próprio) no lugar de Ollama:
 
 ```bash

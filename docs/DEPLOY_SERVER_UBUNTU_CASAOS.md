@@ -118,29 +118,6 @@ docker compose ps
 docker logs ws-llamacpp --tail 120
 ```
 
-### Se usar AMD (RX580) para acelerar Ollama
-
-Use o override AMD para mapear dispositivos da GPU no container:
-
-```bash
-docker compose \
-	-f docker-compose.advanced.yml \
-	-f docker-compose.amd.yml \
-	up -d --build
-```
-
-Antes de subir, confirme que o host enxerga os devices:
-
-```bash
-ls -l /dev/kfd /dev/dri
-```
-
-Verificar status:
-
-```bash
-docker compose -f docker-compose.advanced.yml ps
-```
-
 ## 5) Baixar modelo local no Ollama
 
 ```bash
@@ -177,38 +154,6 @@ Logs úteis:
 docker logs ws-worker --tail 120
 docker logs ws-api --tail 120
 ```
-
-### Validar uso de GPU no Ollama (AMD)
-
-1. Confirme que o container recebeu os devices:
-
-```bash
-docker exec ws-ollama sh -lc 'ls -l /dev/kfd /dev/dri'
-```
-
-2. Rode uma inferência curta e veja se o modelo entra em execução:
-
-```bash
-docker exec ws-ollama ollama run llama3.2:3b "responda apenas ok"
-docker exec ws-ollama ollama ps
-```
-
-3. Se ainda parecer CPU-only, reinicie só o Ollama e confira logs:
-
-```bash
-docker compose -f docker-compose.advanced.yml -f docker-compose.amd.yml restart ollama
-docker logs ws-ollama --tail 200
-```
-
-Observação para RX580: em alguns hosts AMD Polaris, `HSA_OVERRIDE_GFX_VERSION=8.0.3`
-e `ROC_ENABLE_PRE_VEGA=1` podem ser necessários (já incluídos em
-`docker-compose.amd.yml`).
-
-O override também força `OLLAMA_LLM_LIBRARY=rocm` para tentar priorizar backend
-AMD/ROCm no Ollama.
-
-Se aparecer erro `Unable to find group render`, mantenha o override sem `group_add`
-(configuração atual do projeto) e suba novamente.
 
 ## 7) CasaOS (se preferir interface)
 
