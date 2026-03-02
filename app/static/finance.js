@@ -610,6 +610,20 @@ function openFinModal(title, bodyHtml) {
   byId("finModalTitle").textContent = title;
   byId("finModalBody").innerHTML = bodyHtml;
   byId("finModalOverlay").style.display = "flex";
+
+  // Bind form submit via data-form-action (CSP-safe)
+  const formActionMap = { submitAddAsset, submitAddTransaction, submitAddWatchlist, submitAddGoal, submitEditGoal };
+  const form = byId("finModalBody").querySelector("form[data-form-action]");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const fn = formActionMap[form.dataset.formAction];
+      if (fn) {
+        const arg = form.dataset.formArg ? Number(form.dataset.formArg) : undefined;
+        fn(e, arg);
+      }
+    });
+  }
 }
 
 function closeFinModal() {
@@ -750,7 +764,7 @@ async function submitImport() {
 
 function openAddAssetModal() {
   openFinModal("Adicionar Ativo", `
-    <form onsubmit="submitAddAsset(event)">
+    <form data-form-action="submitAddAsset">
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Símbolo</label>
@@ -830,7 +844,7 @@ function openAddTransactionModal() {
     : "";
 
   openFinModal("Nova Transação", `
-    <form onsubmit="submitAddTransaction(event)">
+    <form data-form-action="submitAddTransaction">
       <div class="fin-form-group">
         <label>Ativo</label>
         <select id="fmTxAsset">
@@ -1000,7 +1014,7 @@ async function deleteTransaction(txId) {
 
 function openAddWatchlistModal() {
   openFinModal("Adicionar à Watchlist", `
-    <form onsubmit="submitAddWatchlist(event)">
+    <form data-form-action="submitAddWatchlist">
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Símbolo</label>
@@ -1079,7 +1093,7 @@ async function deleteWatchlistItem(wlId) {
 
 function openAddGoalModal() {
   openFinModal("Nova Meta Financeira", `
-    <form onsubmit="submitAddGoal(event)">
+    <form data-form-action="submitAddGoal">
       <div class="fin-form-group">
         <label>Nome da meta</label>
         <input id="fmGoalName" placeholder="Reserva de emergência" required />
@@ -1154,7 +1168,7 @@ function openEditGoalModal(goalId) {
   if (!goal) return;
 
   openFinModal("Editar Meta", `
-    <form onsubmit="submitEditGoal(event, ${goalId})">
+    <form data-form-action="submitEditGoal" data-form-arg="${goalId}">
       <div class="fin-form-group">
         <label>Nome da meta</label>
         <input id="fmGoalName" value="${escapeHtml(goal.name)}" required />
