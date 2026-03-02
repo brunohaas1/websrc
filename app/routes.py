@@ -120,7 +120,8 @@ def register_routes(app: Flask) -> None:
         if not app.config.get("AI_LOCAL_ENABLED"):
             return jsonify({"status": "disabled", "detail": "AI_LOCAL_ENABLED=0"})
         try:
-            import urllib.request, json as _json
+            import urllib.request
+            import json as _json
             url = app.config["AI_LOCAL_URL"].rstrip("/") + "/health"
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=3) as resp:
@@ -1513,7 +1514,8 @@ def register_routes(app: Flask) -> None:
             try:
                 headers = {"Content-Type": "application/json", "X-Webhook-Event": event_type}
                 if hook.get("secret"):
-                    import hashlib, hmac
+                    import hashlib
+                    import hmac
                     body = _json.dumps(data)
                     sig = hmac.new(hook["secret"].encode(), body.encode(), hashlib.sha256).hexdigest()
                     headers["X-Webhook-Signature"] = sig

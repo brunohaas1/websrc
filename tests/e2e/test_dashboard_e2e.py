@@ -28,7 +28,8 @@ def _has_playwright() -> bool:
 
 def _run_server(port: int) -> None:
     """Start the Flask dev-server for E2E tests."""
-    import os, tempfile
+    import os
+    import tempfile
     db_path = os.path.join(tempfile.mkdtemp(), "e2e_test.db")
     os.environ["DATABASE_URL"] = ""
     os.environ["DATABASE_PATH"] = db_path

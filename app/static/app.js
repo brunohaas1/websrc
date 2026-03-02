@@ -359,7 +359,7 @@ function scheduleDashboardPolling() {
   }, interval);
 }
 
-function fmtDate(value) {
+function fmtDate(value) { // eslint-disable-line no-unused-vars
   if (!value) return "sem data";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -952,7 +952,7 @@ function renderCustomFeeds(feeds) {
 
 /* ── RSS Reader Modal ─────────────────────────────────── */
 
-async function loadFeedArticles(feedId, feedName) {
+async function loadFeedArticles(feedId, feedName) { // eslint-disable-line no-unused-vars -- called via onclick
   let modal = document.getElementById("rssModal");
   if (modal) modal.remove();
 
@@ -992,7 +992,7 @@ async function loadFeedArticles(feedId, feedName) {
         <div class="rss-article-meta">${escapeHtml(a.published)}${a.summary ? " — " + escapeHtml(a.summary) : ""}</div>
       </a>
     `).join("");
-  } catch (err) {
+  } catch { // network error
     const container = document.getElementById("rssArticleList");
     if (container) container.innerHTML = `<small style="color:var(--rose)">Erro de rede</small>`;
   }
@@ -1256,7 +1256,7 @@ const COMPARISON_COLORS = [
 
 let _comparisonChartInstance = null;
 
-async function openPriceComparison() {
+async function openPriceComparison() { // eslint-disable-line no-unused-vars -- called via onclick
   const watches = state._priceWatchList || [];
   if (watches.length < 2) return;
 
@@ -1354,7 +1354,7 @@ async function drawComparisonChart(watches, selectedIds) {
 
   _comparisonChartInstance = new Chart(ctx, {
     type: "line",
-    data: { labels: longestLabels, datasets: datasets.map(d => { const { _labels, ...rest } = d; return rest; }) },
+    data: { labels: longestLabels, datasets: datasets.map(d => { const { _labels: _, ...rest } = d; return rest; }) },  // eslint-disable-line no-unused-vars
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -1455,7 +1455,7 @@ async function showNoteModal(itemId, itemTitle) {
   });
 }
 
-async function submitNote(event, itemId) {
+async function submitNote(event, itemId) { // eslint-disable-line no-unused-vars -- called via onclick
   event.preventDefault();
   const form = event.target;
   const content = form.content.value.trim();
@@ -2655,7 +2655,7 @@ function scheduleLLMPolling() {
 let _sseSource = null;
 /* ── Smart Alerts (AI) ─────────────────────────────────── */
 
-async function runSmartAnalysis() {
+async function runSmartAnalysis() { // eslint-disable-line no-unused-vars -- called via onclick
   const banner = byId("smartAlertsBanner");
   if (banner) banner.innerHTML = `<small style="color:var(--text-dim)">🧠 Analisando dados...</small>`;
 
@@ -2668,7 +2668,7 @@ async function runSmartAnalysis() {
     }
     renderSmartAlerts(data.alerts || []);
     showToast(`🧠 ${data.count || 0} alertas inteligentes gerados`, "info");
-  } catch (err) {
+  } catch { // network error
     if (banner) banner.innerHTML = `<small style="color:var(--rose)">Erro de rede</small>`;
   }
 }
@@ -2743,7 +2743,7 @@ function connectSSE() {
 
 let _notifPanelOpen = false;
 
-function addLocalNotif(title, message, type = "info") {
+function addLocalNotif(title, message, _type = "info") {
   pollNotifCount();
 }
 
@@ -2880,7 +2880,7 @@ function scrollToCard(cardId) {
 let _pipChartInstance = null;
 let _pipDragState = null;
 
-function openPiP(title, labels, data) {
+function openPiP(title, labels, data) { // eslint-disable-line no-unused-vars -- called programmatically
   const container = byId("pipContainer");
   if (!container) return;
   container.style.display = "block";
@@ -2961,7 +2961,7 @@ async function createShareLink() {
     const url = `${window.location.origin}/shared/${data.token}`;
     await navigator.clipboard.writeText(url).catch(() => {});
     showToast(`Link copiado! Expira em ${data.expires_at?.split("T")[0] || "3 dias"}`, "success", 6000);
-  } catch (err) {
+  } catch { // network error
     showToast("Erro ao compartilhar", "error");
   }
 }
@@ -3213,7 +3213,7 @@ async function deleteWebhook(whId) {
 
 /* ── Sentiment badges in items (#13) ──────────────────── */
 
-function sentimentBadge(item) {
+function sentimentBadge(item) { // eslint-disable-line no-unused-vars -- called from render templates
   const extra = typeof item.extra === "object" ? item.extra : {};
   const sentiment = extra.sentiment || (item.extra_json ? (() => { try { return JSON.parse(item.extra_json).sentiment; } catch { return null; } })() : null);
   if (!sentiment) return "";
@@ -3224,7 +3224,7 @@ function sentimentBadge(item) {
 
 /* ── Price Forecast in charts (#14) ───────────────────── */
 
-async function addForecastToChart(watchId, chartInstance) {
+async function addForecastToChart(watchId, chartInstance) { // eslint-disable-line no-unused-vars -- called from render
   try {
     const resp = await fetch(`/api/price-forecast/${watchId}`);
     if (!resp.ok) return;
@@ -3254,7 +3254,7 @@ async function addForecastToChart(watchId, chartInstance) {
 
 /* ── Price Watch Tags (#15) ───────────────────────────── */
 
-function renderPriceWatchTags(watch) {
+function renderPriceWatchTags(watch) { // eslint-disable-line no-unused-vars -- called from render templates
   const tags = watch.tags || [];
   let tagsArray = tags;
   if (typeof tags === "string") {
@@ -3266,7 +3266,6 @@ function renderPriceWatchTags(watch) {
 
 /* ── Settings Panel ──────────────────────────────────── */
 
-let _settingsOpen = false;
 let _settingsData = {};
 let _settingsSchema = {};
 
@@ -3441,7 +3440,6 @@ async function loadAndApplyVisibility() {
 }
 
 async function openSettingsPanel() {
-  _settingsOpen = true;
   try {
     const [settingsResp, schemaResp] = await Promise.all([
       fetch("/api/settings"),
@@ -3457,7 +3455,6 @@ async function openSettingsPanel() {
 }
 
 function closeSettingsPanel() {
-  _settingsOpen = false;
   const modal = byId("settingsModal");
   if (modal) modal.remove();
 }
