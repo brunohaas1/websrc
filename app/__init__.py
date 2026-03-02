@@ -1,10 +1,11 @@
+import atexit
 import logging
 import uuid
 
 from flask import Flask, g, request
 
 from .config import Config
-from .db import init_db
+from .db import close_pool, init_db
 from .metrics import mark_start, observe_request
 from .routes import register_routes
 from .scheduler import ScraperScheduler
@@ -34,9 +35,12 @@ def create_app(start_scheduler: bool = True) -> Flask:
             started_at = mark_start()
 
         response.headers["X-Request-Id"] = g.get("request_id", "")
+        route = (
+            request.url_rule.rule if request.url_rule else request.path
+        )
         observe_request(
             method=request.method,
-            route=request.path,
+            route=route,
             status_code=response.status_code,
             started_at=started_at,
         )
@@ -53,4 +57,7 @@ def create_app(start_scheduler: bool = True) -> Flask:
         scheduler = ScraperScheduler(app)
         scheduler.start()
         setattr(app, "scheduler", scheduler)
+        atexit.register(scheduler.shutdown)
+
+    atexit.register(close_pool)
     return app

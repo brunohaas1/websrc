@@ -4,10 +4,18 @@ import json
 import time
 from typing import Any
 
+_MAX_MEMORY_ENTRIES = 512
+
 
 class MemoryTTLCache:
-    def __init__(self):
+    def __init__(self) -> None:
         self._store: dict[str, tuple[float, str]] = {}
+
+    def _evict_expired(self) -> None:
+        now = time.time()
+        expired = [k for k, (exp, _) in self._store.items() if exp < now]
+        for k in expired:
+            self._store.pop(k, None)
 
     def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
@@ -22,6 +30,8 @@ class MemoryTTLCache:
         return json.loads(payload)
 
     def set(self, key: str, value: Any, ttl: int) -> None:
+        if len(self._store) >= _MAX_MEMORY_ENTRIES:
+            self._evict_expired()
         self._store[key] = (
             time.time() + ttl,
             json.dumps(value, ensure_ascii=False),
@@ -64,12 +74,22 @@ class RedisJSONCache:
             pass
 
 
-def get_cache(config):
+_shared_redis = None
+
+
+def get_redis_client(config: dict[str, Any]) -> Any:
+    """Return a shared Redis client, creating it once."""
+    global _shared_redis
+    if _shared_redis is None:
+        from redis import Redis
+        _shared_redis = Redis.from_url(config["REDIS_URL"])
+    return _shared_redis
+
+
+def get_cache(config: dict[str, Any]) -> MemoryTTLCache | RedisJSONCache:
     if config.get("QUEUE_ENABLED"):
         try:
-            from redis import Redis
-
-            redis_client = Redis.from_url(config["REDIS_URL"])
+            redis_client = get_redis_client(config)
             return RedisJSONCache(redis_client)
         except Exception:
             return MemoryTTLCache()

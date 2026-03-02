@@ -10,8 +10,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
   </head>
   <body>
+    <noscript>
+      <p style="padding:2rem;text-align:center;color:#fff;background:#1a1a2e">
+        Este dashboard requer JavaScript para funcionar.
+      </p>
+    </noscript>
 
     <header class="topbar">
       <div class="brand">
@@ -41,6 +47,14 @@
           <option value="ai_score_desc">Maior relevância IA</option>
         </select>
         <button id="refreshBtn">Atualizar agora</button>
+        <select id="savedFilterSelect" aria-label="Filtros salvos" title="Filtros salvos">
+          <option value="">Filtros salvos</option>
+        </select>
+        <button id="saveFilterBtn" class="btn-small" title="Salvar filtro atual">💾</button>
+        <select id="langSelect" aria-label="Idioma" title="Idioma">
+          <option value="pt-BR">🇧🇷 PT</option>
+          <option value="en">🇺🇸 EN</option>
+        </select>
         <button id="themeToggle" class="theme-toggle" title="Alternar tema (T)">☀️</button>
       </div>
     </header>
@@ -72,7 +86,7 @@
         <h2>💸 Monitor de preços</h2>
         <form id="priceForm" class="inline-form">
           <input name="name" placeholder="Nome do produto" required />
-          <input name="product_url" placeholder="URL do produto" required />
+          <input name="product_url" type="url" placeholder="URL do produto" required />
           <input name="css_selector" placeholder="Seletor CSS (ex: .price)" />
           <input name="target_price" type="number" step="0.01" placeholder="Preço alvo" required />
           <button type="submit">Adicionar</button>
@@ -130,6 +144,51 @@
       <section class="card" draggable="true" data-card-id="releases">
         <h2>🚀 Releases monitoradas</h2>
         <div id="releasesList" class="list"><div class="skeleton" style="height:48px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="currency">
+        <h2>💱 <span data-i18n="currency_title">Câmbio</span></h2>
+        <div id="currencyContent"><div class="skeleton" style="height:80px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="service-monitor">
+        <h2>🖥️ <span data-i18n="monitors_title">Monitor de Serviços</span></h2>
+        <form id="monitorForm" class="inline-form">
+          <input name="name" placeholder="Nome do serviço" required />
+          <input name="url" type="url" placeholder="URL de health check" required />
+          <button type="submit">Adicionar</button>
+        </form>
+        <div id="monitorList" class="list"><div class="skeleton" style="height:48px"></div></div>
+      </section>
+
+      <section class="card wide" draggable="true" data-card-id="daily-digest">
+        <h2>📝 <span data-i18n="digest_title">Resumo Diário IA</span></h2>
+        <div id="digestContent"><div class="skeleton" style="height:100px"></div></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="trending">
+        <h2>🔥 <span data-i18n="trending_title">Trending</span></h2>
+        <div id="trendingContent"><div class="skeleton" style="height:80px"></div></div>
+      </section>
+
+      <section class="card wide" draggable="true" data-card-id="custom-feeds">
+        <h2>📡 <span data-i18n="feeds_title">RSS Feeds Customizados</span></h2>
+        <form id="feedForm" class="inline-form">
+          <input name="name" placeholder="Nome do feed" required />
+          <input name="feed_url" type="url" placeholder="URL do RSS feed" required />
+          <button type="submit">Adicionar</button>
+        </form>
+        <div id="feedList" class="list"></div>
+      </section>
+
+      <section class="card wide" draggable="true" data-card-id="favorites">
+        <h2>⭐ <span data-i18n="favorites_title">Favoritos</span></h2>
+        <div id="favoritesList" class="list"><small>Nenhum favorito ainda. Clique ⭐ nos itens.</small></div>
+      </section>
+
+      <section class="card" draggable="true" data-card-id="release-calendar">
+        <h2>📅 <span data-i18n="calendar_title">Calendário de Releases</span></h2>
+        <div id="releaseCalendar" class="release-calendar"><div class="skeleton" style="height:120px"></div></div>
       </section>
 
     </main>

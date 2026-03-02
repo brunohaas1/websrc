@@ -7,6 +7,15 @@
     Referrer-Policy strict-origin-when-cross-origin
     Permissions-Policy interest-cohort=()
     X-XSS-Protection "1; mode=block"
+    Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  }
+
+  handle_path /static/* {
+    root * /srv/static
+    file_server {
+      precompressed gzip
+    }
+    header Cache-Control "public, max-age=86400, immutable"
   }
 
   @health path /health

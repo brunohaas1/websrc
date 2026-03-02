@@ -14,6 +14,17 @@ except Exception:  # pragma: no cover - optional at import time
 _pg_pool = None
 
 
+def close_pool() -> None:
+    """Gracefully close the PostgreSQL connection pool."""
+    global _pg_pool
+    if _pg_pool is not None:
+        try:
+            _pg_pool.close()
+        except Exception:
+            pass
+        _pg_pool = None
+
+
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,10 +71,101 @@ CREATE TABLE IF NOT EXISTS alerts (
     read INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS custom_feeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    feed_url TEXT NOT NULL UNIQUE,
+    item_type TEXT DEFAULT 'news',
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    tags TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS service_monitors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    check_method TEXT DEFAULT 'GET',
+    expected_status INTEGER DEFAULT 200,
+    timeout_seconds INTEGER DEFAULT 5,
+    active INTEGER DEFAULT 1,
+    last_status TEXT DEFAULT 'unknown',
+    last_latency_ms REAL,
+    last_checked_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS service_monitor_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    monitor_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    latency_ms REAL,
+    checked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (monitor_id) REFERENCES service_monitors(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS currency_rates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pair TEXT NOT NULL,
+    rate REAL NOT NULL,
+    variation REAL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS daily_digests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest_date TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL,
+    highlights_json TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint TEXT NOT NULL UNIQUE,
+    keys_json TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS saved_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    filter_json TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_type_created
 ON items(item_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_read_created
 ON alerts(read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_price_history_watch_id
+ON price_history(watch_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_items_dedup_key
+ON items(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_favorites_item_id
+ON favorites(item_id);
+CREATE INDEX IF NOT EXISTS idx_notes_item_id
+ON notes(item_id);
+CREATE INDEX IF NOT EXISTS idx_service_monitor_history_monitor_id
+ON service_monitor_history(monitor_id, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
+ON currency_rates(pair, updated_at DESC);
 """
 
 POSTGRES_SCHEMA = """
@@ -111,10 +213,98 @@ CREATE TABLE IF NOT EXISTS alerts (
     read BOOLEAN DEFAULT FALSE
 );
 
+CREATE TABLE IF NOT EXISTS custom_feeds (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    feed_url TEXT NOT NULL UNIQUE,
+    item_type TEXT DEFAULT 'news',
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    id BIGSERIAL PRIMARY KEY,
+    item_id BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    tags TEXT DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notes (
+    id BIGSERIAL PRIMARY KEY,
+    item_id BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS service_monitors (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    check_method TEXT DEFAULT 'GET',
+    expected_status INTEGER DEFAULT 200,
+    timeout_seconds INTEGER DEFAULT 5,
+    active BOOLEAN DEFAULT TRUE,
+    last_status TEXT DEFAULT 'unknown',
+    last_latency_ms DOUBLE PRECISION,
+    last_checked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS service_monitor_history (
+    id BIGSERIAL PRIMARY KEY,
+    monitor_id BIGINT NOT NULL REFERENCES service_monitors(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    latency_ms DOUBLE PRECISION,
+    checked_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS currency_rates (
+    id BIGSERIAL PRIMARY KEY,
+    pair TEXT NOT NULL,
+    rate DOUBLE PRECISION NOT NULL,
+    variation DOUBLE PRECISION,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS daily_digests (
+    id BIGSERIAL PRIMARY KEY,
+    digest_date TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL,
+    highlights_json TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    endpoint TEXT NOT NULL UNIQUE,
+    keys_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS saved_filters (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    filter_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_type_created
 ON items(item_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_read_created
 ON alerts(read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_price_history_watch_id
+ON price_history(watch_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_items_dedup_key
+ON items(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_favorites_item_id
+ON favorites(item_id);
+CREATE INDEX IF NOT EXISTS idx_notes_item_id
+ON notes(item_id);
+CREATE INDEX IF NOT EXISTS idx_service_monitor_history_monitor_id
+ON service_monitor_history(monitor_id, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
+ON currency_rates(pair, updated_at DESC);
 """
 
 
@@ -161,6 +351,7 @@ def init_db(database_target: str) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(database_target) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SQLITE_SCHEMA)
         conn.commit()
 

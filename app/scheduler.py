@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from rq import Retry
 
 from .jobs import run_daily_scrape, run_frequent_scrape
 from .queue import get_queue
@@ -69,6 +70,8 @@ class ScraperScheduler:
             self.app.config["DATABASE_TARGET"],
             self.app.config["LOG_LEVEL"],
             job_timeout="10m",
+            retry=Retry(max=3, interval=[30, 60, 120]),
+            failure_ttl=86400,
         )
 
     def enqueue_daily(self):
@@ -81,4 +84,6 @@ class ScraperScheduler:
             self.app.config["DATABASE_TARGET"],
             self.app.config["LOG_LEVEL"],
             job_timeout="20m",
+            retry=Retry(max=3, interval=[30, 60, 120]),
+            failure_ttl=86400,
         )

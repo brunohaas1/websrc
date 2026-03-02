@@ -6,6 +6,7 @@ from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
     Histogram,
+    Gauge,
     generate_latest,
 )
 
@@ -19,6 +20,44 @@ HTTP_REQUEST_DURATION_SECONDS = Histogram(
     "dashboard_http_request_duration_seconds",
     "HTTP request latency",
     ["method", "route"],
+)
+
+# ── Scraper metrics ──────────────────────────────────────
+SCRAPE_ITEMS_TOTAL = Counter(
+    "dashboard_scrape_items_total",
+    "Total items scraped",
+    ["source", "item_type"],
+)
+
+SCRAPE_ERRORS_TOTAL = Counter(
+    "dashboard_scrape_errors_total",
+    "Total scrape errors",
+    ["source"],
+)
+
+SCRAPE_DURATION_SECONDS = Histogram(
+    "dashboard_scrape_duration_seconds",
+    "Scrape job duration",
+    ["source"],
+)
+
+# ── AI enrichment metrics ────────────────────────────────
+AI_ENRICH_TOTAL = Counter(
+    "dashboard_ai_enrich_total",
+    "Total AI enrichment attempts",
+    ["stage"],  # model | fallback
+)
+
+AI_ENRICH_DURATION_SECONDS = Histogram(
+    "dashboard_ai_enrich_duration_seconds",
+    "AI enrichment latency",
+    ["stage"],
+)
+
+AI_CIRCUIT_STATE = Gauge(
+    "dashboard_ai_circuit_state",
+    "AI circuit breaker state (0=closed, 1=open, 2=half-open)",
+    ["source"],
 )
 
 

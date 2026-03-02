@@ -6,6 +6,10 @@ const state = {
   aiCategory: "",
   sortMode: "recency",
   theme: localStorage.getItem("dashboard-theme") || "dark",
+  locale: localStorage.getItem("dashboard-locale") || "pt-BR",
+  favoriteIds: new Set(),
+  savedFilters: [],
+  offlineQueue: JSON.parse(localStorage.getItem("offline-queue") || "[]"),
 };
 
 const CARD_ORDER_KEY = "dashboard-card-order-v2";
@@ -197,6 +201,128 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+/* ── i18n Internationalization ────────────────────────── */
+
+const I18N = {
+  "pt-BR": {
+    currency_title: "Câmbio",
+    monitors_title: "Monitor de Serviços",
+    digest_title: "Resumo Diário IA",
+    trending_title: "Trending",
+    feeds_title: "RSS Feeds Customizados",
+    favorites_title: "Favoritos",
+    calendar_title: "Calendário de Releases",
+    no_items: "Nenhum item no momento.",
+    no_monitors: "Nenhum serviço monitorado.",
+    no_digest: "Nenhum resumo disponível ainda.",
+    no_trending: "Sem tópicos trending no momento.",
+    no_favorites: "Nenhum favorito ainda. Clique ⭐ nos itens.",
+    no_feeds: "Nenhum feed customizado.",
+    search_placeholder: "Buscar notícias, vagas, vídeos...",
+    refresh: "Atualizar agora",
+    add: "Adicionar",
+    delete: "Excluir",
+    save_filter: "Salvar filtro",
+    saved_filters: "Filtros salvos",
+    notes: "Notas",
+    add_note: "Adicionar nota...",
+    growth: "crescimento",
+    mentions: "menções",
+    up: "Online",
+    down: "Offline",
+    timeout: "Timeout",
+    unknown: "Desconhecido",
+    export_report: "Exportar relatório",
+    api_docs: "Documentação API",
+    price_chart: "Gráfico",
+    variation: "Variação",
+  },
+  en: {
+    currency_title: "Exchange Rates",
+    monitors_title: "Service Monitor",
+    digest_title: "Daily AI Digest",
+    trending_title: "Trending",
+    feeds_title: "Custom RSS Feeds",
+    favorites_title: "Favorites",
+    calendar_title: "Release Calendar",
+    no_items: "No items at this time.",
+    no_monitors: "No services monitored.",
+    no_digest: "No digest available yet.",
+    no_trending: "No trending topics right now.",
+    no_favorites: "No favorites yet. Click ⭐ on items.",
+    no_feeds: "No custom feeds.",
+    search_placeholder: "Search news, jobs, videos...",
+    refresh: "Refresh now",
+    add: "Add",
+    delete: "Delete",
+    save_filter: "Save filter",
+    saved_filters: "Saved filters",
+    notes: "Notes",
+    add_note: "Add note...",
+    growth: "growth",
+    mentions: "mentions",
+    up: "Online",
+    down: "Offline",
+    timeout: "Timeout",
+    unknown: "Unknown",
+    export_report: "Export report",
+    api_docs: "API Docs",
+    price_chart: "Chart",
+    variation: "Variation",
+  },
+};
+
+function t(key) {
+  const dict = I18N[state.locale] || I18N["pt-BR"];
+  return dict[key] || I18N["pt-BR"][key] || key;
+}
+
+function applyI18n() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.dataset.i18n;
+    el.textContent = t(key);
+  });
+  const search = byId("searchInput");
+  if (search) search.placeholder = t("search_placeholder");
+}
+
+function setLocale(locale) {
+  state.locale = locale;
+  localStorage.setItem("dashboard-locale", locale);
+  applyI18n();
+  render();
+}
+
+/* ── Offline Sync Queue ───────────────────────────────── */
+
+function queueOfflineAction(action) {
+  state.offlineQueue.push({ ...action, timestamp: Date.now() });
+  localStorage.setItem("offline-queue", JSON.stringify(state.offlineQueue));
+}
+
+async function flushOfflineQueue() {
+  if (!navigator.onLine || !state.offlineQueue.length) return;
+  const queue = [...state.offlineQueue];
+  state.offlineQueue = [];
+  localStorage.setItem("offline-queue", "[]");
+
+  for (const action of queue) {
+    try {
+      await fetch(action.url, {
+        method: action.method || "POST",
+        headers: { "Content-Type": "application/json" },
+        body: action.body ? JSON.stringify(action.body) : undefined,
+      });
+    } catch {
+      // Re-queue on failure
+      state.offlineQueue.push(action);
+    }
+  }
+  localStorage.setItem("offline-queue", JSON.stringify(state.offlineQueue));
+}
+
+window.addEventListener("online", flushOfflineQueue);
+
 async function fetchDashboard() {
   if (dashboardFetchInFlight) return;
 
@@ -296,9 +422,15 @@ function renderItems(target, items, options = {}) {
   target.innerHTML = filteredAndSorted
     .map(
       (item, idx) => `
-        <article class="item" style="animation:item-fade-in 0.3s ease both;animation-delay:${Math.min(idx * 30, 300)}ms">
+        <article class="item" style="animation:item-fade-in 0.3s ease both;animation-delay:${Math.min(idx * 30, 300)}ms" data-item-id="${item.id || ''}">
           ${showImage && item.image_url ? `<img class="item-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.title)}" loading="lazy" />` : ""}
           ${buildItemBadges(item)}
+          <div class="item-actions">
+            <button class="btn-fav" onclick="toggleFavorite(${item.id})" title="Favoritar">
+              ${state.favoriteIds.has(item.id) ? "★" : "☆"}
+            </button>
+            <button class="btn-note" onclick="showNoteModal(${item.id}, '${escapeHtml(item.title).replace(/'/g, "\\'")}')" title="${t("notes")}">📝</button>
+          </div>
           <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
           <div class="item-summary">${escapeHtml(toOneLineSummary(resolveItemSummary(item), summaryLength))}</div>
           <small>${escapeHtml(item.source ?? "fonte")} • ${timeAgo(item.published_at || item.created_at)}</small>
@@ -521,8 +653,8 @@ function renderAIObservability(metrics) {
     .map(
       (entry) => `
         <li>
-          <strong>${entry.source}</strong>
-          <span>${entry.model_success_rate}% acerto modelo</span>
+          <strong>${escapeHtml(entry.source)}</strong>
+          <span>${escapeHtml(entry.model_success_rate)}% acerto modelo</span>
         </li>
       `
     )
@@ -533,8 +665,8 @@ function renderAIObservability(metrics) {
     .map(
       (entry) => `
         <li>
-          <strong>${entry.hour}</strong>
-          <span>${entry.fallback_rate}% fallback (${entry.fallback}/${entry.total})</span>
+          <strong>${escapeHtml(entry.hour)}</strong>
+          <span>${escapeHtml(entry.fallback_rate)}% fallback (${escapeHtml(entry.fallback)}/${escapeHtml(entry.total)})</span>
         </li>
       `
     )
@@ -545,8 +677,8 @@ function renderAIObservability(metrics) {
     .map(
       (entry) => `
         <li>
-          <strong>${entry.reason}</strong>
-          <span>${entry.total} ocorrências</span>
+          <strong>${escapeHtml(entry.reason)}</strong>
+          <span>${escapeHtml(entry.total)} ocorrências</span>
         </li>
       `
     )
@@ -555,11 +687,11 @@ function renderAIObservability(metrics) {
   target.innerHTML = `
     <div class="ai-metric-row">
       <span>Enriquecidos (24h)</span>
-      <strong>${data.enriched_percent ?? 0}%</strong>
+      <strong>${escapeHtml(data.enriched_percent ?? 0)}%</strong>
     </div>
     <div class="ai-metric-row">
       <span>Latência média IA</span>
-      <strong>${Number.isFinite(data.avg_ai_latency_ms) ? `${data.avg_ai_latency_ms} ms` : "--"}</strong>
+      <strong>${Number.isFinite(data.avg_ai_latency_ms) ? `${escapeHtml(data.avg_ai_latency_ms)} ms` : "--"}</strong>
     </div>
     <div class="ai-observability-block">
       <h3>Acerto por fonte</h3>
@@ -641,13 +773,13 @@ function renderWeather(weatherItems) {
       (day) => `
         <article class="weather-day">
           <div class="weather-day-top">
-            <strong>${fmtDay(day.date)}</strong>
-            <small>${weatherCodeLabel(day.weather_code)}</small>
+            <strong>${escapeHtml(fmtDay(day.date))}</strong>
+            <small>${escapeHtml(weatherCodeLabel(day.weather_code))}</small>
           </div>
           <span class="weather-day-meta">
-            ${day.temp_min ?? "--"}°C / ${day.temp_max ?? "--"}°C •
-            Chuva ${day.precip_prob_max ?? "--"}% •
-            Vento ${day.wind_speed_max ?? "--"} km/h
+            ${escapeHtml(day.temp_min ?? "--")}°C / ${escapeHtml(day.temp_max ?? "--")}°C •
+            Chuva ${escapeHtml(day.precip_prob_max ?? "--")}% •
+            Vento ${escapeHtml(day.wind_speed_max ?? "--")} km/h
           </span>
         </article>
       `
@@ -657,15 +789,15 @@ function renderWeather(weatherItems) {
   target.innerHTML = `
     <div class="weather-now">
       <div class="weather-now-title">
-        <strong>${city}</strong>
-        <small>${weatherCodeLabel(current.weather_code)}</small>
+        <strong>${escapeHtml(city)}</strong>
+        <small>${escapeHtml(weatherCodeLabel(current.weather_code))}</small>
       </div>
-      <div class="weather-main-temp">${current.temperature_2m ?? "--"}°C</div>
+      <div class="weather-main-temp">${escapeHtml(current.temperature_2m ?? "--")}°C</div>
       <small>
-        Sensação ${current.apparent_temperature ?? "--"}°C •
-        Umidade ${current.relative_humidity_2m ?? "--"}% •
-        Chuva ${current.precipitation ?? "--"} mm •
-        Vento ${current.wind_speed_10m ?? "--"} km/h
+        Sensação ${escapeHtml(current.apparent_temperature ?? "--")}°C •
+        Umidade ${escapeHtml(current.relative_humidity_2m ?? "--")}% •
+        Chuva ${escapeHtml(current.precipitation ?? "--")} mm •
+        Vento ${escapeHtml(current.wind_speed_10m ?? "--")} km/h
       </small>
     </div>
     <div class="weather-forecast">${forecastHtml || "<small>Sem previsão disponível.</small>"}</div>
@@ -682,6 +814,570 @@ function animateValue(el, newText) {
     el.style.opacity = '1';
     el.style.transform = 'translateY(0)';
   }, 150);
+}
+
+/* ── Currency Widget ──────────────────────────────────── */
+
+function renderCurrency(rates) {
+  const target = byId("currencyContent");
+  if (!target) return;
+  const list = Array.isArray(rates) ? rates : [];
+  if (!list.length) {
+    target.innerHTML = `<small>${t("no_items")}</small>`;
+    return;
+  }
+  const PAIR_ICONS = { "USD-BRL": "🇺🇸", "EUR-BRL": "🇪🇺", "BTC-BRL": "₿" };
+  target.innerHTML = list
+    .map((r) => {
+      const icon = PAIR_ICONS[r.pair] || "💱";
+      const variation = Number(r.variation) || 0;
+      const varClass = variation >= 0 ? "currency-up" : "currency-down";
+      const varSign = variation >= 0 ? "+" : "";
+      const rateFormatted = r.pair === "BTC-BRL"
+        ? Number(r.rate).toLocaleString(state.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : Number(r.rate).toFixed(4);
+      return `
+        <div class="currency-row">
+          <span class="currency-icon">${icon}</span>
+          <strong>${escapeHtml(r.pair)}</strong>
+          <span class="currency-rate">R$ ${escapeHtml(rateFormatted)}</span>
+          <span class="${varClass}">${varSign}${variation.toFixed(2)}%</span>
+        </div>`;
+    })
+    .join("");
+}
+
+/* ── Service Monitor ──────────────────────────────────── */
+
+function renderServiceMonitors(monitors) {
+  const target = byId("monitorList");
+  if (!target) return;
+  const list = Array.isArray(monitors) ? monitors : [];
+  if (!list.length) {
+    target.innerHTML = `<small>${t("no_monitors")}</small>`;
+    return;
+  }
+  target.innerHTML = list
+    .map((m) => {
+      const status = String(m.last_status || "unknown").toLowerCase();
+      const statusClass = status === "up" ? "status-up" : status === "down" ? "status-down" : "status-unknown";
+      const statusLabel = status === "up" ? t("up") : status === "down" ? t("down") : status === "timeout" ? t("timeout") : t("unknown");
+      const latency = m.last_latency_ms ? `${Math.round(m.last_latency_ms)}ms` : "--";
+      return `
+        <article class="item monitor-item">
+          <span class="monitor-status ${statusClass}">●</span>
+          <strong>${escapeHtml(m.name)}</strong>
+          <span class="monitor-latency">${latency}</span>
+          <small>${statusLabel}</small>
+          <button class="btn-small btn-delete" onclick="deleteServiceMonitor(${m.id})" title="${t("delete")}">✕</button>
+        </article>`;
+    })
+    .join("");
+}
+
+/* ── Daily Digest ─────────────────────────────────────── */
+
+function renderDailyDigest(digest) {
+  const target = byId("digestContent");
+  if (!target) return;
+  if (!digest || !digest.content) {
+    target.innerHTML = `<small>${t("no_digest")}</small>`;
+    return;
+  }
+  // Simple markdown-like rendering
+  const html = escapeHtml(digest.content)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^## (.+)$/gm, "<h3>$1</h3>")
+    .replace(/\n/g, "<br>");
+  target.innerHTML = `
+    <div class="digest-body">${html}</div>
+    <small class="digest-date">${digest.digest_date || ""}</small>
+  `;
+}
+
+/* ── Trending Topics ──────────────────────────────────── */
+
+function renderTrending(topics) {
+  const target = byId("trendingContent");
+  if (!target) return;
+  const list = Array.isArray(topics) ? topics : [];
+  if (!list.length) {
+    target.innerHTML = `<small>${t("no_trending")}</small>`;
+    return;
+  }
+  target.innerHTML = list
+    .slice(0, 10)
+    .map((topic) => {
+      const growth = topic.growth_pct > 0 ? `+${topic.growth_pct}%` : `${topic.growth_pct}%`;
+      return `
+        <span class="trending-tag" title="${topic.current_count} ${t("mentions")}, ${growth} ${t("growth")}">
+          🔥 ${escapeHtml(topic.topic)} <small>(${topic.current_count})</small>
+        </span>`;
+    })
+    .join("");
+}
+
+/* ── Custom Feeds ─────────────────────────────────────── */
+
+function renderCustomFeeds(feeds) {
+  const target = byId("feedList");
+  if (!target) return;
+  const list = Array.isArray(feeds) ? feeds : [];
+  if (!list.length) {
+    target.innerHTML = `<small>${t("no_feeds")}</small>`;
+    return;
+  }
+  target.innerHTML = list
+    .map((f) => {
+      const active = f.active === true || f.active === 1 || f.active === "1";
+      return `
+        <article class="item feed-item">
+          <strong>${escapeHtml(f.name)}</strong>
+          <small>${escapeHtml(f.feed_url)}</small>
+          <span class="feed-type">${escapeHtml(f.item_type || "news")}</span>
+          <button class="btn-small" onclick="toggleFeed(${f.id}, ${!active})">${active ? "⏸" : "▶"}</button>
+          <button class="btn-small btn-delete" onclick="deleteFeed(${f.id})">✕</button>
+        </article>`;
+    })
+    .join("");
+}
+
+/* ── Favorites ────────────────────────────────────────── */
+
+function renderFavorites(snapshot) {
+  const target = byId("favoritesList");
+  if (!target) return;
+
+  // Update favorite IDs set from snapshot
+  const ids = snapshot.favorite_ids || [];
+  state.favoriteIds = new Set(ids);
+
+  if (!ids.length) {
+    target.innerHTML = `<small>${t("no_favorites")}</small>`;
+    return;
+  }
+
+  // Gather all items and filter favorites
+  const allItems = [
+    ...(snapshot.news || []),
+    ...(snapshot.promotions || []),
+    ...(snapshot.tech_ai || []),
+    ...(snapshot.videos || []),
+    ...(snapshot.jobs || []),
+    ...(snapshot.releases || []),
+  ];
+  const favItems = allItems.filter((item) => state.favoriteIds.has(item.id));
+
+  if (!favItems.length) {
+    target.innerHTML = `<small>${t("no_favorites")}</small>`;
+    return;
+  }
+
+  target.innerHTML = favItems
+    .slice(0, 30)
+    .map(
+      (item) => `
+        <article class="item">
+          <button class="btn-fav active" onclick="toggleFavorite(${item.id})">★</button>
+          <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
+          <small>${escapeHtml(item.source ?? "")} • ${timeAgo(item.published_at || item.created_at)}</small>
+        </article>`
+    )
+    .join("");
+}
+
+/* ── Release Calendar ─────────────────────────────────── */
+
+function renderReleaseCalendar(releases) {
+  const target = byId("releaseCalendar");
+  if (!target) return;
+  const list = Array.isArray(releases) ? releases : [];
+  if (!list.length) {
+    target.innerHTML = `<small>${t("no_items")}</small>`;
+    return;
+  }
+
+  // Group by date
+  const grouped = {};
+  for (const item of list) {
+    const dateStr = (item.published_at || item.created_at || "").slice(0, 10);
+    if (!grouped[dateStr]) grouped[dateStr] = [];
+    grouped[dateStr].push(item);
+  }
+
+  const dates = Object.keys(grouped).sort().slice(-14);
+  target.innerHTML = `
+    <div class="calendar-timeline">
+      ${dates
+        .map(
+          (date) => `
+          <div class="calendar-day">
+            <div class="calendar-date">${fmtDay(date)}</div>
+            ${grouped[date]
+              .slice(0, 5)
+              .map(
+                (item) => `
+                <div class="calendar-item" title="${escapeHtml(item.title)}">
+                  <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml((item.title || "").slice(0, 40))}</a>
+                </div>`
+              )
+              .join("")}
+          </div>`
+        )
+        .join("")}
+    </div>`;
+}
+
+/* ── Price Charts (Chart.js) ──────────────────────────── */
+
+const priceChartInstances = {};
+
+async function renderPriceCharts(prices) {
+  if (typeof Chart === "undefined") return;
+  const list = Array.isArray(prices) ? prices : [];
+
+  for (const watch of list.slice(0, 10)) {
+    const canvasId = `price-chart-${watch.id}`;
+    let canvas = document.getElementById(canvasId);
+
+    if (!canvas) {
+      const container = byId("pricesList");
+      if (!container) continue;
+      const wrapper = document.createElement("div");
+      wrapper.className = "price-chart-wrapper";
+      wrapper.innerHTML = `<canvas id="${canvasId}" height="60"></canvas>`;
+      container.appendChild(wrapper);
+      canvas = document.getElementById(canvasId);
+    }
+
+    try {
+      const resp = await fetch(`/api/price-history/${watch.id}`);
+      if (!resp.ok) continue;
+      const history = await resp.json();
+      if (!history.length) continue;
+
+      const labels = history.map((h) => h.captured_at?.slice(5, 16) || "").reverse();
+      const data = history.map((h) => h.price).reverse();
+
+      if (priceChartInstances[canvasId]) {
+        priceChartInstances[canvasId].destroy();
+      }
+
+      priceChartInstances[canvasId] = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: watch.name,
+              data,
+              borderColor: "rgba(99, 102, 241, 0.8)",
+              backgroundColor: "rgba(99, 102, 241, 0.1)",
+              fill: true,
+              tension: 0.3,
+              pointRadius: 1,
+              borderWidth: 2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { display: false },
+            y: { display: true, ticks: { font: { size: 9 } } },
+          },
+        },
+      });
+    } catch {
+      // Ignore chart errors
+    }
+  }
+}
+
+/* ── Favorite toggle ──────────────────────────────────── */
+
+async function toggleFavorite(itemId) {
+  if (!itemId) return;
+
+  const action = state.favoriteIds.has(itemId) ? "remove" : "add";
+
+  if (!navigator.onLine) {
+    queueOfflineAction({
+      url: action === "add" ? "/api/favorites" : `/api/favorites/${itemId}`,
+      method: action === "add" ? "POST" : "DELETE",
+      body: action === "add" ? { item_id: itemId } : undefined,
+    });
+    // Optimistic update
+    if (action === "add") state.favoriteIds.add(itemId);
+    else state.favoriteIds.delete(itemId);
+    render();
+    return;
+  }
+
+  try {
+    if (action === "add") {
+      await fetch("/api/favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: itemId }),
+      });
+      state.favoriteIds.add(itemId);
+      showToast("Adicionado aos favoritos!", "success");
+    } else {
+      await fetch(`/api/favorites/${itemId}`, { method: "DELETE" });
+      state.favoriteIds.delete(itemId);
+      showToast("Removido dos favoritos", "info");
+    }
+    render();
+  } catch {
+    showToast("Erro ao atualizar favorito", "error");
+  }
+}
+
+/* ── Notes Modal ──────────────────────────────────────── */
+
+async function showNoteModal(itemId, itemTitle) {
+  let modal = document.getElementById("noteModal");
+  if (modal) modal.remove();
+
+  let notes = [];
+  try {
+    const resp = await fetch(`/api/notes?item_id=${itemId}`);
+    if (resp.ok) notes = await resp.json();
+  } catch { /* ignore */ }
+
+  modal = document.createElement("div");
+  modal.id = "noteModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>📝 ${t("notes")} — ${escapeHtml(itemTitle)}</h3>
+        <button class="modal-close" onclick="document.getElementById('noteModal').remove()">✕</button>
+      </div>
+      <div class="notes-list" id="notesList">
+        ${notes.length ? notes.map((n) => `
+          <div class="note-item">
+            <p>${escapeHtml(n.content)}</p>
+            <small>${timeAgo(n.created_at)}</small>
+            <button class="btn-small btn-delete" onclick="deleteNote(${n.id})">✕</button>
+          </div>
+        `).join("") : `<small>${t("no_items")}</small>`}
+      </div>
+      <form class="note-form" onsubmit="submitNote(event, ${itemId})">
+        <textarea name="content" placeholder="${t("add_note")}" rows="2" required></textarea>
+        <button type="submit">${t("add")}</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.remove();
+  });
+}
+
+async function submitNote(event, itemId) {
+  event.preventDefault();
+  const form = event.target;
+  const content = form.content.value.trim();
+  if (!content) return;
+
+  try {
+    const resp = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, content }),
+    });
+    if (resp.ok) {
+      form.content.value = "";
+      showToast("Nota adicionada!", "success");
+      // Refresh note list
+      const notesResp = await fetch(`/api/notes?item_id=${itemId}`);
+      if (notesResp.ok) {
+        const notes = await notesResp.json();
+        const list = document.getElementById("notesList");
+        if (list) {
+          list.innerHTML = notes.map((n) => `
+            <div class="note-item">
+              <p>${escapeHtml(n.content)}</p>
+              <small>${timeAgo(n.created_at)}</small>
+              <button class="btn-small btn-delete" onclick="deleteNote(${n.id})">✕</button>
+            </div>
+          `).join("");
+        }
+      }
+    }
+  } catch {
+    showToast("Erro ao salvar nota", "error");
+  }
+}
+
+async function deleteNote(noteId) {
+  try {
+    await fetch(`/api/notes/${noteId}`, { method: "DELETE" });
+    showToast("Nota removida", "info");
+    // Find and remove the note element
+    const modal = document.getElementById("noteModal");
+    if (modal) {
+      const noteEl = modal.querySelector(`.note-item button[onclick="deleteNote(${noteId})"]`);
+      if (noteEl) noteEl.closest(".note-item").remove();
+    }
+  } catch {
+    showToast("Erro ao remover nota", "error");
+  }
+}
+
+/* ── Custom Feed management ───────────────────────────── */
+
+async function deleteFeed(feedId) {
+  try {
+    await fetch(`/api/custom-feeds/${feedId}`, { method: "DELETE" });
+    showToast("Feed removido", "info");
+    await fetchDashboard();
+  } catch {
+    showToast("Erro ao remover feed", "error");
+  }
+}
+
+async function toggleFeed(feedId, active) {
+  try {
+    await fetch(`/api/custom-feeds/${feedId}/toggle`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active }),
+    });
+    await fetchDashboard();
+  } catch {
+    showToast("Erro ao atualizar feed", "error");
+  }
+}
+
+/* ── Service Monitor management ───────────────────────── */
+
+async function deleteServiceMonitor(monitorId) {
+  try {
+    await fetch(`/api/service-monitors/${monitorId}`, { method: "DELETE" });
+    showToast("Monitor removido", "info");
+    await fetchDashboard();
+  } catch {
+    showToast("Erro ao remover monitor", "error");
+  }
+}
+
+/* ── Saved Filters ────────────────────────────────────── */
+
+async function loadSavedFilters() {
+  try {
+    const resp = await fetch("/api/saved-filters");
+    if (resp.ok) {
+      state.savedFilters = await resp.json();
+      renderSavedFilterOptions();
+    }
+  } catch { /* ignore */ }
+}
+
+function renderSavedFilterOptions() {
+  const select = byId("savedFilterSelect");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">${t("saved_filters")}</option>`;
+  for (const f of state.savedFilters) {
+    const opt = document.createElement("option");
+    opt.value = String(f.id);
+    opt.textContent = f.name;
+    select.appendChild(opt);
+  }
+  select.value = current;
+}
+
+async function saveCurrentFilter() {
+  const name = prompt(t("save_filter") + ":");
+  if (!name) return;
+  const filterData = {
+    query: state.query,
+    jobFilter: state.jobFilter,
+    newsTopic: state.newsTopic,
+    aiCategory: state.aiCategory,
+    sortMode: state.sortMode,
+  };
+  try {
+    await fetch("/api/saved-filters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, filter: filterData }),
+    });
+    showToast("Filtro salvo!", "success");
+    await loadSavedFilters();
+  } catch {
+    showToast("Erro ao salvar filtro", "error");
+  }
+}
+
+function applySavedFilter(filterId) {
+  if (!filterId) return;
+  const saved = state.savedFilters.find((f) => String(f.id) === String(filterId));
+  if (!saved || !saved.filter) return;
+  const f = saved.filter;
+  if (f.query !== undefined) { state.query = f.query; byId("searchInput").value = f.query; }
+  if (f.jobFilter !== undefined) state.jobFilter = f.jobFilter;
+  if (f.newsTopic !== undefined) state.newsTopic = f.newsTopic;
+  if (f.aiCategory !== undefined) { state.aiCategory = f.aiCategory; byId("aiCategoryFilter").value = f.aiCategory; }
+  if (f.sortMode !== undefined) { state.sortMode = f.sortMode; byId("sortMode").value = f.sortMode; }
+  render();
+  showToast(`Filtro "${saved.name}" aplicado`, "info");
+}
+
+/* ── Web Push Notifications ───────────────────────────── */
+
+async function setupWebPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+
+  try {
+    const resp = await fetch("/api/push/vapid-public-key");
+    if (!resp.ok) return;
+    const { publicKey } = await resp.json();
+    if (!publicKey) return;
+
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      const converted = urlBase64ToUint8Array(publicKey);
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: converted,
+      });
+
+      // Send subscription to server
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: subscription.endpoint,
+          keys: {
+            p256dh: arrayBufferToBase64(subscription.getKey("p256dh")),
+            auth: arrayBufferToBase64(subscription.getKey("auth")),
+          },
+        }),
+      });
+    }
+  } catch (err) {
+    console.debug("Web Push setup skipped:", err.message);
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+}
+
+function arrayBufferToBase64(buffer) {
+  if (!buffer) return "";
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)));
 }
 
 function render() {
@@ -713,6 +1409,14 @@ function render() {
   renderWeather(data.weather || []);
   renderResponsiveCollections(data);
   renderAIObservability(aiMetrics);
+  renderCurrency(data.currency_rates || []);
+  renderServiceMonitors(data.service_monitors || []);
+  renderDailyDigest(data.daily_digest);
+  renderTrending(data.trending_topics || []);
+  renderCustomFeeds(data.custom_feeds || []);
+  renderFavorites(data);
+  renderReleaseCalendar(data.releases || []);
+  renderPriceCharts(data.prices || []);
 
   updateAllCardListHeights();
 }
@@ -820,6 +1524,113 @@ function setupEvents() {
   byId("sortMode").addEventListener("change", (event) => {
     state.sortMode = String(event.target.value || "recency");
     render();
+  });
+
+  /* --- New feature event listeners --- */
+
+  // Service monitor form
+  const monitorForm = byId("monitorForm");
+  if (monitorForm) {
+    monitorForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(monitorForm);
+      const name = (fd.get("name") || "").trim();
+      const url = (fd.get("url") || "").trim();
+      if (!name || !url) return;
+      try {
+        const res = await fetch("/api/service-monitors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, url }),
+        });
+        if (res.ok) {
+          showToast(t("monitorAdded") || "Monitor added");
+          monitorForm.reset();
+          fetchDashboard();
+        } else {
+          showToast("Error adding monitor", "error");
+        }
+      } catch {
+        queueOfflineAction({ method: "POST", url: "/api/service-monitors", body: { name, url } });
+        showToast("Queued for when online", "warning");
+      }
+    });
+  }
+
+  // Custom feed form
+  const feedForm = byId("feedForm");
+  if (feedForm) {
+    feedForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(feedForm);
+      const name = (fd.get("name") || "").trim();
+      const url = (fd.get("feed_url") || "").trim();
+      if (!name || !url) return;
+      try {
+        const res = await fetch("/api/custom-feeds", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, feed_url: url }),
+        });
+        if (res.ok) {
+          showToast(t("feedAdded") || "Feed added");
+          feedForm.reset();
+          fetchDashboard();
+        } else {
+          showToast("Error adding feed", "error");
+        }
+      } catch {
+        queueOfflineAction({ method: "POST", url: "/api/custom-feeds", body: { name, url } });
+        showToast("Queued for when online", "warning");
+      }
+    });
+  }
+
+  // Saved filters
+  const savedFilterSelect = byId("savedFilterSelect");
+  if (savedFilterSelect) {
+    savedFilterSelect.addEventListener("change", () => applySavedFilter());
+  }
+  const saveFilterBtn = byId("saveFilterBtn");
+  if (saveFilterBtn) {
+    saveFilterBtn.addEventListener("click", () => saveCurrentFilter());
+  }
+
+  // Language select
+  const langSelect = byId("langSelect");
+  if (langSelect) {
+    langSelect.value = state.locale;
+    langSelect.addEventListener("change", (e) => setLocale(e.target.value));
+  }
+
+  // Delegate click events for dynamic buttons
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const id = btn.dataset.id;
+    const itemId = btn.dataset.itemId;
+
+    switch (action) {
+      case "toggle-favorite":
+        if (itemId) toggleFavorite(itemId);
+        break;
+      case "show-notes":
+        if (itemId) showNoteModal(itemId);
+        break;
+      case "delete-feed":
+        if (id) deleteFeed(id);
+        break;
+      case "toggle-feed":
+        if (id) toggleFeed(id);
+        break;
+      case "delete-monitor":
+        if (id) deleteServiceMonitor(id);
+        break;
+      case "delete-note":
+        if (id) deleteNote(id);
+        break;
+    }
   });
 }
 
@@ -1258,6 +2069,7 @@ if ("serviceWorker" in navigator) {
 /* ── Bootstrap ────────────────────────────────────────── */
 
 applyTheme(state.theme);
+applyI18n();
 setupEvents();
 applySavedCardOrder();
 applySavedCardHeights();
@@ -1270,6 +2082,9 @@ setupKeyboardShortcuts();
 normalizeCardHeightsToViewport();
 normalizeCardSpansToViewport();
 updateAllCardListHeights();
+loadSavedFilters();
+setupWebPush();
+flushOfflineQueue();
 fetchDashboard();
 scheduleDashboardPolling();
 document.addEventListener("visibilitychange", () => {

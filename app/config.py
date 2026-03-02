@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 
 
@@ -64,4 +65,32 @@ class Config:
         os.getenv("AI_LOCAL_MAX_ENRICH_PER_RUN", "12"),
     )
 
-    SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
+    SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+    ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "").strip()
+
+    DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "90"))
+
+    # ── Currency Widget ──────────────────────────────────────
+    CURRENCY_API_URL = os.getenv(
+        "CURRENCY_API_URL",
+        "https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL",
+    )
+    CURRENCY_UPDATE_MINUTES = int(os.getenv("CURRENCY_UPDATE_MINUTES", "15"))
+
+    # ── Service Monitor ──────────────────────────────────────
+    SERVICE_MONITOR_INTERVAL_MINUTES = int(
+        os.getenv("SERVICE_MONITOR_INTERVAL_MINUTES", "5"),
+    )
+
+    # ── Web Push (VAPID) ─────────────────────────────────────
+    VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").strip()
+    VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip()
+    VAPID_CLAIMS_EMAIL = os.getenv(
+        "VAPID_CLAIMS_EMAIL", "mailto:admin@localhost",
+    )
+
+    # ── i18n ─────────────────────────────────────────────────
+    DEFAULT_LOCALE = os.getenv("DEFAULT_LOCALE", "pt-BR")
+
+    # ── PDF Export ───────────────────────────────────────────
+    PDF_EXPORT_ENABLED = os.getenv("PDF_EXPORT_ENABLED", "0") == "1"
