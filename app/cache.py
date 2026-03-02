@@ -36,19 +36,32 @@ class RedisJSONCache:
         self.redis = redis_client
 
     def get(self, key: str) -> Any | None:
-        payload = self.redis.get(key)
-        if not payload:
+        try:
+            payload = self.redis.get(key)
+            if not payload:
+                return None
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8")
+            return json.loads(payload)
+        except Exception:
+            try:
+                self.redis.delete(key)
+            except Exception:
+                pass
             return None
-        if isinstance(payload, bytes):
-            payload = payload.decode("utf-8")
-        return json.loads(payload)
 
     def set(self, key: str, value: Any, ttl: int) -> None:
-        payload = json.dumps(value, ensure_ascii=False)
-        self.redis.setex(key, ttl, payload)
+        try:
+            payload = json.dumps(value, ensure_ascii=False)
+            self.redis.setex(key, ttl, payload)
+        except Exception:
+            pass
 
     def delete(self, key: str) -> None:
-        self.redis.delete(key)
+        try:
+            self.redis.delete(key)
+        except Exception:
+            pass
 
 
 def get_cache(config):
