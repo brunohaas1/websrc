@@ -234,6 +234,8 @@ class LocalAIEnricher:
                     ],
                     "temperature": 0.1,
                     "stream": False,
+                    "max_tokens": 180,
+                    "response_format": {"type": "json_object"},
                 },
             )
             response.raise_for_status()
@@ -280,17 +282,17 @@ class LocalAIEnricher:
         return plain.strip()
 
     def _build_prompt(self, item: dict[str, Any]) -> str:
-        title = self._strip_html(str(item.get("title") or ""))
-        summary = self._strip_html(str(item.get("summary") or ""))
+        title = self._strip_html(str(item.get("title") or ""))[:220]
+        summary = self._strip_html(str(item.get("summary") or ""))[:700]
         source = self._strip_html(str(item.get("source") or ""))
         item_type = self._strip_html(str(item.get("item_type") or ""))
 
         categories = ", ".join(self.CATEGORIES)
         return (
-            "Você é um classificador de notícias/itens de dashboard. "
-            "Retorne APENAS JSON válido com as chaves: "
-            "summary_one_line, category, relevance_score, reason. "
-            "summary_one_line deve ter no máximo 140 caracteres em português; "
+            "Classifique o item e responda APENAS JSON válido (sem markdown). "
+            "Chaves obrigatórias: summary_one_line, category, "
+            "relevance_score, reason. "
+            "summary_one_line em português com no máximo 140 caracteres; "
             f"category deve ser uma destas: {categories}; "
             "relevance_score deve ser inteiro de 0 a 100. "
             f"Item type: {item_type}. "
@@ -298,6 +300,46 @@ class LocalAIEnricher:
             f"Title: {title}. "
             f"Summary: {summary}."
         )
+
+    def _parse_model_payload(self, raw: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        text = str(raw or "")
+        summary_match = re.search(
+            r'"summary_one_line"\s*:\s*"([^"]{1,220})"',
+            text,
+        )
+        category_match = re.search(
+            r'"category"\s*:\s*"([a-zA-Z_]+)"',
+            text,
+        )
+        score_match = re.search(
+            r'"relevance_score"\s*:\s*(\d{1,3})',
+            text,
+        )
+        reason_match = re.search(
+            r'"reason"\s*:\s*"([^"]{1,80})"',
+            text,
+        )
+
+        if not (summary_match and category_match and score_match):
+            raise ValueError("Resposta não é objeto JSON")
+
+        return {
+            "summary_one_line": summary_match.group(1).strip(),
+            "category": category_match.group(1).strip().lower(),
+            "relevance_score": int(score_match.group(1)),
+            "reason": (
+                reason_match.group(1).strip()
+                if reason_match
+                else "local-ai-regex-parse"
+            ),
+        }
 
     def _fallback_enrichment(self, item: dict[str, Any]) -> dict[str, Any]:
         title = self._strip_html(str(item.get("title") or ""))
@@ -456,9 +498,7 @@ class LocalAIEnricher:
                 prompt = self._build_prompt(item)
                 raw = self._request_model_raw(prompt)
 
-                parsed = json.loads(raw)
-                if not isinstance(parsed, dict):
-                    raise ValueError("Resposta não é objeto JSON")
+                parsed = self._parse_model_payload(raw)
 
                 category = str(parsed.get("category") or "outros")
                 category = category.strip().lower()
@@ -506,7 +546,12 @@ class LocalAIEnricher:
                     continue
 
                 self.logger.warning(
-                    "IA local indisponível após retries, usando fallback: %s",
+                    (
+                        "IA local indisponível após retries, usando fallback "
+                        "(source=%s, type=%s): %s"
+                    ),
+                    source,
+                    str(item.get("item_type") or ""),
                     exc,
                 )
                 return None, "fallback-model-error", latency_ms
