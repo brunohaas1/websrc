@@ -40,6 +40,16 @@ class BaseCollector(ABC):
             should_enrich = is_candidate and enriched_inserts < adaptive_limit
             if should_enrich:
                 enriched_item = self.ai_enricher.enrich_item(item)
+            else:
+                extra = enriched_item.get("extra")
+                if isinstance(extra, dict) and not extra.get("ai_reason"):
+                    reason = (
+                        "skipped-over-limit"
+                        if is_candidate
+                        else "skipped-not-candidate"
+                    )
+                    enriched_item = dict(enriched_item)
+                    enriched_item["extra"] = {**extra, "ai_reason": reason}
 
             if self.repo.upsert_item(enriched_item):
                 inserted += 1

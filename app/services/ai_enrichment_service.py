@@ -181,6 +181,22 @@ class LocalAIEnricher:
         "filipe deschamps": (
             "Conteúdo em vídeo; priorize tema central e relevância para devs."
         ),
+        "infomoney": (
+            "Portal financeiro brasileiro; priorize indicador econômico, "
+            "ação/ativo citado e impacto no mercado."
+        ),
+        "bbc": (
+            "Fonte jornalística internacional de referência; "
+            "priorize fato principal e contexto geopolítico."
+        ),
+        "nytimes": (
+            "Política e economia global; priorize fato central, "
+            "país envolvido e impacto amplo."
+        ),
+        "the verge": (
+            "Tecnologia e cultura digital; priorize produto/serviço "
+            "e relevância para usuários."
+        ),
     }
 
     SOURCE_POLICY = {
@@ -189,14 +205,39 @@ class LocalAIEnricher:
             "category": "open_source",
             "reason": "fallback-source-policy",
         },
+        "france24": {
+            "mode": "fallback",
+            "category": "outros",
+            "reason": "fallback-source-policy",
+        },
+        "al jazeera": {
+            "mode": "fallback",
+            "category": "outros",
+            "reason": "fallback-source-policy",
+        },
+        "curso em vídeo": {
+            "mode": "fallback",
+            "category": "programacao",
+            "reason": "fallback-source-policy",
+        },
+        "blog do iphone": {
+            "mode": "fallback",
+            "category": "mobile",
+            "reason": "fallback-source-policy",
+        },
+        "google ai blog": {
+            "mode": "fallback",
+            "category": "ia",
+            "reason": "fallback-source-policy",
+        },
     }
 
     _source_model_attempts: dict[str, int] = defaultdict(int)
     _source_model_successes: dict[str, int] = defaultdict(int)
     _recent_model_latencies_ms: deque[float] = deque(maxlen=180)
     _recent_model_outcomes: deque[bool] = deque(maxlen=180)
-    _circuit_open_until: float = 0.0
-    _consecutive_model_failures: int = 0
+    _source_circuit_open_until: dict[str, float] = {}
+    _source_consecutive_failures: dict[str, int] = defaultdict(int)
 
     def __init__(self, app):
         self.app = app
@@ -438,38 +479,54 @@ class LocalAIEnricher:
 
         return None
 
-    def _is_circuit_open(self) -> bool:
-        return time.time() < self.__class__._circuit_open_until
+    def _is_circuit_open(self, source: str) -> bool:
+        deadline = self.__class__._source_circuit_open_until.get(source, 0.0)
+        return time.time() < deadline
+
+    def _is_circuit_half_open(self, source: str) -> bool:
+        """True when the circuit just expired — allow one probe."""
+        deadline = self.__class__._source_circuit_open_until.get(source, 0.0)
+        if deadline <= 0.0:
+            return False
+        elapsed = time.time() - deadline
+        return 0 <= elapsed < 5.0
 
     def _register_model_attempt(self, source: str) -> None:
         self.__class__._source_model_attempts[source] += 1
 
-    def _register_model_success(self, source: str, latency_ms: float) -> None:
+    def _register_model_success(
+        self,
+        source: str,
+        latency_ms: float,
+    ) -> None:
         self.__class__._source_model_successes[source] += 1
-        self.__class__._consecutive_model_failures = 0
+        self.__class__._source_consecutive_failures[source] = 0
         self.__class__._recent_model_outcomes.append(True)
         self.__class__._recent_model_latencies_ms.append(latency_ms)
+        if source in self.__class__._source_circuit_open_until:
+            del self.__class__._source_circuit_open_until[source]
 
-    def _register_model_failure(self, latency_ms: float | None = None) -> None:
-        self.__class__._consecutive_model_failures += 1
+    def _register_model_failure(
+        self,
+        source: str,
+        latency_ms: float | None = None,
+    ) -> None:
+        self.__class__._source_consecutive_failures[source] += 1
         self.__class__._recent_model_outcomes.append(False)
         if latency_ms is not None:
             self.__class__._recent_model_latencies_ms.append(latency_ms)
 
-        if (
-            self.__class__._consecutive_model_failures
-            >= self.circuit_fail_threshold
-        ):
-            self.__class__._circuit_open_until = (
+        consecutive = self.__class__._source_consecutive_failures[source]
+        if consecutive >= self.circuit_fail_threshold:
+            self.__class__._source_circuit_open_until[source] = (
                 time.time() + self.circuit_open_seconds
             )
             self.logger.warning(
-                (
-                    "Circuito da IA local aberto por %ss "
-                    "após %s falhas consecutivas"
-                ),
+                "Circuito da fonte '%s' aberto por %ss "
+                "após %s falhas consecutivas",
+                source,
                 self.circuit_open_seconds,
-                self.__class__._consecutive_model_failures,
+                consecutive,
             )
 
     def _source_success_rate(self, source: str) -> float:
@@ -543,7 +600,11 @@ class LocalAIEnricher:
             else 0.0
         )
 
-        if self._is_circuit_open():
+        open_sources = sum(
+            1 for s in self.__class__._source_circuit_open_until
+            if self._is_circuit_open(s)
+        )
+        if open_sources >= 3:
             return max(2, min(limit, self.min_adaptive_per_run))
 
         if avg_latency >= 4500 or success_rate < 0.35:
@@ -566,12 +627,19 @@ class LocalAIEnricher:
             )
             return None, reason, None
 
-        if self._is_circuit_open():
-            return None, "fallback-circuit-open", None
+        if self._is_circuit_open(source):
+            if not self._is_circuit_half_open(source):
+                return None, "fallback-circuit-open", None
+            self.logger.info(
+                "Circuito half-open para '%s', tentando probe",
+                source,
+            )
 
-        source_attempts = self.__class__._source_model_attempts.get(source, 0)
+        source_attempts = self.__class__._source_model_attempts.get(
+            source, 0,
+        )
         source_success_rate = self._source_success_rate(source)
-        if source_attempts >= 12 and source_success_rate < 0.25:
+        if source_attempts >= 12 and source_success_rate < 0.35:
             return None, "fallback-low-success-rate", None
 
         self._register_model_attempt(source)
@@ -619,7 +687,7 @@ class LocalAIEnricher:
                 )
             except Exception as exc:
                 latency_ms = (time.perf_counter() - started_at) * 1000
-                self._register_model_failure(latency_ms)
+                self._register_model_failure(source, latency_ms)
                 is_last_attempt = attempt >= self.retries
 
                 if not is_last_attempt:
