@@ -1,3 +1,5 @@
+import logging
+
 from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -14,6 +16,7 @@ from .security import (
 
 
 def register_routes(app: Flask) -> None:
+    logger = logging.getLogger(__name__)
     repo = Repository(app.config["DATABASE_TARGET"])
     cache = get_cache(app.config)
     limiter = Limiter(
@@ -48,7 +51,31 @@ def register_routes(app: Flask) -> None:
         if cached is not None:
             return jsonify(cached)
 
-        snapshot = repo.get_dashboard_snapshot()
+        try:
+            snapshot = repo.get_dashboard_snapshot()
+        except Exception as exc:
+            logger.exception("Falha em /api/dashboard: %s", exc)
+            snapshot = {
+                "news": [],
+                "promotions": [],
+                "prices": [],
+                "weather": [],
+                "tech_ai": [],
+                "videos": [],
+                "releases": [],
+                "jobs": [],
+                "alerts": [],
+                "ai_observability": {
+                    "window_hours": 24,
+                    "total_items": 0,
+                    "enriched_items": 0,
+                    "enriched_percent": 0.0,
+                    "avg_ai_latency_ms": None,
+                    "fallback_rate_by_hour": [],
+                    "source_accuracy": [],
+                    "reason_breakdown": [],
+                },
+            }
         cache.set(cache_key, snapshot, app.config["CACHE_TTL_SECONDS"])
         return jsonify(snapshot)
 
@@ -62,7 +89,11 @@ def register_routes(app: Flask) -> None:
         if cached is not None:
             return jsonify(cached)
 
-        items = repo.list_items(item_type=item_type, limit=limit, q=q)
+        try:
+            items = repo.list_items(item_type=item_type, limit=limit, q=q)
+        except Exception as exc:
+            logger.exception("Falha em /api/items: %s", exc)
+            items = []
         cache.set(cache_key, items, app.config["CACHE_TTL_SECONDS"])
         return jsonify(items)
 
