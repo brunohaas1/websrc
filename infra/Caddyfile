@@ -2,7 +2,7 @@
   encode gzip
 
   @health path /health
-  reverse_proxy @health api:8000
+  reverse_proxy @health ws-api:8000
 
-  reverse_proxy api:8000
+  reverse_proxy ws-api:8000
 }
