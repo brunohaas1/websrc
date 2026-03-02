@@ -1,5 +1,7 @@
 import atexit
+import hashlib
 import logging
+import os
 import uuid
 
 from flask import Flask, g, request
@@ -22,6 +24,25 @@ def create_app(start_scheduler: bool = True) -> Flask:
 
     init_db(app.config["DATABASE_TARGET"])
     register_routes(app)
+
+    # ── Cache-bust helper for static assets ──────────────
+    _static_hashes: dict[str, str] = {}
+
+    def _asset_hash(filename: str) -> str:
+        if filename in _static_hashes:
+            return _static_hashes[filename]
+        filepath = os.path.join(app.static_folder or "", filename)
+        try:
+            mtime = os.path.getmtime(filepath)
+            h = hashlib.md5(f"{filename}:{mtime}".encode()).hexdigest()[:10]
+        except OSError:
+            h = "0"
+        _static_hashes[filename] = h
+        return h
+
+    @app.context_processor
+    def inject_asset_hash():
+        return {"asset_hash": _asset_hash}
 
     @app.before_request
     def before_request_hooks():

@@ -16,6 +16,14 @@ import time
 
 import pytest
 
+
+def _has_playwright() -> bool:
+    try:
+        import playwright  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 # --------------- Fixtures ------------------------------------------------
 
 def _run_server(port: int) -> None:
