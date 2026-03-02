@@ -12,11 +12,11 @@ function Test-DockerDaemon {
 
 Write-Host "[1/3] Verificando Docker daemon..."
 if (Test-DockerDaemon) {
-  Write-Host "[2/3] Subindo stack avançado via Docker Compose..."
+  Write-Host "[2/3] Subindo stack via Docker Compose..."
   if (!(Test-Path .env.advanced)) {
     Copy-Item .env.advanced.example .env.advanced
   }
-  docker compose -f docker-compose.advanced.yml up -d --build
+  docker compose up -d --build
   if ($LASTEXITCODE -eq 0) {
     Write-Host "[3/3] Stack iniciado. Acesse http://localhost"
     exit 0

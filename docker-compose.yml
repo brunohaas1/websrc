@@ -1,16 +1,148 @@
 services:
-  webscraper-dashboard:
+  api:
     build: .
-    container_name: webscraper-dashboard
+    container_name: ws-api
+    command: python run.py
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    env_file:
+      - .env.advanced
     environment:
-      - DATABASE_PATH=/app/data/dashboard.db
-      - SCRAPE_INTERVAL_MINUTES=30
-      - DAILY_INTERVAL_HOURS=24
-      - WEATHER_LAT=-23.5505
-      - WEATHER_LON=-46.6333
-      - LOG_LEVEL=INFO
+      - APP_ROLE=api
+      - QUEUE_ENABLED=1
+      - DATABASE_URL=postgresql+psycopg://dashboard:dashboard@postgres:5432/dashboard
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+      - llamacpp
+    expose:
+      - "8000"
     volumes:
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build: .
+    container_name: ws-worker
+    command: python -m app.worker_main
+    restart: unless-stopped
+    env_file:
+      - .env.advanced
+    environment:
+      - APP_ROLE=worker
+      - QUEUE_ENABLED=1
+      - DATABASE_URL=postgresql+psycopg://dashboard:dashboard@postgres:5432/dashboard
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+      - llamacpp
+    volumes:
+      - ./data:/app/data
+
+  scheduler:
+    build: .
+    container_name: ws-scheduler
+    command: python -m app.scheduler_main
+    restart: unless-stopped
+    env_file:
+      - .env.advanced
+    environment:
+      - APP_ROLE=scheduler
+      - QUEUE_ENABLED=1
+      - DATABASE_URL=postgresql+psycopg://dashboard:dashboard@postgres:5432/dashboard
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - llamacpp
+    volumes:
+      - ./data:/app/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: ws-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ws-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=dashboard
+      - POSTGRES_USER=dashboard
+      - POSTGRES_PASSWORD=dashboard
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard -d dashboard"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  llamacpp:
+    image: ${LLAMACPP_IMAGE:-websrc-llamacpp:vulkan}
+    build:
+      context: .
+      dockerfile: infra/llamacpp-vulkan.Dockerfile
+    container_name: ws-llamacpp
+    restart: unless-stopped
+    entrypoint:
+      - /app/llama-server
+    command:
+      - -m
+      - /models/llama-3.2-3b-instruct-q4_k_m.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --ctx-size
+      - "4096"
+      - --n-predict
+      - "256"
+      - --n-gpu-layers
+      - "${LLAMACPP_GPU_LAYERS:-35}"
+    volumes:
+      - ./models:/models
+    devices:
+      - "${LLAMACPP_DRI_RENDER:-/dev/dri/renderD128}:${LLAMACPP_DRI_RENDER:-/dev/dri/renderD128}"
+      - "${LLAMACPP_DRI_CARD:-/dev/dri/card0}:${LLAMACPP_DRI_CARD:-/dev/dri/card0}"
+    environment:
+      - GGML_VK_VISIBLE_DEVICES=0
+      - VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}
+    ports:
+      - "${LLAMACPP_HOST_PORT:-8081}:8080"
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ws-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "8000:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

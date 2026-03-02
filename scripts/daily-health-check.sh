@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "=== SERVICES ==="
-docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml -f docker-compose.llamacpp.vulkan-build.yml ps
+docker compose ps
 
 echo
 echo "=== LLAMACPP DEVICE ==="

@@ -142,24 +142,20 @@ docker compose up -d --build
 Para evoluir este projeto em nível portfólio/profissional, use:
 
 - Plano de 14 dias com checklist diário: `docs/EVOLUTION_14_DAYS.md`
-- Compose avançado (api + worker + postgres + redis + caddy): `docker-compose.advanced.yml`
+- Compose único (api + worker + postgres + redis + caddy + llama.cpp): `docker-compose.yml`
 - Exemplo de variáveis para arquitetura avançada: `.env.advanced.example`
 - Exemplo pronto para `llama.cpp`: `.env.llamacpp.example`
 
-### Como testar o compose avançado
+### Como testar o compose único
 
 1. Copie `.env.advanced.example` para `.env.advanced`.
 2. Suba o stack:
 
 ```bash
-docker compose -f docker-compose.advanced.yml up -d --build
+docker compose up -d --build
 ```
 
-Se quiser usar `llama.cpp` (servidor próprio) no lugar de Ollama:
-
-```bash
-docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up -d --build
-```
+O `llama.cpp` já está integrado no `docker-compose.yml`.
 
 > Requer modelo GGUF em `./models` (ex.: `llama-3.2-3b-instruct-q4_k_m.gguf`).
 
@@ -221,7 +217,7 @@ set APP_ROLE=scheduler && set QUEUE_ENABLED=1 && python -m app.scheduler_main
 
 ```bash
 cp .env.advanced.example .env.advanced
-docker compose -f docker-compose.advanced.yml up -d --build
+docker compose up -d --build
 ```
 
 ### Executar Fase 2 e 3 já implementadas
@@ -248,7 +244,7 @@ No PowerShell:
 ./scripts/start-all.ps1
 ```
 
-- Se Docker daemon estiver ativo: sobe `api + worker + scheduler + redis + postgres + caddy`.
+- Se Docker daemon estiver ativo: sobe `api + worker + scheduler + redis + postgres + caddy + llamacpp`.
 - Se Docker daemon não estiver ativo: inicia fallback local com `APP_ROLE=all`.
 
 Para parar tudo:
@@ -293,7 +289,7 @@ AI_LOCAL_MAX_ENRICH_PER_RUN=16
 ### Preparar modelo
 
 Para `llama.cpp`, coloque o GGUF em `./models` antes de subir o
-`docker-compose.llamacpp.yml`.
+`docker-compose.yml`.
 
 Se o log mostrar `loaded CPU backend` e `compiled without GPU support`, use
 `LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full` no `.env.advanced` e recrie o

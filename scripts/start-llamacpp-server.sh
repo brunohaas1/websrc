@@ -61,12 +61,7 @@ check_url() {
 
 echo "[1/3] Subindo stack com backend llama.cpp..."
 LLAMACPP_DRI_RENDER="${LLAMACPP_DRI_RENDER}" LLAMACPP_DRI_CARD="${LLAMACPP_DRI_CARD}" docker compose \
-  -f docker-compose.advanced.yml \
-  -f docker-compose.llamacpp.yml \
   up -d --build api worker scheduler redis postgres caddy llamacpp
-
-# Em modo llama.cpp, ollama não é necessário (economia de RAM/CPU)
-docker compose -f docker-compose.advanced.yml stop ollama >/dev/null 2>&1 || true
 
 echo "[2/3] Status dos serviços:"
 docker compose ps
@@ -96,7 +91,7 @@ if docker logs ws-llamacpp 2>&1 | egrep -qi "loaded CPU backend|compiled without
   echo "[next] No servidor, ajuste .env.advanced para:"
   echo "       LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full"
   echo "[next] Depois recrie apenas o serviço llama.cpp:"
-  echo "       docker compose -f docker-compose.advanced.yml -f docker-compose.llamacpp.yml up -d --force-recreate llamacpp"
+  echo "       docker compose up -d --force-recreate llamacpp"
   echo "[next] Se persistir CPU-only, use build local Vulkan:"
   echo "       bash ./scripts/start-llamacpp-vulkan-build.sh"
 fi

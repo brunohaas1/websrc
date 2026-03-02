@@ -3,7 +3,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 # Para stack docker (se existir)
-docker compose -f docker-compose.advanced.yml down
+docker compose down
 
 # Para fallback local
 Get-CimInstance Win32_Process |

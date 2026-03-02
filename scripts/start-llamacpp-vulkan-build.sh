@@ -25,19 +25,11 @@ echo "[info] DRI card:   ${LLAMACPP_DRI_CARD:-<vazio>}"
 
 echo "[1/2] Buildando imagem local do llama.cpp com Vulkan..."
 LLAMACPP_DRI_RENDER="${LLAMACPP_DRI_RENDER}" LLAMACPP_DRI_CARD="${LLAMACPP_DRI_CARD}" docker compose \
-  -f docker-compose.advanced.yml \
-  -f docker-compose.llamacpp.yml \
-  -f docker-compose.llamacpp.vulkan-build.yml \
   build llamacpp
 
 echo "[2/2] Subindo stack com imagem Vulkan local..."
 LLAMACPP_DRI_RENDER="${LLAMACPP_DRI_RENDER}" LLAMACPP_DRI_CARD="${LLAMACPP_DRI_CARD}" docker compose \
-  -f docker-compose.advanced.yml \
-  -f docker-compose.llamacpp.yml \
-  -f docker-compose.llamacpp.vulkan-build.yml \
   up -d --build api worker scheduler redis postgres caddy llamacpp
-
-docker compose -f docker-compose.advanced.yml stop ollama >/dev/null 2>&1 || true
 
 echo "[ok] Stack iniciado. Verifique backend:" 
 docker logs ws-llamacpp 2>&1 | egrep -i "load_backend|vulkan|offload|gpu" | tail -n 40 || true

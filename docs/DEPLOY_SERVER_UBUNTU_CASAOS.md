@@ -58,7 +58,7 @@ Ajuste no `.env.advanced` (mínimo):
 ## 4) Subir stack avançado
 
 ```bash
-docker compose -f docker-compose.advanced.yml up -d --build
+docker compose up -d --build
 ```
 
 ### Alternativa: `llama.cpp` (servidor próprio)
@@ -102,13 +102,10 @@ bash ./scripts/start-llamacpp-vulkan-build.sh
 
 - `llama-3.2-3b-instruct-q4_k_m.gguf`
 
-2. Suba com override do `llama.cpp`:
+2. Suba stack (o `llama.cpp` já está integrado):
 
 ```bash
-docker compose \
-	-f docker-compose.advanced.yml \
-	-f docker-compose.llamacpp.yml \
-	up -d --build
+docker compose up -d --build
 ```
 
 3. Verifique se o serviço subiu:
@@ -168,7 +165,7 @@ bash ./scripts/daily-health-check.sh
 
 ## 7) CasaOS (se preferir interface)
 
-- Crie app custom com `docker-compose.advanced.yml`
+- Crie app custom com `docker-compose.yml`
 - Monte volume persistente para `./data:/app/data`
 - Deixe restart policy `unless-stopped`
 - Garanta que o arquivo GGUF esteja em `./models`
@@ -178,13 +175,13 @@ bash ./scripts/daily-health-check.sh
 Se precisar voltar configuração:
 
 ```bash
-git checkout -- .env.advanced docker-compose.advanced.yml app/config.py
+git checkout -- .env.advanced docker-compose.yml app/config.py
 ```
 
 Reiniciar stack:
 
 ```bash
-docker compose -f docker-compose.advanced.yml up -d --build
+docker compose up -d --build
 ```
 
 ## 9) Comandos de operação diária
@@ -193,13 +190,13 @@ Atualizar código e subir novamente:
 
 ```bash
 git pull
-docker compose -f docker-compose.advanced.yml up -d --build
+docker compose up -d --build
 ```
 
 Parar tudo:
 
 ```bash
-docker compose -f docker-compose.advanced.yml down
+docker compose down
 ```
 
 ## 10) Dica para RX580 (8GB)
