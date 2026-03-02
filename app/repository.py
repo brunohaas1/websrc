@@ -111,7 +111,17 @@ class Repository:
             query += " AND (title LIKE ? OR summary LIKE ?)"
             params.extend([f"%{q}%", f"%{q}%"])
 
-        query += " ORDER BY COALESCE(published_at, created_at) DESC LIMIT ?"
+        if self.is_postgres:
+            query += (
+                " ORDER BY COALESCE("
+                "NULLIF(published_at, ''), "
+                "to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SSOF')"
+                ") DESC LIMIT ?"
+            )
+        else:
+            query += (
+                " ORDER BY COALESCE(published_at, created_at) DESC LIMIT ?"
+            )
         over_fetch_limit = max(limit * 5, 80)
         params.append(over_fetch_limit)
 
