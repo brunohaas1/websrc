@@ -178,6 +178,48 @@ def register_routes(app: Flask) -> None:
         scheduler.run_all_now()
         return jsonify({"ok": True, "message": "Coleta executada."})
 
+    @app.post("/api/maintenance/ai-backfill")
+    @limiter.limit("2/day")
+    def ai_backfill_once():
+        batch_size = int(request.args.get("batch_size", "80"))
+        max_cycles = int(request.args.get("max_cycles", "120"))
+
+        queue = get_queue(app.config)
+        if queue is not None:
+            from .jobs import run_ai_backfill_once
+
+            job = queue.enqueue(
+                run_ai_backfill_once,
+                app.config["DATABASE_TARGET"],
+                app.config["LOG_LEVEL"],
+                batch_size,
+                max_cycles,
+                job_timeout="60m",
+            )
+            cache.delete("dashboard:snapshot")
+            cache.delete("ai:observability")
+            return jsonify(
+                {
+                    "ok": True,
+                    "mode": "queued",
+                    "job": job.id,
+                    "batch_size": batch_size,
+                    "max_cycles": max_cycles,
+                }
+            )
+
+        from .jobs import run_ai_backfill_once
+
+        payload = run_ai_backfill_once(
+            app.config["DATABASE_TARGET"],
+            app.config["LOG_LEVEL"],
+            batch_size,
+            max_cycles,
+        )
+        cache.delete("dashboard:snapshot")
+        cache.delete("ai:observability")
+        return jsonify({"ok": True, "mode": "sync", **payload})
+
     @app.post("/api/maintenance/cleanup-summaries")
     @limiter.limit("2/day")
     def cleanup_summaries():

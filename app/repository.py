@@ -479,6 +479,55 @@ class Repository:
                 data.append(item)
             return data
 
+    def list_pending_ai_items(self, limit: int = 200) -> list[dict[str, Any]]:
+        eligible_types = ("news", "tech_ai", "youtube", "job", "release")
+
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                query = """
+                SELECT *
+                FROM items
+                WHERE item_type IN (%s, %s, %s, %s, %s)
+                  AND (
+                      extra_json IS NULL
+                      OR trim(extra_json) = ''
+                      OR (extra_json::jsonb ->> 'ai_summary') IS NULL
+                      OR trim(extra_json::jsonb ->> 'ai_summary') = ''
+                      OR (extra_json::jsonb ->> 'ai_category') IS NULL
+                      OR trim(extra_json::jsonb ->> 'ai_category') = ''
+                  )
+                ORDER BY created_at DESC
+                LIMIT %s
+                """
+            else:
+                query = """
+                SELECT *
+                FROM items
+                WHERE item_type IN (?, ?, ?, ?, ?)
+                  AND (
+                      extra_json IS NULL
+                      OR trim(extra_json) = ''
+                      OR json_extract(extra_json, '$.ai_summary') IS NULL
+                      OR trim(json_extract(extra_json, '$.ai_summary')) = ''
+                      OR json_extract(extra_json, '$.ai_category') IS NULL
+                      OR trim(json_extract(extra_json, '$.ai_category')) = ''
+                  )
+                ORDER BY datetime(created_at) DESC
+                LIMIT ?
+                """
+
+            params = (*eligible_types, int(limit))
+            rows = conn.execute(self._sql(query), params).fetchall()
+            return [self._item_row_to_dict(row) for row in rows]
+
+    def update_item_extra(self, item_id: int, extra: dict[str, Any]) -> None:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("UPDATE items SET extra_json = ? WHERE id = ?"),
+                (json_dumps(extra), int(item_id)),
+            )
+            conn.commit()
+
     @staticmethod
     def _item_row_to_dict(row: Any) -> dict[str, Any]:
         result = dict(row)

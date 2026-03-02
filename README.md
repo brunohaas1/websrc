@@ -301,6 +301,18 @@ serviço `llamacpp`.
 - No dashboard, os cards mostram categoria e score quando disponíveis.
 - O frontend reduz polling em background (60s visível, 5min em segundo plano).
 
+### Backfill único de IA (itens já no banco)
+
+Para enriquecer tudo que já existe no banco agora (uma vez), sem mudar a rotina
+normal depois:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/maintenance/ai-backfill?batch_size=80&max_cycles=120"
+```
+
+- Com fila (`QUEUE_ENABLED=1`), o endpoint enfileira job e retorna `job`.
+- Sem fila, executa síncrono e retorna `scanned/updated/model/fallback`.
+
 ---
 
 Projeto focado em aprendizado prático, modular e escalável.
