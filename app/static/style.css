@@ -1501,3 +1501,347 @@ select:focus:not(:focus-visible) { outline: none; }
 
 .inline-form button:hover { background: var(--accent-light); }
 
+/* ═══════════════════════════════════════════════════════════
+   New Feature Styles — Round 4
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── LLM Status Pill ───────────────────────────────────── */
+
+.llm-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: var(--glass);
+  transition: all var(--duration) var(--ease-out);
+  cursor: default;
+}
+
+.llm-status-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background var(--duration);
+}
+
+.llm-status-pill.llm-ok {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.08);
+  color: var(--emerald);
+}
+.llm-status-pill.llm-ok::before { background: var(--emerald); box-shadow: 0 0 8px rgba(52, 211, 153, 0.5); }
+
+.llm-status-pill.llm-error {
+  border-color: rgba(251, 113, 133, 0.4);
+  background: rgba(251, 113, 133, 0.08);
+  color: var(--rose);
+}
+.llm-status-pill.llm-error::before { background: var(--rose); box-shadow: 0 0 8px rgba(251, 113, 133, 0.5); }
+
+.llm-status-pill.llm-disabled {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.05);
+  color: var(--text-faint);
+}
+.llm-status-pill.llm-disabled::before { background: var(--text-faint); }
+
+/* ── Chart Modal ───────────────────────────────────────── */
+
+.chart-modal-content {
+  max-width: 800px;
+  width: 95%;
+}
+
+.chart-modal-content .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.chart-modal-content .modal-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.modal-close {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 1rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all var(--duration);
+}
+.modal-close:hover {
+  border-color: var(--rose);
+  color: var(--rose);
+  background: rgba(225, 29, 72, 0.08);
+}
+
+.chart-modal-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.chart-modal-stats strong {
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Focus Mode ────────────────────────────────────────── */
+
+.card-focus-toggle {
+  position: absolute;
+  top: 8px;
+  right: 36px;
+  z-index: 6;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration), color var(--duration);
+}
+
+.card:hover .card-focus-toggle { opacity: 0.6; }
+.card-focus-toggle:hover { opacity: 1 !important; color: var(--accent-light); }
+
+.card.focus-hidden {
+  opacity: 0.25;
+  filter: grayscale(0.8);
+  transform: scale(0.97);
+  pointer-events: none;
+  transition: all var(--duration) var(--ease-out);
+}
+
+#focusModeBtn {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: all var(--duration);
+}
+
+#focusModeBtn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-glow);
+}
+
+#focusModeBtn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── Accent Color Picker ───────────────────────────────── */
+
+.accent-picker-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.accent-picker-wrap label {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+#accentColorPicker {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  background: none;
+  transition: border-color var(--duration);
+}
+
+#accentColorPicker:hover { border-color: var(--border-hover); }
+
+#accentColorPicker::-webkit-color-swatch-wrapper { padding: 2px; }
+#accentColorPicker::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+#accentColorPicker::-moz-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+/* ── Touch Drag Clone ──────────────────────────────────── */
+
+.touch-drag-clone {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  opacity: 0.85;
+  transform: rotate(2deg) scale(1.03);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 0 30px var(--accent-glow);
+  border-radius: var(--radius-lg);
+  transition: opacity 0.15s;
+}
+
+.card.drag-over {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-lg) !important;
+  transform: scale(1.02);
+}
+
+/* ── RSS Article List ──────────────────────────────────── */
+
+.rss-article {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  text-decoration: none;
+  transition: all var(--duration) var(--ease-out);
+}
+
+.rss-article:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+  transform: translateX(4px);
+}
+
+.rss-article-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 3px;
+}
+
+.rss-article-meta {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+/* ── Price Comparison Overlay ──────────────────────────── */
+
+.comparison-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all var(--duration);
+}
+
+.comparison-chip.selected {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent-light);
+}
+
+.comparison-chip:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+.comparison-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* ── Smart Alert Banner ────────────────────────────────── */
+
+.smart-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid;
+  margin-bottom: 8px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  animation: card-enter var(--duration-slow) var(--ease-out) both;
+}
+
+.smart-alert.alert-info {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.smart-alert.alert-success {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.smart-alert.alert-warning {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.smart-alert.alert-danger {
+  border-color: rgba(251, 113, 133, 0.3);
+  background: rgba(251, 113, 133, 0.06);
+}
+
+.smart-alert-icon { font-size: 1.2rem; flex-shrink: 0; }
+
+.smart-alert-body { flex: 1; }
+
+.smart-alert-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--text-bright);
+  margin-bottom: 2px;
+}
+
+.smart-alert-reason {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.smart-alert-time {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+}
+
+/* ── Animations ────────────────────────────────────────── */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

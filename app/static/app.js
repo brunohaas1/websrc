@@ -585,7 +585,14 @@ function renderPrices(prices, maxItems) {
     target.innerHTML = "<small>Nenhum produto monitorado.</small>";
     return;
   }
-  target.innerHTML = limited
+  // Store for comparison feature
+  state._priceWatchList = limited;
+
+  const compareBtn = list.length >= 2
+    ? `<button class="btn-small" style="margin-bottom:8px" onclick="openPriceComparison()">📊 Comparar preços</button>`
+    : "";
+
+  target.innerHTML = compareBtn + limited
     .map(
       (watch) => `
         <article class="item">
@@ -935,11 +942,60 @@ function renderCustomFeeds(feeds) {
           <strong>${escapeHtml(f.name)}</strong>
           <small>${escapeHtml(f.feed_url)}</small>
           <span class="feed-type">${escapeHtml(f.item_type || "news")}</span>
+          <button class="btn-small" onclick="loadFeedArticles(${f.id}, '${escapeHtml(f.name)}')" title="Ler artigos">📰</button>
           <button class="btn-small" onclick="toggleFeed(${f.id}, ${!active})">${active ? "⏸" : "▶"}</button>
           <button class="btn-small btn-delete" onclick="deleteFeed(${f.id})">✕</button>
         </article>`;
     })
     .join("");
+}
+
+/* ── RSS Reader Modal ─────────────────────────────────── */
+
+async function loadFeedArticles(feedId, feedName) {
+  let modal = document.getElementById("rssModal");
+  if (modal) modal.remove();
+
+  modal = document.createElement("div");
+  modal.id = "rssModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal-content chart-modal-content">
+      <div class="modal-header">
+        <h3>📰 ${escapeHtml(feedName)}</h3>
+        <button class="modal-close" id="rssModalClose">✕</button>
+      </div>
+      <div id="rssArticleList"><small>Carregando artigos...</small></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById("rssModalClose").onclick = () => modal.remove();
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+
+  try {
+    const res = await fetch(`/api/custom-feeds/${feedId}/articles`);
+    const data = await res.json();
+    const container = document.getElementById("rssArticleList");
+    if (!res.ok) {
+      container.innerHTML = `<small style="color:var(--rose)">Erro: ${escapeHtml(data.error || "Falha")}</small>`;
+      return;
+    }
+    const articles = data.articles || [];
+    if (!articles.length) {
+      container.innerHTML = `<small>Nenhum artigo encontrado.</small>`;
+      return;
+    }
+    container.innerHTML = articles.map(a => `
+      <a href="${escapeHtml(a.link)}" target="_blank" rel="noopener" class="rss-article">
+        <div class="rss-article-title">${escapeHtml(a.title)}</div>
+        <div class="rss-article-meta">${escapeHtml(a.published)}${a.summary ? " — " + escapeHtml(a.summary) : ""}</div>
+      </a>
+    `).join("");
+  } catch (err) {
+    const container = document.getElementById("rssArticleList");
+    if (container) container.innerHTML = `<small style="color:var(--rose)">Erro de rede</small>`;
+  }
 }
 
 /* ── Favorites ────────────────────────────────────────── */
@@ -1090,10 +1146,231 @@ async function renderPriceCharts(prices) {
           },
         },
       });
+
+      // Click to expand chart in modal
+      canvas.style.cursor = "pointer";
+      canvas.onclick = () => openChartModal(watch.name, labels, data);
     } catch {
       // Ignore chart errors
     }
   }
+}
+
+/* ── Chart Modal (expanded view) ──────────────────────── */
+
+let _chartModalInstance = null;
+function openChartModal(title, labels, data) {
+  let modal = document.getElementById("chartModal");
+  if (modal) modal.remove();
+  if (_chartModalInstance) { _chartModalInstance.destroy(); _chartModalInstance = null; }
+
+  modal = document.createElement("div");
+  modal.id = "chartModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal-content chart-modal-content">
+      <div class="modal-header">
+        <h3>📈 ${escapeHtml(title)}</h3>
+        <button class="modal-close" id="chartModalClose">✕</button>
+      </div>
+      <div style="position:relative;height:400px;width:100%">
+        <canvas id="chartModalCanvas"></canvas>
+      </div>
+      <div class="chart-modal-stats" id="chartModalStats"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById("chartModalClose").onclick = () => {
+    if (_chartModalInstance) { _chartModalInstance.destroy(); _chartModalInstance = null; }
+    modal.remove();
+  };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) {
+      if (_chartModalInstance) { _chartModalInstance.destroy(); _chartModalInstance = null; }
+      modal.remove();
+    }
+  });
+
+  // Stats
+  const numData = data.map(Number).filter(Number.isFinite);
+  const min = Math.min(...numData);
+  const max = Math.max(...numData);
+  const avg = numData.length ? (numData.reduce((a, b) => a + b, 0) / numData.length) : 0;
+  const latest = numData[numData.length - 1] || 0;
+  const statsEl = document.getElementById("chartModalStats");
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <span>Mín: <strong>R$ ${min.toFixed(2)}</strong></span>
+      <span>Máx: <strong>R$ ${max.toFixed(2)}</strong></span>
+      <span>Média: <strong>R$ ${avg.toFixed(2)}</strong></span>
+      <span>Atual: <strong>R$ ${latest.toFixed(2)}</strong></span>
+      <span>Pontos: <strong>${numData.length}</strong></span>
+    `;
+  }
+
+  const ctx = document.getElementById("chartModalCanvas");
+  _chartModalInstance = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: title,
+        data,
+        borderColor: "rgba(99, 102, 241, 1)",
+        backgroundColor: "rgba(99, 102, 241, 0.15)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 3,
+        pointHoverRadius: 6,
+        borderWidth: 2.5,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "top" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `R$ ${Number(ctx.parsed.y).toFixed(2)}`,
+          },
+        },
+      },
+      scales: {
+        x: { display: true, ticks: { maxRotation: 45, font: { size: 10 } } },
+        y: { display: true, ticks: { font: { size: 11 } } },
+      },
+    },
+  });
+}
+
+/* ── Price Comparison Overlay ─────────────────────────── */
+
+const COMPARISON_COLORS = [
+  "rgba(99, 102, 241, 1)", "rgba(34, 211, 238, 1)", "rgba(251, 113, 133, 1)",
+  "rgba(251, 191, 36, 1)", "rgba(52, 211, 153, 1)", "rgba(168, 85, 247, 1)",
+  "rgba(244, 114, 182, 1)", "rgba(56, 189, 248, 1)",
+];
+
+let _comparisonChartInstance = null;
+
+async function openPriceComparison() {
+  const watches = state._priceWatchList || [];
+  if (watches.length < 2) return;
+
+  let modal = document.getElementById("priceCompModal");
+  if (modal) modal.remove();
+  if (_comparisonChartInstance) { _comparisonChartInstance.destroy(); _comparisonChartInstance = null; }
+
+  const selected = new Set(watches.slice(0, 4).map(w => w.id));
+
+  modal = document.createElement("div");
+  modal.id = "priceCompModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal-content chart-modal-content">
+      <div class="modal-header">
+        <h3>📊 Comparar Preços</h3>
+        <button class="modal-close" id="priceCompClose">✕</button>
+      </div>
+      <div class="comparison-toolbar" id="compToolbar"></div>
+      <div style="position:relative;height:400px;width:100%">
+        <canvas id="compCanvas"></canvas>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById("priceCompClose").onclick = () => {
+    if (_comparisonChartInstance) { _comparisonChartInstance.destroy(); _comparisonChartInstance = null; }
+    modal.remove();
+  };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) {
+      if (_comparisonChartInstance) { _comparisonChartInstance.destroy(); _comparisonChartInstance = null; }
+      modal.remove();
+    }
+  });
+
+  // Render chips
+  const toolbar = document.getElementById("compToolbar");
+  toolbar.innerHTML = watches.map(w => {
+    const sel = selected.has(w.id) ? "selected" : "";
+    return `<span class="comparison-chip ${sel}" data-wid="${w.id}">${escapeHtml(w.name)}</span>`;
+  }).join("");
+
+  toolbar.addEventListener("click", (e) => {
+    const chip = e.target.closest(".comparison-chip");
+    if (!chip) return;
+    const wid = Number(chip.dataset.wid);
+    if (selected.has(wid)) { selected.delete(wid); chip.classList.remove("selected"); }
+    else { selected.add(wid); chip.classList.add("selected"); }
+    drawComparisonChart(watches, selected);
+  });
+
+  await drawComparisonChart(watches, selected);
+}
+
+async function drawComparisonChart(watches, selectedIds) {
+  if (_comparisonChartInstance) { _comparisonChartInstance.destroy(); _comparisonChartInstance = null; }
+  const ctx = document.getElementById("compCanvas");
+  if (!ctx) return;
+
+  const datasets = [];
+  let colorIdx = 0;
+
+  for (const w of watches) {
+    if (!selectedIds.has(w.id)) continue;
+    try {
+      const resp = await fetch(`/api/price-history/${w.id}`);
+      if (!resp.ok) continue;
+      const history = await resp.json();
+      if (!history.length) continue;
+      const labels = history.map(h => h.captured_at?.slice(5, 16) || "").reverse();
+      const data = history.map(h => h.price).reverse();
+      const color = COMPARISON_COLORS[colorIdx % COMPARISON_COLORS.length];
+      datasets.push({
+        label: w.name,
+        data,
+        borderColor: color,
+        backgroundColor: color.replace(", 1)", ", 0.1)"),
+        fill: false,
+        tension: 0.3,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        borderWidth: 2,
+        _labels: labels,
+      });
+      colorIdx++;
+    } catch { /* skip */ }
+  }
+
+  if (!datasets.length) return;
+
+  // Use longest label set
+  const longestLabels = datasets.reduce((a, b) => (a._labels || []).length >= (b._labels || []).length ? a : b)._labels || [];
+
+  _comparisonChartInstance = new Chart(ctx, {
+    type: "line",
+    data: { labels: longestLabels, datasets: datasets.map(d => { const { _labels, ...rest } = d; return rest; }) },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "top" },
+        tooltip: {
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: R$ ${Number(ctx.parsed.y).toFixed(2)}` },
+        },
+      },
+      scales: {
+        x: { display: true, ticks: { maxRotation: 45, font: { size: 10 } } },
+        y: { display: true, ticks: { font: { size: 11 } } },
+      },
+    },
+  });
 }
 
 /* ── Favorite toggle ──────────────────────────────────── */
@@ -1484,6 +1761,7 @@ function setupEvents() {
   byId("priceForm").addEventListener("submit", addPriceWatch);
   byId("refreshBtn").addEventListener("click", runNow);
   byId("themeToggle")?.addEventListener("click", toggleTheme);
+  byId("focusModeBtn")?.addEventListener("click", toggleFocusMode);
 
   byId("jobFilters").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-term]");
@@ -1981,6 +2259,7 @@ function setupCardDragAndDrop() {
 
   const cards = [...grid.querySelectorAll(".card[data-card-id]")];
 
+  /* ── Desktop HTML5 drag ─────────────────────────────── */
   cards.forEach((card) => {
     card.addEventListener("dragstart", () => {
       if (resizingCard) {
@@ -2025,9 +2304,173 @@ function setupCardDragAndDrop() {
       persistCardOrder();
     });
   });
+
+  /* ── Mobile touch drag ──────────────────────────────── */
+  let touchDragCard = null;
+  let touchStartY = 0;
+  let touchStartX = 0;
+  let touchClone = null;
+  let touchMoved = false;
+  const TOUCH_DRAG_THRESHOLD = 15;
+
+  cards.forEach((card) => {
+    card.addEventListener("touchstart", (e) => {
+      if (resizingCard) return;
+      const touch = e.touches[0];
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      touchDragCard = card;
+      touchMoved = false;
+    }, { passive: true });
+  });
+
+  grid.addEventListener("touchmove", (e) => {
+    if (!touchDragCard) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+
+    if (!touchMoved && Math.abs(dx) + Math.abs(dy) < TOUCH_DRAG_THRESHOLD) return;
+    touchMoved = true;
+    e.preventDefault();
+
+    if (!touchClone) {
+      touchClone = touchDragCard.cloneNode(true);
+      touchClone.classList.add("touch-drag-clone");
+      touchClone.style.cssText = `
+        position:fixed; z-index:9999; pointer-events:none;
+        width:${touchDragCard.offsetWidth}px; opacity:0.85;
+        transform:rotate(2deg); transition:none;
+      `;
+      document.body.appendChild(touchClone);
+      touchDragCard.classList.add("dragging");
+    }
+    touchClone.style.left = `${touch.clientX - touchDragCard.offsetWidth / 2}px`;
+    touchClone.style.top = `${touch.clientY - 30}px`;
+
+    // Highlight drop target
+    const target = document.elementFromPoint(touch.clientX, touch.clientY)?.closest(".card[data-card-id]");
+    grid.querySelectorAll(".card").forEach((c) => c.classList.remove("drag-over"));
+    if (target && target !== touchDragCard) target.classList.add("drag-over");
+  }, { passive: false });
+
+  grid.addEventListener("touchend", () => {
+    if (!touchDragCard) return;
+
+    if (touchClone) {
+      touchClone.remove();
+      touchClone = null;
+    }
+    touchDragCard.classList.remove("dragging");
+
+    if (touchMoved) {
+      const overCard = grid.querySelector(".card.drag-over");
+      if (overCard && overCard !== touchDragCard) {
+        grid.insertBefore(touchDragCard, overCard);
+        persistCardOrder();
+      }
+      grid.querySelectorAll(".card").forEach((c) => c.classList.remove("drag-over"));
+    }
+
+    touchDragCard = null;
+    touchMoved = false;
+  });
 }
 
 /* ── Keyboard shortcuts ───────────────────────────────── */
+
+const FOCUS_KEY = "ws_hidden_cards";
+const ACCENT_KEY = "ws_accent_color";
+let focusMode = false;
+
+function getHiddenCards() {
+  try { return new Set(JSON.parse(localStorage.getItem(FOCUS_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+function saveHiddenCards(set) {
+  localStorage.setItem(FOCUS_KEY, JSON.stringify([...set]));
+}
+
+function toggleFocusMode() {
+  focusMode = !focusMode;
+  const grid = byId("dashboardGrid");
+  if (!grid) return;
+  const hidden = getHiddenCards();
+  const btn = byId("focusModeBtn");
+
+  grid.querySelectorAll(".card[data-card-id]").forEach((card) => {
+    const cid = card.dataset.cardId;
+    if (focusMode && hidden.has(cid)) {
+      card.style.display = "none";
+    } else {
+      card.style.display = "";
+    }
+    // Show/hide eye icon on cards
+    const eye = card.querySelector(".card-focus-toggle");
+    if (eye) eye.style.display = focusMode ? "inline-block" : "none";
+  });
+
+  if (btn) btn.textContent = focusMode ? "👁️ Sair Focus" : "🎯 Focus";
+  showToast(focusMode ? "Modo Focus ativado" : "Modo Focus desativado", "info");
+}
+
+function toggleCardVisibility(cardId) {
+  const hidden = getHiddenCards();
+  if (hidden.has(cardId)) hidden.delete(cardId);
+  else hidden.add(cardId);
+  saveHiddenCards(hidden);
+
+  const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+  if (card && focusMode) {
+    card.style.display = hidden.has(cardId) ? "none" : "";
+  }
+  const eye = card?.querySelector(".card-focus-toggle");
+  if (eye) eye.textContent = hidden.has(cardId) ? "👁️‍🗨️" : "👁️";
+}
+
+function injectFocusToggles() {
+  const grid = byId("dashboardGrid");
+  if (!grid) return;
+  const hidden = getHiddenCards();
+  grid.querySelectorAll(".card[data-card-id]").forEach((card) => {
+    if (card.querySelector(".card-focus-toggle")) return;
+    const cid = card.dataset.cardId;
+    const btn = document.createElement("button");
+    btn.className = "card-focus-toggle btn-small";
+    btn.style.display = "none";
+    btn.title = "Ocultar/mostrar este card no Focus mode";
+    btn.textContent = hidden.has(cid) ? "👁️‍🗨️" : "👁️";
+    btn.onclick = (e) => { e.stopPropagation(); toggleCardVisibility(cid); };
+    const h2 = card.querySelector("h2");
+    if (h2) h2.appendChild(btn);
+  });
+}
+
+/* ── Accent Color ─────────────────────────────────────── */
+
+function applyAccentColor(color) {
+  if (!color) return;
+  document.documentElement.style.setProperty("--accent", color);
+  // Derive lighter/darker variants
+  const r = parseInt(color.slice(1, 3), 16);
+  const g = parseInt(color.slice(3, 5), 16);
+  const b = parseInt(color.slice(5, 7), 16);
+  document.documentElement.style.setProperty("--accent-light", `rgba(${r},${g},${b},0.15)`);
+  document.documentElement.style.setProperty("--accent-glow", `rgba(${r},${g},${b},0.4)`);
+  localStorage.setItem(ACCENT_KEY, color);
+}
+
+function initAccentColor() {
+  const saved = localStorage.getItem(ACCENT_KEY);
+  const picker = byId("accentColorPicker");
+  if (saved) {
+    applyAccentColor(saved);
+    if (picker) picker.value = saved;
+  }
+  if (picker) {
+    picker.addEventListener("input", (e) => applyAccentColor(e.target.value));
+  }
+}
 
 function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
@@ -2055,9 +2498,133 @@ function setupKeyboardShortcuts() {
 
     if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      showToast("Ctrl+K = busca · R = atualizar · T = tema · ? = atalhos", "info", 5000);
+      showToast("Ctrl+K = busca · R = atualizar · T = tema · F = focus · ? = atalhos", "info", 5000);
+    }
+
+    if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      toggleFocusMode();
     }
   });
+}
+
+/* ── LLM Status Indicator ─────────────────────────────── */
+
+let _llmPollTimer = null;
+async function pollLLMStatus() {
+  try {
+    const resp = await fetch("/api/llm-status");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const pill = document.getElementById("llmStatusPill");
+    const label = document.getElementById("llmStatusLabel");
+    if (!pill || !label) return;
+
+    pill.classList.remove("llm-ok", "llm-error", "llm-disabled");
+    if (data.status === "ok") {
+      pill.classList.add("llm-ok");
+      label.textContent = "Online";
+    } else if (data.status === "disabled") {
+      pill.classList.add("llm-disabled");
+      label.textContent = "Off";
+    } else {
+      pill.classList.add("llm-error");
+      label.textContent = "Offline";
+    }
+    pill.title = `LLM: ${data.status} — ${typeof data.detail === "object" ? JSON.stringify(data.detail) : data.detail || ""}`;
+  } catch { /* ignore */ }
+}
+function scheduleLLMPolling() {
+  if (_llmPollTimer) clearInterval(_llmPollTimer);
+  pollLLMStatus();
+  _llmPollTimer = setInterval(pollLLMStatus, 60_000);
+}
+
+/* ── Server-Sent Events (SSE) ────────────────────────── */
+
+let _sseSource = null;
+/* ── Smart Alerts (AI) ─────────────────────────────────── */
+
+async function runSmartAnalysis() {
+  const banner = byId("smartAlertsBanner");
+  if (banner) banner.innerHTML = `<small style="color:var(--text-dim)">🧠 Analisando dados...</small>`;
+
+  try {
+    const res = await fetch("/api/smart-alerts/analyze", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      if (banner) banner.innerHTML = `<small style="color:var(--rose)">Erro: ${escapeHtml(data.error || "Falha")}</small>`;
+      return;
+    }
+    renderSmartAlerts(data.alerts || []);
+    showToast(`🧠 ${data.count || 0} alertas inteligentes gerados`, "info");
+  } catch (err) {
+    if (banner) banner.innerHTML = `<small style="color:var(--rose)">Erro de rede</small>`;
+  }
+}
+
+function renderSmartAlerts(alerts) {
+  const banner = byId("smartAlertsBanner");
+  if (!banner) return;
+  if (!alerts.length) {
+    banner.innerHTML = `<small style="color:var(--text-dim)">✅ Nenhuma anomalia detectada</small>`;
+    return;
+  }
+
+  const iconMap = { info: "ℹ️", success: "✅", warning: "⚠️", danger: "🚨" };
+  banner.innerHTML = alerts.map(a => {
+    const icon = iconMap[a.type] || "ℹ️";
+    const typeClass = `alert-${a.type || "info"}`;
+    return `
+      <div class="smart-alert ${typeClass}">
+        <span class="smart-alert-icon">${icon}</span>
+        <div class="smart-alert-body">
+          <div class="smart-alert-title">${escapeHtml(a.title)}</div>
+          <div>${escapeHtml(a.message)}</div>
+          ${a.ai_reason ? `<div class="smart-alert-reason">💡 ${escapeHtml(a.ai_reason)}</div>` : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+/* ── SSE real-time connection ─────────────────────────── */
+
+function connectSSE() {
+  if (_sseSource) { _sseSource.close(); _sseSource = null; }
+  if (typeof EventSource === "undefined") return;
+
+  _sseSource = new EventSource("/api/stream");
+
+  _sseSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === "connected") return;
+      if (data.type === "refresh") {
+        showToast(data.message || "Dados atualizados", "info");
+        fetchDashboard();
+      }
+      if (data.type === "alert") {
+        showToast(data.message || "Novo alerta", "warning", 8000);
+        fetchDashboard();
+      }
+      if (data.type === "price_alert") {
+        showToast(`💰 ${data.message}`, "success", 10000);
+      }
+      if (data.type === "smart_alert") {
+        showToast("🧠 Novos alertas inteligentes", "info", 6000);
+        renderSmartAlerts(data.alerts || []);
+        fetchDashboard();
+      }
+    } catch { /* ignore parse errors */ }
+  };
+
+  _sseSource.onerror = () => {
+    _sseSource.close();
+    _sseSource = null;
+    // Retry after 30s
+    setTimeout(connectSSE, 30_000);
+  };
 }
 
 /* ── PWA: Register service worker ─────────────────────── */
@@ -2070,12 +2637,14 @@ if ("serviceWorker" in navigator) {
 
 applyTheme(state.theme);
 applyI18n();
+initAccentColor();
 setupEvents();
 applySavedCardOrder();
 applySavedCardHeights();
 applySavedCardSpans();
 applySavedCollapseState();
 injectCardControls();
+injectFocusToggles();
 setupCardResize();
 setupCardDragAndDrop();
 setupKeyboardShortcuts();
@@ -2084,6 +2653,8 @@ normalizeCardSpansToViewport();
 updateAllCardListHeights();
 loadSavedFilters();
 setupWebPush();
+scheduleLLMPolling();
+connectSSE();
 flushOfflineQueue();
 fetchDashboard();
 scheduleDashboardPolling();

@@ -164,8 +164,34 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  pg-backup:
+    image: postgres:16-alpine
+    container_name: ws-pg-backup
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.25
+    depends_on:
+      - postgres
+    environment:
+      - PGHOST=postgres
+      - PGUSER=dashboard
+      - PGDATABASE=dashboard
+      - PGPASSWORD=${POSTGRES_PASSWORD:-dashboard}
+      - BACKUP_DIR=/backups
+      - BACKUP_RETAIN_DAYS=${BACKUP_RETAIN_DAYS:-7}
+    volumes:
+      - ./infra/pg_backup.sh:/pg_backup.sh:ro
+      - pg_backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        chmod +x /pg_backup.sh
+        echo "0 3 * * * /pg_backup.sh >> /var/log/pg_backup.log 2>&1" > /var/spool/cron/crontabs/root
+        crond -f -l 2
+
 volumes:
   pg_data:
+  pg_backups:
   redis_data:
   caddy_data:
   caddy_config:

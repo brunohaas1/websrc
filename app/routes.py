@@ -1,7 +1,11 @@
 import logging
+import time
+import queue as _queue
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template, request
+import feedparser
+import requests as http_requests
+from flask import Flask, Response, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -82,12 +86,119 @@ def register_routes(app: Flask) -> None:
         status_code = 200 if overall == "ok" else 207
         return jsonify({"status": overall, "checks": checks}), status_code
 
+    @app.get("/api/llm-status")
+    @limiter.limit("15/minute")
+    def llm_status():
+        """Lightweight LLM health probe for the dashboard indicator."""
+        if not app.config.get("AI_LOCAL_ENABLED"):
+            return jsonify({"status": "disabled", "detail": "AI_LOCAL_ENABLED=0"})
+        try:
+            import urllib.request, json as _json
+            url = app.config["AI_LOCAL_URL"].rstrip("/") + "/health"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                body = _json.loads(resp.read())
+                ok = resp.status == 200
+                return jsonify({
+                    "status": "ok" if ok else "degraded",
+                    "http_status": resp.status,
+                    "detail": body,
+                })
+        except Exception as exc:
+            return jsonify({"status": "error", "detail": str(exc)})
+
+    # ── Server-Sent Events (SSE) ───────────────────────────
+    _sse_clients: list[_queue.Queue] = []
+
+    @app.get("/api/stream")
+    @limiter.limit("5/minute")
+    def sse_stream():
+        """SSE endpoint: pushes real-time events to connected clients."""
+        q: _queue.Queue = _queue.Queue(maxsize=50)
+        _sse_clients.append(q)
+
+        def generate():
+            try:
+                yield "data: {\"type\":\"connected\"}\n\n"
+                while True:
+                    try:
+                        msg = q.get(timeout=30)
+                        yield f"data: {msg}\n\n"
+                    except _queue.Empty:
+                        yield ": keepalive\n\n"
+            except GeneratorExit:
+                pass
+            finally:
+                if q in _sse_clients:
+                    _sse_clients.remove(q)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    def broadcast_sse(event_data: str) -> None:
+        """Send an event to all connected SSE clients."""
+        dead = []
+        for q in _sse_clients:
+            try:
+                q.put_nowait(event_data)
+            except _queue.Full:
+                dead.append(q)
+        for q in dead:
+            if q in _sse_clients:
+                _sse_clients.remove(q)
+
+    # Attach broadcast to app for use in other modules
+    app.broadcast_sse = broadcast_sse  # type: ignore[attr-defined]
+
+    # ── Smart Alerts (AI-powered) ───────────────────────────
+
+    @app.post("/api/smart-alerts/analyze")
+    @limiter.limit("3/minute")
+    def smart_alerts_analyze():
+        """Run AI smart alert analysis on the current dashboard snapshot."""
+        import json as _json
+        from .services.smart_alerts_service import SmartAlertAnalyzer
+
+        # Get cached snapshot
+        cached = cache.get("dashboard:snapshot")
+        if cached:
+            snapshot = cached
+        else:
+            snapshot = repo.get_dashboard_snapshot()
+
+        analyzer = SmartAlertAnalyzer(app.config)
+        alerts = analyzer.analyze(snapshot)
+
+        # Persist each alert
+        for alert in alerts:
+            repo.create_alert(
+                alert_type=alert.get("type", "info"),
+                title=alert.get("title", ""),
+                message=alert.get("message", ""),
+                payload={"ai_reason": alert.get("ai_reason", ""), "source": alert.get("source", "")},
+            )
+
+        # Broadcast via SSE
+        if alerts:
+            broadcast_sse(_json.dumps({"type": "smart_alert", "alerts": alerts}))
+
+        cache.delete("dashboard:snapshot")
+        return jsonify({"ok": True, "alerts": alerts, "count": len(alerts)})
+
     @app.get("/metrics")
     @limiter.exempt
     def metrics():
         return export_metrics()
 
     @app.get("/api/dashboard")
+    @limiter.limit("60/minute")
     def dashboard():
         cache_key = "dashboard:snapshot"
         cached = cache.get(cache_key)
@@ -195,7 +306,7 @@ def register_routes(app: Flask) -> None:
         return jsonify(payload)
 
     @app.post("/api/price-watch")
-    @limiter.limit("20/minute")
+    @limiter.limit("10/minute")
     def add_price_watch():
         payload = request.get_json(silent=True)
         if not payload:
@@ -271,6 +382,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "Scheduler não inicializado"}), 503
 
         scheduler.run_all_now()
+        broadcast_sse('{"type":"refresh","message":"Coleta iniciada"}')
         return jsonify({"ok": True, "message": "Coleta executada."})
 
     @app.post("/api/maintenance/ai-backfill")
@@ -393,6 +505,49 @@ def register_routes(app: Flask) -> None:
         repo.toggle_custom_feed(feed_id, active)
         cache.delete("dashboard:snapshot")
         return jsonify({"ok": True})
+
+    @app.get("/api/custom-feeds/<int:feed_id>/articles")
+    @limiter.limit("10/minute")
+    def feed_articles(feed_id: int):
+        """Fetch and parse RSS/Atom articles for a given custom feed."""
+        feeds = repo.list_custom_feeds()
+        feed = next((f for f in feeds if f.get("id") == feed_id), None)
+        if not feed:
+            return jsonify({"error": "Feed não encontrado"}), 404
+
+        feed_url = feed.get("feed_url", "")
+        cache_key = f"rss:articles:{feed_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        try:
+            resp = http_requests.get(feed_url, timeout=10, headers={
+                "User-Agent": "websrc-dashboard/1.0"
+            })
+            resp.raise_for_status()
+            parsed = feedparser.parse(resp.text)
+        except Exception as exc:
+            logger.warning("RSS fetch failed for feed %d: %s", feed_id, exc)
+            return jsonify({"error": "Falha ao buscar feed", "detail": str(exc)}), 502
+
+        articles = []
+        for entry in parsed.entries[:20]:
+            published = ""
+            if hasattr(entry, "published"):
+                published = entry.published
+            elif hasattr(entry, "updated"):
+                published = entry.updated
+            articles.append({
+                "title": getattr(entry, "title", ""),
+                "link": getattr(entry, "link", ""),
+                "published": published,
+                "summary": getattr(entry, "summary", "")[:200],
+            })
+
+        result = {"feed_id": feed_id, "feed_name": feed.get("name", ""), "articles": articles}
+        cache.set(cache_key, result, ttl=300)  # 5 min cache
+        return jsonify(result)
 
     # ==================================================================
     # Favorites CRUD
@@ -587,7 +742,7 @@ def register_routes(app: Flask) -> None:
         return jsonify({"publicKey": key})
 
     @app.post("/api/push/subscribe")
-    @limiter.limit("10/minute")
+    @limiter.limit("5/minute")
     def push_subscribe():
         payload = request.get_json(silent=True)
         if not payload or "endpoint" not in payload:
@@ -680,7 +835,7 @@ def register_routes(app: Flask) -> None:
     # ==================================================================
 
     @app.get("/api/export/pdf")
-    @limiter.limit("5/hour")
+    @limiter.limit("3/hour")
     def export_pdf():
         try:
             snapshot = repo.get_dashboard_snapshot_extended()
@@ -764,6 +919,10 @@ def register_routes(app: Flask) -> None:
                 "/api/push/subscribe": {"post": {"summary": "Subscribe to push", "tags": ["Push"]}},
                 "/api/push/unsubscribe": {"post": {"summary": "Unsubscribe push", "tags": ["Push"]}},
                 "/api/export/pdf": {"get": {"summary": "Export dashboard as markdown", "tags": ["Export"]}},
+                "/api/llm-status": {"get": {"summary": "LLM health probe", "tags": ["AI"]}},
+                "/api/smart-alerts/analyze": {"post": {"summary": "AI smart alert analysis", "tags": ["AI"]}},
+                "/api/custom-feeds/{id}/articles": {"get": {"summary": "Fetch RSS articles", "tags": ["Feeds"]}},
+                "/api/stream": {"get": {"summary": "SSE real-time stream", "tags": ["System"]}},
                 "/health": {"get": {"summary": "Health check", "tags": ["System"]}},
                 "/metrics": {"get": {"summary": "Prometheus metrics", "tags": ["System"]}},
             },

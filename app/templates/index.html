@@ -56,6 +56,8 @@
           <option value="en">🇺🇸 EN</option>
         </select>
         <button id="themeToggle" class="theme-toggle" title="Alternar tema (T)">☀️</button>
+        <button id="focusModeBtn" class="btn-small" title="Modo Focus (F)">🎯 Focus</button>
+        <input type="color" id="accentColorPicker" value="#6366f1" title="Cor de destaque" class="accent-picker" />
       </div>
     </header>
 
@@ -68,6 +70,9 @@
       <div class="status-pill"><span>Latência IA</span><strong id="aiLatency">—</strong></div>
       <div class="status-pill"><span>Fallback/h</span><strong id="aiFallbackHour">—</strong></div>
       <div class="status-pill"><span>Atualizado</span><strong id="lastUpdated">—</strong></div>
+      <div class="status-pill llm-status-pill" id="llmStatusPill" title="Status da LLM">
+        <span>LLM</span><strong id="llmStatusLabel">—</strong>
+      </div>
     </section>
 
     <main class="grid" id="dashboardGrid">
@@ -78,7 +83,8 @@
       </section>
 
       <section class="card" draggable="true" data-card-id="alerts">
-        <h2>🔔 Alertas de preço</h2>
+        <h2>🔔 Alertas de preço <button class="btn-small" onclick="runSmartAnalysis()" title="Análise IA" style="margin-left:8px">🧠 Analisar</button></h2>
+        <div id="smartAlertsBanner"></div>
         <div id="alertsList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 
