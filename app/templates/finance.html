@@ -23,6 +23,7 @@
         </div>
         <div class="topbar-tools">
           <a href="/" class="btn-icon" title="Voltar ao Dashboard">🏠</a>
+          <button class="btn-icon" title="Importar Excel/CSV" onclick="openImportModal()">📥</button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
           <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
         </div>
@@ -91,7 +92,8 @@
       <section class="fin-card fin-wide" id="finPortfolioCard">
         <h2>
           💼 Meu Portfólio
-          <button class="btn-text" onclick="openAddAssetModal()" title="Adicionar ativo">➕ Adicionar</button>
+          <button class="btn-text" onclick="openAddAssetModal()" title="Adicionar ativo">➕ Ativo</button>
+          <button class="btn-text" onclick="openImportModal()" title="Importar Excel/CSV">📥 Importar</button>
         </h2>
         <div id="finPortfolioContent" class="fin-card-body">
           <div class="skeleton" style="height:120px"></div>
@@ -141,7 +143,7 @@
 
       <!-- ── AI Analysis ──────────────────────────────── -->
       <section class="fin-card fin-wide" id="finAICard">
-        <h2>🧠 Análise IA</h2>
+        <h2>🧠 Análise IA <span class="fin-ai-hint">💡 Dica: peça para a IA cadastrar ativos, transações, metas — ex: "comprei 100 PETR4 a R$35"</span></h2>
         <div class="fin-ai-toolbar">
           <button class="fin-ai-btn active" data-type="general" onclick="requestAIAnalysis('general')">📋 Geral</button>
           <button class="fin-ai-btn" data-type="risk" onclick="requestAIAnalysis('risk')">⚠️ Risco</button>

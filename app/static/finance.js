@@ -85,12 +85,13 @@ function initTheme() {
 
 async function loadAll() {
   try {
-    const [summary, transactions, watchlist, goals, market] = await Promise.all([
+    const [summary, transactions, watchlist, goals, market, assets] = await Promise.all([
       fetch("/api/finance/summary").then((r) => r.json()),
       fetch("/api/finance/transactions").then((r) => r.json()),
       fetch("/api/finance/watchlist").then((r) => r.json()),
       fetch("/api/finance/goals").then((r) => r.json()),
       fetch("/api/finance/market-data").then((r) => r.json()),
+      fetch("/api/finance/assets").then((r) => r.json()),
     ]);
 
     FIN.summary = summary;
@@ -99,10 +100,11 @@ async function loadAll() {
     FIN.watchlist = watchlist;
     FIN.goals = goals;
     FIN.marketData = market;
-    FIN.assets = FIN.portfolio.map((p) => ({
-      id: p.asset_id,
-      symbol: p.symbol,
-      name: p.name,
+    FIN.assets = (assets || []).map((a) => ({
+      id: a.id,
+      symbol: a.symbol,
+      name: a.name || a.symbol,
+      asset_type: a.asset_type,
     }));
 
     renderSummary(summary);
@@ -614,6 +616,136 @@ function closeFinModal() {
   byId("finModalOverlay").style.display = "none";
 }
 
+// ── Import Excel/CSV ─────────────────────────────────────
+
+function openImportModal() {
+  openFinModal("Importar Dados (CSV / Excel)", `
+    <div class="fin-import-section">
+      <p class="fin-import-desc">
+        Importe ativos e transações de um arquivo <strong>CSV</strong> ou <strong>Excel (.xlsx)</strong>.<br>
+        O arquivo deve conter ao menos uma coluna <code>símbolo</code> (ou <code>symbol</code>).
+      </p>
+
+      <div class="fin-import-cols">
+        <h4>Colunas reconhecidas:</h4>
+        <div class="fin-import-cols-grid">
+          <span class="fin-import-col"><strong>símbolo</strong> — ticker do ativo (obrigatório)</span>
+          <span class="fin-import-col"><strong>nome</strong> — nome do ativo</span>
+          <span class="fin-import-col"><strong>tipo</strong> — ação, fii, etf, crypto, fundo, renda fixa</span>
+          <span class="fin-import-col"><strong>operação</strong> — compra ou venda (C/V)</span>
+          <span class="fin-import-col"><strong>quantidade</strong> — qtd negociada</span>
+          <span class="fin-import-col"><strong>preço</strong> — preço unitário</span>
+          <span class="fin-import-col"><strong>taxas</strong> — corretagem / emolumentos</span>
+          <span class="fin-import-col"><strong>data</strong> — data da operação</span>
+          <span class="fin-import-col"><strong>notas</strong> — observações</span>
+        </div>
+      </div>
+
+      <div class="fin-import-actions">
+        <a href="/api/finance/import-template" class="fin-import-template-btn" download>
+          📄 Baixar modelo CSV
+        </a>
+      </div>
+
+      <form id="finImportForm" class="fin-import-form">
+        <label class="fin-import-dropzone" id="finImportDropzone">
+          <input type="file" id="finImportFile" accept=".csv,.tsv,.xlsx,.xls" style="display:none" />
+          <span class="fin-import-dropzone-icon">📁</span>
+          <span class="fin-import-dropzone-text">Clique ou arraste o arquivo aqui</span>
+          <span class="fin-import-dropzone-hint">CSV, TSV, Excel (.xlsx)</span>
+        </label>
+        <div id="finImportStatus" class="fin-import-status" style="display:none"></div>
+        <button type="submit" class="fin-form-submit" id="finImportSubmit" disabled>
+          📥 Importar Dados
+        </button>
+      </form>
+    </div>
+  `);
+
+  const fileInput = byId("finImportFile");
+  const dropzone = byId("finImportDropzone");
+  const submitBtn = byId("finImportSubmit");
+
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) {
+        dropzone.querySelector(".fin-import-dropzone-text").textContent = fileInput.files[0].name;
+        dropzone.classList.add("has-file");
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  if (dropzone) {
+    dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+    dropzone.addEventListener("dragleave", () => { dropzone.classList.remove("dragover"); });
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        dropzone.querySelector(".fin-import-dropzone-text").textContent = e.dataTransfer.files[0].name;
+        dropzone.classList.add("has-file");
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  const form = byId("finImportForm");
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await submitImport();
+    });
+  }
+}
+
+async function submitImport() {
+  const fileInput = byId("finImportFile");
+  const status = byId("finImportStatus");
+  const submitBtn = byId("finImportSubmit");
+  if (!fileInput || !fileInput.files.length) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "⏳ Importando...";
+  status.style.display = "block";
+  status.className = "fin-import-status loading";
+  status.textContent = "Processando arquivo...";
+
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+
+  try {
+    const resp = await fetch("/api/finance/import", {
+      method: "POST",
+      body: fd,
+    });
+    const data = await resp.json();
+
+    if (resp.ok && data.ok) {
+      status.className = "fin-import-status success";
+      let msg = `✅ ${data.imported} de ${data.total_rows} registros importados com sucesso!`;
+      if (data.errors && data.errors.length) {
+        msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
+      }
+      status.textContent = msg;
+      loadAll();
+    } else {
+      status.className = "fin-import-status error";
+      status.textContent = `❌ ${data.error || "Erro ao importar"}`;
+      if (data.errors && data.errors.length) {
+        status.textContent += "\n" + data.errors.join("\n");
+      }
+    }
+  } catch {
+    status.className = "fin-import-status error";
+    status.textContent = "❌ Erro de rede ao enviar arquivo";
+  }
+
+  submitBtn.textContent = "📥 Importar Dados";
+  submitBtn.disabled = false;
+}
+
 // ── Add Asset ────────────────────────────────────────────
 
 function openAddAssetModal() {
@@ -695,13 +827,48 @@ async function deleteAsset(assetId) {
 function openAddTransactionModal() {
   const assetOptions = FIN.assets.length
     ? FIN.assets.map((a) => `<option value="${a.id}">${escapeHtml(a.symbol)} — ${escapeHtml(a.name)}</option>`).join("")
-    : '<option value="">Nenhum ativo cadastrado</option>';
+    : "";
 
   openFinModal("Nova Transação", `
     <form onsubmit="submitAddTransaction(event)">
       <div class="fin-form-group">
         <label>Ativo</label>
-        <select id="fmTxAsset" required>${assetOptions}</select>
+        <select id="fmTxAsset">
+          ${assetOptions}
+          <option value="__new__">➕ Criar novo ativo...</option>
+        </select>
+      </div>
+      <div id="fmTxNewAssetBlock" class="fin-form-new-asset" style="display:none">
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Símbolo</label>
+            <input id="fmTxNewSymbol" placeholder="PETR4" />
+          </div>
+          <div class="fin-form-group">
+            <label>Nome</label>
+            <input id="fmTxNewName" placeholder="Petrobras PN" />
+          </div>
+        </div>
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Tipo de ativo</label>
+            <select id="fmTxNewType">
+              <option value="stock">Ação</option>
+              <option value="fii">FII</option>
+              <option value="etf">ETF</option>
+              <option value="crypto">Crypto</option>
+              <option value="fund">Fundo</option>
+              <option value="renda-fixa">Renda Fixa</option>
+            </select>
+          </div>
+          <div class="fin-form-group">
+            <label>Moeda</label>
+            <select id="fmTxNewCurrency">
+              <option value="BRL">BRL</option>
+              <option value="USD">USD</option>
+            </select>
+          </div>
+        </div>
       </div>
       <div class="fin-form-row">
         <div class="fin-form-group">
@@ -739,12 +906,57 @@ function openAddTransactionModal() {
       <button type="submit" class="fin-form-submit">💰 Registrar Transação</button>
     </form>
   `);
+
+  // Toggle new asset fields
+  const sel = byId("fmTxAsset");
+  if (sel) {
+    sel.addEventListener("change", () => {
+      const block = byId("fmTxNewAssetBlock");
+      if (block) block.style.display = sel.value === "__new__" ? "block" : "none";
+    });
+    // Auto-show if no assets exist
+    if (!FIN.assets.length) {
+      sel.value = "__new__";
+      const block = byId("fmTxNewAssetBlock");
+      if (block) block.style.display = "block";
+    }
+  }
 }
 
 async function submitAddTransaction(e) {
   e.preventDefault();
+  let assetId = byId("fmTxAsset").value;
+
+  // If user chose to create a new asset, do that first
+  if (assetId === "__new__") {
+    const sym = (byId("fmTxNewSymbol").value || "").trim().toUpperCase();
+    if (!sym) { alert("Informe o símbolo do ativo"); return; }
+    try {
+      const aResp = await fetch("/api/finance/assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: sym,
+          name: byId("fmTxNewName").value.trim() || sym,
+          asset_type: byId("fmTxNewType").value,
+          currency: byId("fmTxNewCurrency").value,
+        }),
+      });
+      if (!aResp.ok) {
+        const d = await aResp.json();
+        alert(d.error || "Erro ao criar ativo");
+        return;
+      }
+      const aData = await aResp.json();
+      assetId = aData.id;
+    } catch {
+      alert("Erro de rede ao criar ativo");
+      return;
+    }
+  }
+
   const body = {
-    asset_id: Number(byId("fmTxAsset").value),
+    asset_id: Number(assetId),
     tx_type: byId("fmTxType").value,
     quantity: Number(byId("fmTxQty").value),
     price: Number(byId("fmTxPrice").value),
@@ -753,7 +965,7 @@ async function submitAddTransaction(e) {
     tx_date: byId("fmTxDate").value,
   };
   if (!body.asset_id) {
-    alert("Selecione um ativo");
+    alert("Selecione ou crie um ativo");
     return;
   }
   try {
@@ -1071,7 +1283,34 @@ async function sendFinAIChat() {
     const loadingEl = byId("finAIChatLoading");
     if (loadingEl) {
       if (resp.ok && data.answer) {
-        loadingEl.innerHTML = renderMarkdown(data.answer);
+        let html = renderMarkdown(data.answer);
+
+        // Display AI action confirmations
+        if (data.actions && data.actions.length) {
+          html += '<div class="fin-ai-actions">';
+          for (const act of data.actions) {
+            const icon = act.ok ? "✅" : "❌";
+            let desc = "";
+            if (act.action === "add_transaction" || act.action === "buy" || act.action === "sell") {
+              const op = act.tx_type === "sell" ? "Venda" : "Compra";
+              desc = `${op} registrada: ${act.quantity} × ${act.symbol} a ${formatBRL(act.price)}`;
+            } else if (act.action === "add_asset") {
+              desc = `Ativo cadastrado: ${act.symbol}`;
+            } else if (act.action === "add_watchlist") {
+              desc = `Adicionado à watchlist: ${act.symbol}`;
+            } else if (act.action === "add_goal") {
+              desc = `Meta criada: ${act.name}`;
+            } else {
+              desc = `${act.action}: ${act.error || "ok"}`;
+            }
+            html += `<div class="fin-ai-action-item ${act.ok ? "success" : "error"}">${icon} ${escapeHtml(desc)}</div>`;
+          }
+          html += "</div>";
+          // Reload data since actions modified the DB
+          loadAll();
+        }
+
+        loadingEl.innerHTML = html;
         loadingEl.classList.remove("fin-ai-loading");
       } else {
         loadingEl.textContent = data.error || "Erro";

@@ -1,6 +1,11 @@
 """Financial dashboard routes."""
 
+import csv
+import io
+import json
 import logging
+import re
+from datetime import datetime
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request
@@ -227,6 +232,242 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_delete_goal(goal_id: int):
         repo.delete_fin_goal(goal_id)
         return jsonify({"ok": True})
+
+    # ── Excel / CSV Import ──────────────────────────────────
+
+    # Column name aliases (Portuguese / English / broker formats)
+    _COL_MAP: dict[str, str] = {}
+    for _alias, _field in {
+        "simbolo": "symbol", "símbolo": "symbol", "symbol": "symbol",
+        "ticker": "symbol", "ativo": "symbol", "codigo": "symbol",
+        "código": "symbol", "papel": "symbol",
+        "nome": "name", "name": "name",
+        "tipo": "asset_type", "type": "asset_type", "asset_type": "asset_type",
+        "tipo_ativo": "asset_type", "classe": "asset_type",
+        "operacao": "tx_type", "operação": "tx_type", "tx_type": "tx_type",
+        "tipo_operacao": "tx_type", "tipo_operação": "tx_type",
+        "cv": "tx_type", "c/v": "tx_type",
+        "quantidade": "quantity", "qtd": "quantity", "qtde": "quantity",
+        "qty": "quantity", "quantity": "quantity",
+        "preco": "price", "preço": "price", "price": "price",
+        "valor_unitario": "price", "preco_unitario": "price",
+        "preço_unitário": "price",
+        "taxas": "fees", "taxa": "fees", "fees": "fees",
+        "corretagem": "fees", "emolumentos": "fees",
+        "data": "date", "date": "date", "data_operacao": "date",
+        "data_operação": "date",
+        "notas": "notes", "notes": "notes", "observacao": "notes",
+        "observação": "notes", "obs": "notes",
+        "moeda": "currency", "currency": "currency",
+    }.items():
+        _COL_MAP[_alias] = _field
+
+    def _normalize_col(name: str) -> str:
+        """Normalize a column header to a known field name."""
+        clean = (
+            name.strip()
+            .lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        )
+        # Remove accents with simple mapping
+        for a, b in [("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"),
+                      ("ú", "u"), ("ã", "a"), ("õ", "o"), ("ç", "c")]:
+            clean = clean.replace(a, b)
+        return _COL_MAP.get(clean, clean)
+
+    def _parse_tx_type(val: str) -> str:
+        v = val.strip().lower()
+        if v in ("c", "compra", "buy", "b"):
+            return "buy"
+        if v in ("v", "venda", "sell", "s"):
+            return "sell"
+        return "buy"
+
+    def _parse_asset_type(val: str) -> str:
+        v = val.strip().lower()
+        type_map = {
+            "acao": "stock", "ação": "stock", "stock": "stock",
+            "acoes": "stock", "ações": "stock",
+            "fii": "fii", "crypto": "crypto", "cripto": "crypto",
+            "criptomoeda": "crypto", "bitcoin": "crypto",
+            "etf": "etf", "fundo": "fund", "fund": "fund",
+            "renda fixa": "renda-fixa", "renda-fixa": "renda-fixa",
+            "rf": "renda-fixa", "tesouro": "renda-fixa",
+        }
+        return type_map.get(v, "stock")
+
+    def _parse_number(val: str) -> float:
+        """Parse number from various formats (1.234,56 or 1,234.56)."""
+        v = str(val).strip().replace("R$", "").replace("$", "").strip()
+        if not v or v == "-":
+            return 0.0
+        # Brazilian format: 1.234,56
+        if "," in v and "." in v:
+            if v.rindex(",") > v.rindex("."):
+                v = v.replace(".", "").replace(",", ".")
+            else:
+                v = v.replace(",", "")
+        elif "," in v:
+            v = v.replace(",", ".")
+        return float(v)
+
+    @app.post("/api/finance/import")
+    @limiter.limit("5/minute")
+    def finance_import():
+        """Import assets & transactions from CSV or Excel file."""
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "Envie um arquivo CSV ou Excel"}), 400
+
+        fname = f.filename.lower()
+        rows: list[dict] = []
+
+        try:
+            if fname.endswith(".csv") or fname.endswith(".tsv"):
+                # CSV / TSV
+                raw = f.read()
+                # Try UTF-8 first, then latin-1
+                try:
+                    text = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    text = raw.decode("latin-1")
+                sep = "\t" if fname.endswith(".tsv") else None
+                if sep is None:
+                    # Auto-detect separator
+                    first_line = text.split("\n")[0]
+                    if "\t" in first_line:
+                        sep = "\t"
+                    elif ";" in first_line:
+                        sep = ";"
+                    else:
+                        sep = ","
+                reader = csv.DictReader(
+                    io.StringIO(text), delimiter=sep,
+                )
+                for row in reader:
+                    mapped = {}
+                    for k, v in row.items():
+                        if k and v:
+                            mapped[_normalize_col(k)] = v.strip()
+                    if mapped.get("symbol"):
+                        rows.append(mapped)
+
+            elif fname.endswith((".xlsx", ".xls")):
+                import openpyxl
+
+                wb = openpyxl.load_workbook(
+                    io.BytesIO(f.read()), read_only=True,
+                )
+                ws = wb.active
+                headers: list[str] = []
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i == 0:
+                        headers = [
+                            _normalize_col(str(c or "")) for c in row
+                        ]
+                        continue
+                    mapped = {}
+                    for j, val in enumerate(row):
+                        if j < len(headers) and val is not None:
+                            mapped[headers[j]] = str(val).strip()
+                    if mapped.get("symbol"):
+                        rows.append(mapped)
+                wb.close()
+            else:
+                return jsonify({
+                    "error": "Formato não suportado. Use .csv, .tsv ou .xlsx",
+                }), 400
+        except Exception as exc:
+            logger.warning("Import parse error: %s", exc)
+            return jsonify({"error": f"Erro ao ler arquivo: {exc}"}), 400
+
+        if not rows:
+            return jsonify({
+                "error": "Nenhuma linha válida encontrada. "
+                "O arquivo precisa ter ao menos uma coluna 'símbolo' ou 'symbol'.",
+            }), 400
+
+        imported = 0
+        errors_list: list[str] = []
+        has_tx_cols = any(
+            r.get("quantity") or r.get("price") for r in rows
+        )
+
+        for idx, row in enumerate(rows, start=2):
+            try:
+                symbol = sanitize_text(
+                    row["symbol"].upper().strip(), 20,
+                )
+                name = sanitize_text(
+                    row.get("name", symbol), 100,
+                )
+                asset_type = _parse_asset_type(
+                    row.get("asset_type", "stock"),
+                )
+                currency = sanitize_text(
+                    row.get("currency", "BRL").upper(), 10,
+                )
+
+                # Upsert the asset
+                asset_id = repo.upsert_fin_asset({
+                    "symbol": symbol,
+                    "name": name,
+                    "asset_type": asset_type,
+                    "currency": currency,
+                })
+
+                # If has transaction columns, also create transaction
+                if has_tx_cols and row.get("quantity") and row.get("price"):
+                    qty = _parse_number(row["quantity"])
+                    price = _parse_number(row["price"])
+                    fees = _parse_number(row.get("fees", "0"))
+                    tx_type = _parse_tx_type(row.get("tx_type", "buy"))
+                    tx_date = row.get("date", "")
+                    if not tx_date:
+                        tx_date = datetime.now().strftime("%Y-%m-%d")
+
+                    repo.add_fin_transaction({
+                        "asset_id": asset_id,
+                        "tx_type": tx_type,
+                        "quantity": qty,
+                        "price": price,
+                        "total": qty * price + fees,
+                        "fees": fees,
+                        "notes": sanitize_text(
+                            row.get("notes", "Importado"), 500,
+                        ),
+                        "tx_date": tx_date,
+                    })
+                    _recalc_portfolio(repo, asset_id)
+
+                imported += 1
+            except Exception as exc:
+                errors_list.append(f"Linha {idx}: {exc}")
+
+        cache.delete("finance:summary")
+        return jsonify({
+            "ok": True,
+            "imported": imported,
+            "total_rows": len(rows),
+            "errors": errors_list[:20],
+        }), 200 if imported else 400
+
+    # ── Import Template (sample CSV) ───────────────────────
+
+    @app.get("/api/finance/import-template")
+    def finance_import_template():
+        header = "simbolo;nome;tipo;operacao;quantidade;preco;taxas;data;notas\n"
+        sample = "PETR4;Petrobras PN;acao;compra;100;35.50;4.90;2026-01-15;Minha primeira compra\n"
+        content = header + sample
+        return (
+            content,
+            200,
+            {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": "attachment; filename=modelo_importacao.csv",
+            },
+        )
 
     # ── Market Data (brapi.dev for BR stocks, CoinGecko for crypto) ──
 
@@ -506,12 +747,179 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             logger.warning("Finance AI analysis failed: %s", exc)
             return jsonify({"error": str(exc)}), 502
 
-    # ── AI Chat Financeiro ──────────────────────────────────
+    # ── AI Chat Financeiro (com auto-cadastro) ────────────
+
+    def _execute_ai_actions(
+        actions: list[dict],
+    ) -> list[dict]:
+        """Execute structured actions returned by AI."""
+        results: list[dict] = []
+        for act in actions:
+            act_type = act.get("action", "")
+            try:
+                if act_type == "add_asset":
+                    symbol = sanitize_text(
+                        str(act.get("symbol", "")).upper().strip(), 20,
+                    )
+                    if not symbol:
+                        continue
+                    aid = repo.upsert_fin_asset({
+                        "symbol": symbol,
+                        "name": sanitize_text(
+                            str(act.get("name", symbol)), 100,
+                        ),
+                        "asset_type": _parse_asset_type(
+                            str(act.get("asset_type", "stock")),
+                        ),
+                        "currency": sanitize_text(
+                            str(act.get("currency", "BRL")).upper(), 10,
+                        ),
+                    })
+                    results.append({
+                        "action": "add_asset",
+                        "symbol": symbol,
+                        "id": aid,
+                        "ok": True,
+                    })
+
+                elif act_type in ("add_transaction", "buy", "sell"):
+                    symbol = sanitize_text(
+                        str(act.get("symbol", "")).upper().strip(), 20,
+                    )
+                    if not symbol:
+                        continue
+                    # Ensure asset exists
+                    asset = repo.get_fin_asset_by_symbol(symbol)
+                    if not asset:
+                        aid = repo.upsert_fin_asset({
+                            "symbol": symbol,
+                            "name": sanitize_text(
+                                str(act.get("name", symbol)), 100,
+                            ),
+                            "asset_type": _parse_asset_type(
+                                str(act.get("asset_type", "stock")),
+                            ),
+                            "currency": "BRL",
+                        })
+                    else:
+                        aid = asset["id"]
+
+                    qty = float(act.get("quantity", 0))
+                    price = float(act.get("price", 0))
+                    fees = float(act.get("fees", 0))
+                    if qty <= 0 or price <= 0:
+                        results.append({
+                            "action": act_type,
+                            "symbol": symbol,
+                            "ok": False,
+                            "error": "quantidade e preço obrigatórios",
+                        })
+                        continue
+
+                    tx_type = "sell" if act_type == "sell" else (
+                        _parse_tx_type(str(act.get("tx_type", "buy")))
+                    )
+                    tx_date = str(act.get("date", "")) or (
+                        datetime.now().strftime("%Y-%m-%d")
+                    )
+                    total = qty * price + fees
+
+                    tx_id = repo.add_fin_transaction({
+                        "asset_id": aid,
+                        "tx_type": tx_type,
+                        "quantity": qty,
+                        "price": price,
+                        "total": total,
+                        "fees": fees,
+                        "notes": sanitize_text(
+                            str(act.get("notes", "Via IA")), 500,
+                        ),
+                        "tx_date": tx_date,
+                    })
+                    _recalc_portfolio(repo, aid)
+                    results.append({
+                        "action": "add_transaction",
+                        "symbol": symbol,
+                        "tx_type": tx_type,
+                        "quantity": qty,
+                        "price": price,
+                        "tx_id": tx_id,
+                        "ok": True,
+                    })
+
+                elif act_type == "add_watchlist":
+                    symbol = sanitize_text(
+                        str(act.get("symbol", "")).upper().strip(), 20,
+                    )
+                    if not symbol:
+                        continue
+                    wid = repo.add_fin_watchlist({
+                        "symbol": symbol,
+                        "name": sanitize_text(
+                            str(act.get("name", symbol)), 100,
+                        ),
+                        "asset_type": _parse_asset_type(
+                            str(act.get("asset_type", "stock")),
+                        ),
+                        "target_price": (
+                            float(act["target_price"])
+                            if act.get("target_price") else None
+                        ),
+                        "alert_above": bool(act.get("alert_above")),
+                        "notes": sanitize_text(
+                            str(act.get("notes", "")), 500,
+                        ),
+                    })
+                    results.append({
+                        "action": "add_watchlist",
+                        "symbol": symbol,
+                        "id": wid,
+                        "ok": True,
+                    })
+
+                elif act_type == "add_goal":
+                    name = sanitize_text(
+                        str(act.get("name", "")), 100,
+                    )
+                    target = float(act.get("target_amount", 0))
+                    if not name or target <= 0:
+                        continue
+                    gid = repo.add_fin_goal({
+                        "name": name,
+                        "target_amount": target,
+                        "current_amount": float(
+                            act.get("current_amount", 0),
+                        ),
+                        "deadline": str(act.get("deadline", "")) or None,
+                        "category": sanitize_text(
+                            str(act.get("category", "savings")), 30,
+                        ),
+                        "notes": sanitize_text(
+                            str(act.get("notes", "")), 500,
+                        ),
+                    })
+                    results.append({
+                        "action": "add_goal",
+                        "name": name,
+                        "id": gid,
+                        "ok": True,
+                    })
+
+            except Exception as exc:
+                results.append({
+                    "action": act_type,
+                    "ok": False,
+                    "error": str(exc),
+                })
+
+        if results:
+            cache.delete("finance:summary")
+        return results
 
     @app.post("/api/finance/ai-chat")
     @limiter.limit("8/minute")
     def finance_ai_chat():
-        """Open-ended financial chat with AI."""
+        """Open-ended financial chat with AI + auto-register."""
         if not app.config.get("AI_LOCAL_ENABLED"):
             return jsonify({"error": "IA local não habilitada"}), 503
 
@@ -520,22 +928,71 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if not user_msg:
             return jsonify({"error": "message obrigatório"}), 400
 
+        # Build context
         summary = repo.get_fin_summary()
         currency = repo.list_currency_rates()
+        goals = repo.list_fin_goals()
+        assets = repo.list_fin_assets()
 
-        ctx = (
+        ctx_parts = [
             f"Portfólio: R${summary['current_value']:,.2f} "
-            f"(P&L {summary['total_pnl_pct']:+.1f}%). "
-        )
+            f"(investido R${summary['total_invested']:,.2f}, "
+            f"P&L {summary['total_pnl_pct']:+.1f}%).",
+        ]
         for p in summary.get("portfolio", [])[:10]:
-            ctx += f"{p['symbol']}:{p['quantity']:.0f}un "
+            ctx_parts.append(
+                f"  {p['symbol']}: {p['quantity']:.2f}un "
+                f"× R${p.get('current_price', 0):.2f}",
+            )
         for c in currency:
-            ctx += f"{c['pair']}:R${c['rate']:.2f} "
+            ctx_parts.append(
+                f"  Câmbio {c['pair']}: R${c['rate']:.2f}",
+            )
+        for g in goals[:5]:
+            pct = (
+                (g["current_amount"] / g["target_amount"] * 100)
+                if g["target_amount"] else 0
+            )
+            ctx_parts.append(
+                f"  Meta '{g['name']}': {pct:.0f}% "
+                f"(R${g['current_amount']:,.2f}/R${g['target_amount']:,.2f})",
+            )
+        asset_symbols = [a["symbol"] for a in assets[:30]]
+        if asset_symbols:
+            ctx_parts.append(
+                f"  Ativos cadastrados: {', '.join(asset_symbols)}",
+            )
 
         system_prompt = (
-            "Você é um assistente financeiro pessoal. Responda em português "
-            "de forma clara e objetiva. Use markdown.\n"
-            "Dados do usuário: " + ctx
+            "Você é um assistente financeiro pessoal brasileiro inteligente. "
+            "Responda sempre em português de forma clara e objetiva.\n\n"
+            "IMPORTANTE: Quando o usuário pedir para REGISTRAR, CADASTRAR, COMPRAR, "
+            "VENDER, ADICIONAR um ativo, transação, item na watchlist ou meta financeira, "
+            "você DEVE incluir um bloco JSON de ações no início da resposta no formato:\n"
+            "```actions\n"
+            '[{"action": "TIPO", ...campos}]\n'
+            "```\n\n"
+            "Tipos de ação disponíveis:\n"
+            '- {"action":"add_asset","symbol":"PETR4","name":"Petrobras PN",'
+            '"asset_type":"stock","currency":"BRL"}\n'
+            '- {"action":"buy","symbol":"PETR4","quantity":100,"price":35.50,'
+            '"fees":4.90,"date":"2026-01-15","notes":"..."}\n'
+            '- {"action":"sell","symbol":"PETR4","quantity":50,"price":40.00,'
+            '"fees":4.90,"date":"2026-01-15"}\n'
+            '- {"action":"add_watchlist","symbol":"VALE3","name":"Vale SA",'
+            '"asset_type":"stock","target_price":68.00,"alert_above":false}\n'
+            '- {"action":"add_goal","name":"Reserva de emergência",'
+            '"target_amount":50000,"current_amount":10000,'
+            '"deadline":"2027-01-01","category":"savings"}\n\n'
+            "Regras:\n"
+            "- Múltiplas ações podem ser enviadas no mesmo bloco JSON (array).\n"
+            "- Sempre confirme ao usuário o que foi feito após o bloco de ações.\n"
+            "- asset_type pode ser: stock, fii, etf, crypto, fund, renda-fixa\n"
+            "- Se o usuário não informar o preço ou quantidade, PERGUNTE antes de criar.\n"
+            "- Se for apenas uma pergunta/análise, NÃO inclua o bloco actions.\n"
+            "- Use markdown na resposta textual.\n\n"
+            "Dados financeiros atuais do usuário:\n"
+            + "\n".join(ctx_parts)
         )
 
         try:
@@ -554,22 +1011,67 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_msg},
                     ],
-                    "max_tokens": 500,
-                    "temperature": 0.7,
+                    "max_tokens": 700,
+                    "temperature": 0.4,
                 },
-                timeout=app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 30),
+                timeout=app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 45),
             )
-            if resp.ok:
-                data = resp.json()
-                choices = data.get("choices", [])
-                answer = (
-                    choices[0]["message"]["content"]
-                    if choices else "Sem resposta"
+            if not resp.ok:
+                return jsonify({
+                    "error": f"AI retornou {resp.status_code}",
+                }), 502
+
+            data = resp.json()
+            choices = data.get("choices", [])
+            raw_answer = (
+                choices[0]["message"]["content"]
+                if choices else "Sem resposta"
+            )
+
+            # Extract action blocks from AI response
+            actions_executed: list[dict] = []
+            clean_answer = raw_answer
+
+            # Pattern: ```actions\n[...]\n```
+            action_pattern = re.compile(
+                r"```actions?\s*\n(.*?)\n```",
+                re.DOTALL | re.IGNORECASE,
+            )
+            matches = action_pattern.findall(raw_answer)
+
+            if not matches:
+                # Also try inline JSON arrays [{"action":...}]
+                json_pattern = re.compile(
+                    r'\[\s*\{["\']action["\'].*?\}\s*\]',
+                    re.DOTALL,
                 )
-                return jsonify({"answer": answer})
+                matches = json_pattern.findall(raw_answer)
+
+            for match in matches:
+                try:
+                    parsed = json.loads(match)
+                    if isinstance(parsed, dict):
+                        parsed = [parsed]
+                    if isinstance(parsed, list):
+                        results = _execute_ai_actions(parsed)
+                        actions_executed.extend(results)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Remove action blocks from displayed answer
+            clean_answer = action_pattern.sub("", clean_answer).strip()
+            clean_answer = re.sub(
+                r'\[\s*\{["\']action["\'].*?\}\s*\]',
+                "",
+                clean_answer,
+                flags=re.DOTALL,
+            ).strip()
+
             return jsonify({
-                "error": f"AI retornou {resp.status_code}",
-            }), 502
+                "answer": clean_answer,
+                "actions": actions_executed,
+            })
+
         except Exception as exc:
             return jsonify({"error": str(exc)}), 502
 
