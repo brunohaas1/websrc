@@ -2029,7 +2029,11 @@ class Repository:
     def list_fin_watchlist(self) -> list[dict[str, Any]]:
         with get_connection(self.database_target) as conn:
             rows = conn.execute(
-                "SELECT * FROM fin_watchlist ORDER BY symbol",
+                "SELECT w.*, a.current_price, a.previous_close, "
+                "a.day_change, a.day_change_pct "
+                "FROM fin_watchlist w "
+                "LEFT JOIN fin_assets a ON UPPER(a.symbol) = UPPER(w.symbol) "
+                "ORDER BY w.symbol",
             ).fetchall()
             return [dict(r) for r in rows]
 

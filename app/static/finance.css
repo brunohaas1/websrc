@@ -269,10 +269,18 @@
   gap: 10px;
   padding: 10px 0;
   border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  flex-wrap: wrap;
 }
 
 .fin-wl-item:last-child {
   border-bottom: none;
+}
+
+.fin-wl-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 200px;
 }
 
 .fin-wl-symbol {
@@ -284,12 +292,49 @@
 .fin-wl-name {
   color: var(--text-muted, #8b92a5);
   font-size: 0.82rem;
+}
+
+.fin-wl-prices {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
+  min-width: 180px;
+}
+
+.fin-wl-price {
+  font-weight: 700;
+  font-size: 0.95rem;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.fin-wl-change {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.fin-wl-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .fin-wl-target {
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.fin-wl-alert {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-light, #60a5fa);
+  animation: pulse-alert 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-alert {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* ── Goals ────────────────────────────────────────────── */

@@ -332,12 +332,43 @@ function renderWatchlist(watchlist) {
       const targetStr = w.target_price ? `Alvo: ${formatBRL(w.target_price)}` : "";
       const dir = w.alert_above ? "↑" : "↓";
       const typeCls = badgeClass(w.asset_type);
+      const hasPrice = w.current_price != null;
+      const priceStr = hasPrice ? formatBRL(w.current_price) : "—";
+
+      // Change info
+      let changeHtml = "";
+      if (hasPrice && w.day_change != null) {
+        const cls = changeClass(w.day_change);
+        const pctStr = w.day_change_pct != null ? ` (${formatPct(w.day_change_pct)})` : "";
+        changeHtml = `<span class="fin-wl-change ${cls}">${formatBRL(w.day_change)}${pctStr}</span>`;
+      }
+
+      // Alert status: compare current price with target
+      let alertHtml = "";
+      if (hasPrice && w.target_price) {
+        const triggered = w.alert_above
+          ? w.current_price >= w.target_price
+          : w.current_price <= w.target_price;
+        if (triggered) {
+          alertHtml = '<span class="fin-wl-alert">🔔 Alvo atingido!</span>';
+        }
+      }
+
       return `
         <div class="fin-wl-item">
-          <span class="fin-wl-symbol">${escapeHtml(w.symbol)}</span>
-          <span class="fin-badge ${typeCls}">${escapeHtml(w.asset_type)}</span>
-          <span class="fin-wl-name">${escapeHtml(w.name)}</span>
-          <span class="fin-wl-target">${targetStr} ${dir}</span>
+          <div class="fin-wl-info">
+            <span class="fin-wl-symbol">${escapeHtml(w.symbol)}</span>
+            <span class="fin-badge ${typeCls}">${escapeHtml(w.asset_type)}</span>
+            <span class="fin-wl-name">${escapeHtml(w.name)}</span>
+          </div>
+          <div class="fin-wl-prices">
+            <span class="fin-wl-price">${priceStr}</span>
+            ${changeHtml}
+          </div>
+          <div class="fin-wl-meta">
+            <span class="fin-wl-target">${targetStr} ${dir}</span>
+            ${alertHtml}
+          </div>
           <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">🗑️</button>
         </div>
       `;
