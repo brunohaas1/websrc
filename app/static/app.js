@@ -130,10 +130,18 @@ function resolveItemSummary(item) {
   const aiSummary = String(extra.ai_summary || "").trim();
   if (aiSummary) return aiSummary;
 
-  const title = String(item?.title || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const summary = String(item?.summary || "").replace(/\s+/g, " ").trim();
+  const titleRaw = String(item?.title || "").replace(/\s+/g, " ").trim();
+  const title = titleRaw.toLowerCase();
+  let summary = String(item?.summary || "").replace(/\s+/g, " ").trim();
   if (!summary) return "";
   if (title && summary.toLowerCase() === title) return "";
+
+  const normalizedTitle = titleRaw.replace(/[\s.:-–—]+$/g, "");
+  if (normalizedTitle && summary.toLowerCase().startsWith(normalizedTitle.toLowerCase())) {
+    summary = summary.slice(normalizedTitle.length).replace(/^[\s.:-–—]+/, "").trim();
+  }
+
+  if (!summary || (title && summary.toLowerCase() === title)) return "";
 
   return summary;
 }

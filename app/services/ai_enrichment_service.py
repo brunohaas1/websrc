@@ -356,9 +356,18 @@ class LocalAIEnricher:
                 best_category = category
 
         relevance = min(100, 35 + best_score * 12)
-        one_line = title or (
-            summary[:140] if summary else "Sem resumo disponível"
-        )
+        clean_summary = summary
+        title_low = title.lower().rstrip(" .:-–—")
+        if title_low and clean_summary.lower().startswith(title_low):
+            clean_summary = clean_summary[len(title):].lstrip(" .:-–—")
+
+        if clean_summary and clean_summary.lower() != title.lower():
+            one_line = clean_summary[:140]
+        elif title:
+            one_line = "Sem resumo adicional; confira a matéria no link."
+        else:
+            one_line = "Sem resumo disponível"
+
         if len(one_line) > 140:
             one_line = f"{one_line[:137]}..."
 

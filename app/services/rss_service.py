@@ -81,6 +81,21 @@ class RSSCollector(BaseCollector):
         return cls._strip_html(str(text or ""))
 
     @classmethod
+    def _strip_title_prefix(cls, title: str, summary: str) -> str:
+        normalized_title = cls._normalize_text(title)
+        normalized_summary = cls._normalize_text(summary)
+        if not normalized_title or not normalized_summary:
+            return normalized_summary
+
+        title_low = normalized_title.lower().rstrip(" .:-–—")
+        summary_low = normalized_summary.lower()
+        if not summary_low.startswith(title_low):
+            return normalized_summary
+
+        stripped = normalized_summary[len(normalized_title):].lstrip(" .:-–—")
+        return stripped.strip()
+
+    @classmethod
     def _build_summary(cls, entry, title: str) -> str:
         candidates: list[str] = [
             getattr(entry, "summary", ""),
@@ -97,6 +112,9 @@ class RSSCollector(BaseCollector):
 
         for candidate in candidates:
             normalized = cls._normalize_text(candidate)
+            if not normalized:
+                continue
+            normalized = cls._strip_title_prefix(title, normalized)
             if not normalized:
                 continue
             if normalized.lower() == title_norm:
