@@ -2523,6 +2523,19 @@ select:focus:not(:focus-visible) { outline: none; }
   animation: fadeIn 0.2s ease;
 }
 
+/* Display section uses a 2-column grid for compact toggles */
+.settings-section[data-section="display"] .settings-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 24px;
+}
+
+@media (max-width: 700px) {
+  .settings-section[data-section="display"] .settings-fields-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-section h3 {
   font-size: 1.05rem;
   font-weight: 700;

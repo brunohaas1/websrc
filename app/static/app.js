@@ -3352,7 +3352,93 @@ const SETTINGS_SECTIONS = [
       { key: "job_feeds_custom", label: "Job Feeds extras (JSON)", type: "json", placeholder: '[{"source":"Nome","url":"https://..."}]' },
     ],
   },
+  {
+    id: "display",
+    icon: "👁️",
+    label: "Exibição",
+    fields: [
+      { key: "show_status_bar", label: "Barra de status", type: "toggle" },
+      { key: "card_weather", label: "🌤️ Clima", type: "toggle" },
+      { key: "card_alerts", label: "🔔 Alertas de preço", type: "toggle" },
+      { key: "card_prices", label: "💸 Monitor de preços", type: "toggle" },
+      { key: "card_news", label: "📰 Notícias", type: "toggle" },
+      { key: "card_promotions", label: "🎮 Promoções", type: "toggle" },
+      { key: "card_videos", label: "📺 Vídeos", type: "toggle" },
+      { key: "card_jobs", label: "💼 Vagas", type: "toggle" },
+      { key: "card_tech", label: "🤖 Tech e IA", type: "toggle" },
+      { key: "card_ai_observability", label: "📊 Observabilidade IA", type: "toggle" },
+      { key: "card_releases", label: "🚀 Releases", type: "toggle" },
+      { key: "card_currency", label: "💱 Câmbio", type: "toggle" },
+      { key: "card_service_monitor", label: "🖥️ Monitor de Serviços", type: "toggle" },
+      { key: "card_daily_digest", label: "📝 Resumo Diário IA", type: "toggle" },
+      { key: "card_trending", label: "🔥 Trending", type: "toggle" },
+      { key: "card_custom_feeds", label: "📡 RSS Feeds", type: "toggle" },
+      { key: "card_favorites", label: "⭐ Favoritos", type: "toggle" },
+      { key: "card_release_calendar", label: "📅 Calendário Releases", type: "toggle" },
+      { key: "card_system_uptime", label: "🖥️ System Uptime", type: "toggle" },
+      { key: "card_cache_analytics", label: "📦 Cache Analytics", type: "toggle" },
+      { key: "card_workers", label: "⚙️ Workers RQ", type: "toggle" },
+      { key: "card_ai_chat", label: "💬 Chat IA", type: "toggle" },
+      { key: "card_events_calendar", label: "📆 Calendário Eventos", type: "toggle" },
+      { key: "card_webhooks", label: "🔗 Webhooks", type: "toggle" },
+    ],
+  },
 ];
+
+/* Card-to-setting key mapping (data-card-id → setting key) */
+const CARD_VISIBILITY_MAP = {
+  "weather": "card_weather",
+  "alerts": "card_alerts",
+  "prices": "card_prices",
+  "news": "card_news",
+  "promotions": "card_promotions",
+  "videos": "card_videos",
+  "jobs": "card_jobs",
+  "tech": "card_tech",
+  "ai-observability": "card_ai_observability",
+  "releases": "card_releases",
+  "currency": "card_currency",
+  "service-monitor": "card_service_monitor",
+  "daily-digest": "card_daily_digest",
+  "trending": "card_trending",
+  "custom-feeds": "card_custom_feeds",
+  "favorites": "card_favorites",
+  "release-calendar": "card_release_calendar",
+  "system-uptime": "card_system_uptime",
+  "cache-analytics": "card_cache_analytics",
+  "workers": "card_workers",
+  "ai-chat": "card_ai_chat",
+  "events-calendar": "card_events_calendar",
+  "webhooks": "card_webhooks",
+};
+
+function applyCardVisibility(settings) {
+  /* Hide/show cards based on settings */
+  for (const [cardId, settingKey] of Object.entries(CARD_VISIBILITY_MAP)) {
+    const card = document.querySelector(`[data-card-id="${cardId}"]`);
+    if (!card) continue;
+    const visible = settings[settingKey];
+    const hidden = visible === "0" || visible === false || visible === 0;
+    card.style.display = hidden ? "none" : "";
+  }
+  /* Status bar */
+  const statusBar = document.querySelector(".status-bar");
+  if (statusBar) {
+    const showBar = settings.show_status_bar;
+    statusBar.style.display = (showBar === "0" || showBar === false || showBar === 0) ? "none" : "";
+  }
+}
+
+async function loadAndApplyVisibility() {
+  try {
+    const resp = await fetch("/api/settings");
+    if (resp.ok) {
+      const settings = await resp.json();
+      _settingsData = settings;
+      applyCardVisibility(settings);
+    }
+  } catch { /* ignore – cards stay visible by default */ }
+}
 
 async function openSettingsPanel() {
   _settingsOpen = true;
@@ -3391,12 +3477,14 @@ function renderSettingsModal() {
     </button>`
   ).join("");
 
-  const sectionsHtml = SETTINGS_SECTIONS.map((s, i) =>
-    `<div class="settings-section${i === 0 ? " active" : ""}" data-section="${s.id}">
+  const sectionsHtml = SETTINGS_SECTIONS.map((s, i) => {
+    const fieldsHtml = s.fields.map(f => renderSettingsField(f)).join("");
+    const wrap = s.id === "display" ? `<div class="settings-fields-grid">${fieldsHtml}</div>` : fieldsHtml;
+    return `<div class="settings-section${i === 0 ? " active" : ""}" data-section="${s.id}">
       <h3>${s.icon} ${s.label}</h3>
-      ${s.fields.map(f => renderSettingsField(f)).join("")}
-    </div>`
-  ).join("");
+      ${wrap}
+    </div>`;
+  }).join("");
 
   modal.innerHTML = `
     <div class="settings-container">
@@ -3534,6 +3622,7 @@ async function saveSettings() {
       showToast(`✅ ${data.count} configurações salvas!`, "success");
       if (statusEl) statusEl.textContent = `✅ ${data.count} salvas`;
       _settingsData = { ..._settingsData, ...payload };
+      applyCardVisibility(_settingsData);
     }
   } catch {
     showToast("Erro de rede", "error");
@@ -3599,6 +3688,7 @@ connectSSE();
 flushOfflineQueue();
 setupPiPDrag();
 pollNotifCount();
+loadAndApplyVisibility();
 fetchDashboard();
 scheduleDashboardPolling();
 document.addEventListener("visibilitychange", () => {
