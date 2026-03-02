@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -152,240 +153,119 @@ class Repository:
 
         with get_connection(self.database_target) as conn:
             if self.is_postgres:
-                totals_query = """
-                SELECT
-                    COUNT(*) AS total_items,
-                    SUM(
-                        CASE
-                            WHEN (extra_json::jsonb ->> 'ai_summary')
-                                 IS NOT NULL
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS enriched_items,
-                    AVG(
-                        CASE
-                            WHEN (
-                                extra_json::jsonb ->> 'ai_latency_ms'
-                            )::float > 0
-                            THEN (extra_json::jsonb ->> 'ai_latency_ms')::float
-                            ELSE NULL
-                        END
-                    ) AS avg_ai_latency_ms
+                rows_query = """
+                SELECT source, extra_json, created_at
                 FROM items
                 WHERE item_type IN (%s, %s, %s, %s, %s)
                   AND created_at >= NOW() - INTERVAL '24 hours'
-                """
-
-                fallback_query = """
-                SELECT
-                    to_char(
-                        date_trunc('hour', created_at),
-                        'YYYY-MM-DD HH24:00'
-                    )
-                        AS hour,
-                    COUNT(*) AS total,
-                    SUM(
-                        CASE
-                               WHEN (extra_json::jsonb ->> 'ai_reason')
-                                   LIKE 'fallback%'
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS fallback
-                FROM items
-                WHERE item_type IN (%s, %s, %s, %s, %s)
-                  AND created_at >= NOW() - INTERVAL '24 hours'
-                GROUP BY hour
-                ORDER BY hour DESC
-                LIMIT 12
-                """
-
-                source_query = """
-                SELECT
-                    lower(trim(source)) AS source,
-                    SUM(
-                        CASE
-                               WHEN (extra_json::jsonb ->> 'ai_summary')
-                                   IS NOT NULL
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS enriched_items,
-                    SUM(
-                        CASE
-                               WHEN (extra_json::jsonb ->> 'ai_reason')
-                                   = 'local-ai'
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS model_success
-                FROM items
-                WHERE item_type IN (%s, %s, %s, %s, %s)
-                  AND created_at >= NOW() - INTERVAL '24 hours'
-                GROUP BY source
-                HAVING SUM(
-                    CASE
-                        WHEN (extra_json::jsonb ->> 'ai_summary') IS NOT NULL
-                        THEN 1
-                        ELSE 0
-                    END
-                ) > 0
-                ORDER BY enriched_items DESC
-                LIMIT 10
-                """
-
-                reason_query = """
-                SELECT
-                    COALESCE((extra_json::jsonb ->> 'ai_reason'), 'sem-motivo')
-                        AS reason,
-                    COUNT(*) AS total
-                FROM items
-                WHERE item_type IN (%s, %s, %s, %s, %s)
-                  AND created_at >= NOW() - INTERVAL '24 hours'
-                GROUP BY reason
-                ORDER BY total DESC
-                LIMIT 10
                 """
             else:
-                totals_query = """
-                SELECT
-                    COUNT(*) AS total_items,
-                    SUM(
-                        CASE
-                            WHEN json_extract(
-                                extra_json,
-                                '$.ai_summary'
-                            ) IS NOT NULL
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS enriched_items,
-                    AVG(
-                        CASE
-                            WHEN json_extract(
-                                extra_json,
-                                '$.ai_latency_ms'
-                            ) > 0
-                            THEN json_extract(extra_json, '$.ai_latency_ms')
-                            ELSE NULL
-                        END
-                    ) AS avg_ai_latency_ms
+                rows_query = """
+                SELECT source, extra_json, created_at
                 FROM items
                 WHERE item_type IN (?, ?, ?, ?, ?)
                   AND datetime(created_at) >= datetime('now', '-24 hours')
-                                """
-                fallback_query = """
-                SELECT
-                    strftime('%Y-%m-%d %H:00', created_at) AS hour,
-                    COUNT(*) AS total,
-                    SUM(
-                        CASE
-                            WHEN json_extract(extra_json, '$.ai_reason')
-                                 LIKE 'fallback%'
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS fallback
-                FROM items
-                WHERE item_type IN (?, ?, ?, ?, ?)
-                  AND datetime(created_at) >= datetime('now', '-24 hours')
-                GROUP BY hour
-                ORDER BY hour DESC
-                LIMIT 12
                 """
 
-                source_query = """
-                SELECT
-                    lower(trim(source)) AS source,
-                    SUM(
-                        CASE
-                            WHEN json_extract(
-                                extra_json,
-                                '$.ai_summary'
-                            ) IS NOT NULL
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS enriched_items,
-                    SUM(
-                        CASE
-                            WHEN json_extract(
-                                extra_json,
-                                '$.ai_reason'
-                            ) = 'local-ai'
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS model_success
-                FROM items
-                WHERE item_type IN (?, ?, ?, ?, ?)
-                  AND datetime(created_at) >= datetime('now', '-24 hours')
-                GROUP BY source
-                HAVING enriched_items > 0
-                ORDER BY enriched_items DESC
-                LIMIT 10
-                """
-
-                reason_query = """
-                SELECT
-                    COALESCE(
-                        json_extract(extra_json, '$.ai_reason'),
-                        'sem-motivo'
-                    )
-                        AS reason,
-                    COUNT(*) AS total
-                FROM items
-                WHERE item_type IN (?, ?, ?, ?, ?)
-                  AND datetime(created_at) >= datetime('now', '-24 hours')
-                GROUP BY reason
-                ORDER BY total DESC
-                LIMIT 10
-                """
-
-            totals_row = conn.execute(
-                self._sql(totals_query),
+            rows = conn.execute(
+                self._sql(rows_query),
                 observed_types,
             ).fetchall()
 
-            fallback_rows = conn.execute(
-                self._sql(fallback_query),
-                observed_types,
-            ).fetchall()
+        total = 0
+        enriched = 0
+        latencies: list[float] = []
+        per_hour: dict[str, dict[str, int]] = {}
+        per_source: dict[str, dict[str, int]] = {}
+        per_reason: dict[str, int] = {}
 
-            source_rows = conn.execute(
-                self._sql(source_query),
-                observed_types,
-            ).fetchall()
+        def _to_datetime(value: Any) -> datetime | None:
+            if isinstance(value, datetime):
+                return value
+            if not value:
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            normalized = text.replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
+            return parsed
 
-            reason_rows = conn.execute(
-                self._sql(reason_query),
-                observed_types,
-            ).fetchall()
+        for row in rows:
+            total += 1
+            extra = json_loads(row.get("extra_json"))
+            if not isinstance(extra, dict):
+                extra = {}
 
-        totals = totals_row[0] if totals_row else {}
-        total = int(totals["total_items"] or 0)
-        enriched = int(totals["enriched_items"] or 0)
-        avg_latency_value = totals["avg_ai_latency_ms"]
+            ai_summary = str(extra.get("ai_summary") or "").strip()
+            has_enrichment = bool(ai_summary)
+            if has_enrichment:
+                enriched += 1
 
-        fallback_rate_by_hour = []
-        for row in fallback_rows:
-            total_hour = int(row["total"] or 0)
-            fallback_hour = int(row["fallback"] or 0)
+            raw_latency = extra.get("ai_latency_ms")
+            try:
+                parsed_latency = float(str(raw_latency))
+                if parsed_latency > 0:
+                    latencies.append(parsed_latency)
+            except (TypeError, ValueError):
+                pass
+
+            reason = str(extra.get("ai_reason") or "sem-motivo").strip()
+            if not reason:
+                reason = "sem-motivo"
+            per_reason[reason] = per_reason.get(reason, 0) + 1
+
+            created_at = _to_datetime(row.get("created_at"))
+            if created_at is not None:
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                hour_key = created_at.strftime("%Y-%m-%d %H:00")
+                bucket = per_hour.setdefault(
+                    hour_key,
+                    {"total": 0, "fallback": 0},
+                )
+                bucket["total"] += 1
+                if reason.lower().startswith("fallback"):
+                    bucket["fallback"] += 1
+
+            source = str(row.get("source") or "desconhecida").strip().lower()
+            if not source:
+                source = "desconhecida"
+            source_bucket = per_source.setdefault(
+                source,
+                {"enriched_items": 0, "model_success": 0},
+            )
+            if has_enrichment:
+                source_bucket["enriched_items"] += 1
+            if reason == "local-ai":
+                source_bucket["model_success"] += 1
+
+        fallback_rate_by_hour: list[dict[str, Any]] = []
+        for hour, values in sorted(per_hour.items(), reverse=True)[:12]:
+            total_hour = int(values.get("total", 0))
+            fallback_hour = int(values.get("fallback", 0))
             rate = (fallback_hour / total_hour * 100) if total_hour else 0.0
             fallback_rate_by_hour.append(
                 {
-                    "hour": row["hour"] or "desconhecida",
+                    "hour": hour,
                     "fallback_rate": round(rate, 1),
                     "fallback": fallback_hour,
                     "total": total_hour,
                 }
             )
 
-        source_accuracy = []
-        for row in source_rows:
-            enriched_items = int(row["enriched_items"] or 0)
-            model_success = int(row["model_success"] or 0)
+        source_accuracy: list[dict[str, Any]] = []
+        sorted_sources = sorted(
+            per_source.items(),
+            key=lambda item: item[1].get("enriched_items", 0),
+            reverse=True,
+        )
+        for source, values in sorted_sources[:10]:
+            enriched_items = int(values.get("enriched_items", 0))
+            model_success = int(values.get("model_success", 0))
             success_rate = (
                 (model_success / enriched_items) * 100
                 if enriched_items
@@ -393,20 +273,26 @@ class Repository:
             )
             source_accuracy.append(
                 {
-                    "source": row["source"] or "desconhecida",
+                    "source": source,
                     "model_success_rate": round(success_rate, 1),
                     "enriched_items": enriched_items,
                 }
             )
 
-        reason_breakdown = []
-        for row in reason_rows:
-            reason_breakdown.append(
-                {
-                    "reason": row["reason"] or "sem-motivo",
-                    "total": int(row["total"] or 0),
-                }
-            )
+        reason_breakdown = [
+            {"reason": reason, "total": total_count}
+            for reason, total_count in sorted(
+                per_reason.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:10]
+        ]
+
+        avg_latency_value = (
+            (sum(latencies) / len(latencies))
+            if latencies
+            else None
+        )
 
         return {
             "window_hours": 24,
