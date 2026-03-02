@@ -1747,3 +1747,396 @@ class Repository:
                     )
             conn.commit()
 
+    # ==================================================================
+    # Financial Dashboard
+    # ==================================================================
+
+    # ── Assets ──────────────────────────────────────────────
+
+    def upsert_fin_asset(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            existing = conn.execute(
+                self._sql("SELECT id FROM fin_assets WHERE symbol = ?"),
+                (data["symbol"],),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    self._sql("""
+                        UPDATE fin_assets
+                        SET name = ?, asset_type = ?, currency = ?,
+                            current_price = ?, previous_close = ?,
+                            day_change = ?, day_change_pct = ?,
+                            market_cap = ?, volume = ?,
+                            extra_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE symbol = ?
+                    """),
+                    (
+                        data.get("name", ""),
+                        data.get("asset_type", "stock"),
+                        data.get("currency", "BRL"),
+                        data.get("current_price"),
+                        data.get("previous_close"),
+                        data.get("day_change"),
+                        data.get("day_change_pct"),
+                        data.get("market_cap"),
+                        data.get("volume"),
+                        json_dumps(data.get("extra", {})),
+                        data["symbol"],
+                    ),
+                )
+                conn.commit()
+                return int(existing["id"])
+            else:
+                q = self._sql("""
+                    INSERT INTO fin_assets
+                        (symbol, name, asset_type, currency, current_price,
+                         previous_close, day_change, day_change_pct,
+                         market_cap, volume, extra_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)
+                if self.is_postgres:
+                    q += " RETURNING id"
+                cursor = conn.execute(
+                    q,
+                    (
+                        data["symbol"],
+                        data.get("name", data["symbol"]),
+                        data.get("asset_type", "stock"),
+                        data.get("currency", "BRL"),
+                        data.get("current_price"),
+                        data.get("previous_close"),
+                        data.get("day_change"),
+                        data.get("day_change_pct"),
+                        data.get("market_cap"),
+                        data.get("volume"),
+                        json_dumps(data.get("extra", {})),
+                    ),
+                )
+                conn.commit()
+                if self.is_postgres:
+                    row = cursor.fetchone()
+                    return int(row["id"]) if row else 0
+                return int(cursor.lastrowid or 0)
+
+    def list_fin_assets(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM fin_assets ORDER BY symbol",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_fin_asset(self, asset_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_assets WHERE id = ?"),
+                (asset_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_fin_asset_by_symbol(self, symbol: str) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_assets WHERE symbol = ?"),
+                (symbol,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_fin_asset(self, asset_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_assets WHERE id = ?"),
+                (asset_id,),
+            )
+            conn.commit()
+            return True
+
+    def record_fin_asset_price(
+        self, asset_id: int, price: float, volume: float | None = None,
+    ) -> None:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql(
+                    "INSERT INTO fin_asset_history (asset_id, price, volume) "
+                    "VALUES (?, ?, ?)"
+                ),
+                (asset_id, price, volume),
+            )
+            conn.commit()
+
+    def get_fin_asset_history(
+        self, asset_id: int, limit: int = 90,
+    ) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("""
+                    SELECT asset_id, price, volume, captured_at
+                    FROM fin_asset_history
+                    WHERE asset_id = ?
+                    ORDER BY captured_at DESC LIMIT ?
+                """),
+                (asset_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Portfolio ───────────────────────────────────────────
+
+    def get_fin_portfolio(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute("""
+                SELECT p.*, a.symbol, a.name, a.asset_type, a.currency,
+                       a.current_price, a.day_change_pct
+                FROM fin_portfolio p
+                JOIN fin_assets a ON a.id = p.asset_id
+                ORDER BY p.total_invested DESC
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_fin_portfolio(
+        self, asset_id: int, quantity: float, avg_price: float,
+        total_invested: float,
+    ) -> None:
+        with get_connection(self.database_target) as conn:
+            existing = conn.execute(
+                self._sql(
+                    "SELECT id FROM fin_portfolio WHERE asset_id = ?"
+                ),
+                (asset_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    self._sql("""
+                        UPDATE fin_portfolio
+                        SET quantity = ?, avg_price = ?, total_invested = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE asset_id = ?
+                    """),
+                    (quantity, avg_price, total_invested, asset_id),
+                )
+            else:
+                conn.execute(
+                    self._sql("""
+                        INSERT INTO fin_portfolio
+                            (asset_id, quantity, avg_price, total_invested)
+                        VALUES (?, ?, ?, ?)
+                    """),
+                    (asset_id, quantity, avg_price, total_invested),
+                )
+            conn.commit()
+
+    def delete_fin_portfolio(self, asset_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_portfolio WHERE asset_id = ?"),
+                (asset_id,),
+            )
+            conn.commit()
+            return True
+
+    # ── Transactions ────────────────────────────────────────
+
+    def add_fin_transaction(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql("""
+                INSERT INTO fin_transactions
+                    (asset_id, tx_type, quantity, price, total, fees, notes, tx_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """)
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (
+                    data["asset_id"],
+                    data.get("tx_type", "buy"),
+                    data["quantity"],
+                    data["price"],
+                    data["total"],
+                    data.get("fees", 0),
+                    data.get("notes"),
+                    data.get("tx_date", datetime.now(timezone.utc).isoformat()),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_transactions(
+        self, asset_id: int | None = None, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            if asset_id:
+                rows = conn.execute(
+                    self._sql("""
+                        SELECT t.*, a.symbol, a.name AS asset_name
+                        FROM fin_transactions t
+                        JOIN fin_assets a ON a.id = t.asset_id
+                        WHERE t.asset_id = ?
+                        ORDER BY t.tx_date DESC LIMIT ?
+                    """),
+                    (asset_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    self._sql("""
+                        SELECT t.*, a.symbol, a.name AS asset_name
+                        FROM fin_transactions t
+                        JOIN fin_assets a ON a.id = t.asset_id
+                        ORDER BY t.tx_date DESC LIMIT ?
+                    """),
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_fin_transaction(self, tx_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_transactions WHERE id = ?"),
+                (tx_id,),
+            )
+            conn.commit()
+            return True
+
+    # ── Watchlist ───────────────────────────────────────────
+
+    def add_fin_watchlist(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql("""
+                INSERT INTO fin_watchlist
+                    (symbol, name, asset_type, target_price, alert_above, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """)
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (
+                    data["symbol"],
+                    data.get("name", data["symbol"]),
+                    data.get("asset_type", "stock"),
+                    data.get("target_price"),
+                    1 if data.get("alert_above") else 0,
+                    data.get("notes"),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_watchlist(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM fin_watchlist ORDER BY symbol",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_fin_watchlist(self, wl_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_watchlist WHERE id = ?"),
+                (wl_id,),
+            )
+            conn.commit()
+            return True
+
+    # ── Financial Goals ─────────────────────────────────────
+
+    def add_fin_goal(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql("""
+                INSERT INTO fin_goals
+                    (name, target_amount, current_amount, deadline, category, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """)
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (
+                    data["name"],
+                    data["target_amount"],
+                    data.get("current_amount", 0),
+                    data.get("deadline"),
+                    data.get("category", "savings"),
+                    data.get("notes"),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_goals(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM fin_goals ORDER BY created_at DESC",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_fin_goal(self, goal_id: int, data: dict[str, Any]) -> bool:
+        with get_connection(self.database_target) as conn:
+            fields = []
+            values: list[Any] = []
+            for key in ("name", "target_amount", "current_amount",
+                        "deadline", "category", "notes"):
+                if key in data:
+                    fields.append(f"{key} = ?")
+                    values.append(data[key])
+            if not fields:
+                return False
+            fields.append("updated_at = CURRENT_TIMESTAMP")
+            values.append(goal_id)
+            conn.execute(
+                self._sql(
+                    f"UPDATE fin_goals SET {', '.join(fields)} WHERE id = ?"
+                ),
+                tuple(values),
+            )
+            conn.commit()
+            return True
+
+    def delete_fin_goal(self, goal_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_goals WHERE id = ?"),
+                (goal_id,),
+            )
+            conn.commit()
+            return True
+
+    # ── Financial Summary ───────────────────────────────────
+
+    def get_fin_summary(self) -> dict[str, Any]:
+        portfolio = self.get_fin_portfolio()
+        total_invested = sum(p.get("total_invested", 0) for p in portfolio)
+        current_value = sum(
+            (p.get("current_price") or 0) * p.get("quantity", 0)
+            for p in portfolio
+        )
+        total_pnl = current_value - total_invested
+        total_pnl_pct = (
+            (total_pnl / total_invested * 100) if total_invested else 0
+        )
+
+        by_type: dict[str, float] = {}
+        for p in portfolio:
+            atype = p.get("asset_type", "other")
+            val = (p.get("current_price") or 0) * p.get("quantity", 0)
+            by_type[atype] = by_type.get(atype, 0) + val
+
+        return {
+            "total_invested": round(total_invested, 2),
+            "current_value": round(current_value, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_pct": round(total_pnl_pct, 2),
+            "asset_count": len(portfolio),
+            "allocation": {
+                k: round(v, 2) for k, v in by_type.items()
+            },
+            "portfolio": portfolio,
+        }
+

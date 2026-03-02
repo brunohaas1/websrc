@@ -63,6 +63,7 @@ def register_routes(app: Flask) -> None:
             else "memory://"
         ),
     )
+    app.extensions["limiter"] = limiter
 
     @app.get("/")
     def index():

@@ -1,0 +1,711 @@
+/* ══════════════════════════════════════════════════════════
+   Finance Dashboard Styles
+   ══════════════════════════════════════════════════════════ */
+
+/* ── Summary Bar ──────────────────────────────────────── */
+.fin-summary-bar {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.fin-summary-card {
+  flex: 1;
+  min-width: 160px;
+  background: var(--card-bg, rgba(15, 23, 42, 0.7));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  backdrop-filter: blur(8px);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.fin-summary-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
+}
+
+.fin-summary-label {
+  font-size: 0.75rem;
+  color: var(--text-muted, #8b92a5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.fin-summary-value {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text, #e2e8f0);
+}
+
+.fin-summary-card.positive .fin-summary-value {
+  color: #22c55e;
+}
+
+.fin-summary-card.negative .fin-summary-value {
+  color: #ef4444;
+}
+
+/* ── Grid Layout ──────────────────────────────────────── */
+.fin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+  padding: 16px 20px 40px;
+}
+
+.fin-card {
+  background: var(--card-bg, rgba(15, 23, 42, 0.7));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  padding: 18px 20px;
+  backdrop-filter: blur(8px);
+  transition: transform 0.2s, box-shadow 0.2s;
+  overflow: hidden;
+}
+
+.fin-card:hover {
+  box-shadow: 0 4px 24px rgba(99, 102, 241, 0.12);
+}
+
+.fin-card.fin-wide {
+  grid-column: 1 / -1;
+}
+
+.fin-card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text, #e2e8f0);
+}
+
+.fin-card h2 .btn-text {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
+.fin-card-body {
+  min-height: 60px;
+}
+
+/* ── Chart container ──────────────────────────────────── */
+.fin-chart-container {
+  position: relative;
+  width: 100%;
+  max-height: 320px;
+}
+
+.fin-chart-container canvas {
+  width: 100% !important;
+}
+
+/* ── Currency Widget ──────────────────────────────────── */
+.fin-currency-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+}
+
+.fin-currency-row:last-child {
+  border-bottom: none;
+}
+
+.fin-currency-icon {
+  font-size: 1.3rem;
+  width: 32px;
+  text-align: center;
+}
+
+.fin-currency-pair {
+  font-weight: 600;
+  min-width: 75px;
+}
+
+.fin-currency-rate {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-left: auto;
+}
+
+.fin-up { color: #22c55e; }
+.fin-down { color: #ef4444; }
+
+/* ── Index Row ────────────────────────────────────────── */
+.fin-index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+}
+
+.fin-index-row:last-child {
+  border-bottom: none;
+}
+
+.fin-index-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.fin-index-price {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.fin-index-change {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.fin-index-change.fin-up {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.fin-index-change.fin-down {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* ── Portfolio Table ──────────────────────────────────── */
+.fin-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.fin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.fin-table th {
+  text-align: left;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--text-muted, #8b92a5);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.fin-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.05));
+  white-space: nowrap;
+}
+
+.fin-table tr:hover td {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.fin-table .text-right {
+  text-align: right;
+}
+
+.fin-table .text-center {
+  text-align: center;
+}
+
+.fin-table .mono {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.83rem;
+}
+
+.fin-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.fin-badge-stock { background: rgba(99, 102, 241, 0.18); color: #818cf8; }
+.fin-badge-crypto { background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
+.fin-badge-fii { background: rgba(34, 197, 94, 0.18); color: #22c55e; }
+.fin-badge-etf { background: rgba(59, 130, 246, 0.18); color: #3b82f6; }
+.fin-badge-fund { background: rgba(168, 85, 247, 0.18); color: #a855f7; }
+.fin-badge-renda-fixa { background: rgba(236, 72, 153, 0.18); color: #ec4899; }
+
+.fin-badge-buy { background: rgba(34, 197, 94, 0.18); color: #22c55e; }
+.fin-badge-sell { background: rgba(239, 68, 68, 0.18); color: #ef4444; }
+
+.fin-del-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #8b92a5);
+  font-size: 1rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.fin-del-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* ── Watchlist ────────────────────────────────────────── */
+.fin-wl-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+}
+
+.fin-wl-item:last-child {
+  border-bottom: none;
+}
+
+.fin-wl-symbol {
+  font-weight: 700;
+  min-width: 70px;
+  font-size: 0.92rem;
+}
+
+.fin-wl-name {
+  color: var(--text-muted, #8b92a5);
+  font-size: 0.82rem;
+  flex: 1;
+}
+
+.fin-wl-target {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* ── Goals ────────────────────────────────────────────── */
+.fin-goal-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+}
+
+.fin-goal-item:last-child {
+  border-bottom: none;
+}
+
+.fin-goal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.fin-goal-name {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.fin-goal-amounts {
+  font-size: 0.82rem;
+  color: var(--text-muted, #8b92a5);
+}
+
+.fin-goal-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.fin-goal-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+}
+
+.fin-goal-fill.complete {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+}
+
+.fin-goal-pct {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: right;
+  margin-top: 2px;
+}
+
+.fin-goal-deadline {
+  font-size: 0.72rem;
+  color: var(--text-muted, #8b92a5);
+}
+
+.fin-goal-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── AI Section ───────────────────────────────────────── */
+.fin-ai-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.fin-ai-btn {
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  color: var(--text, #e2e8f0);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.fin-ai-btn:hover,
+.fin-ai-btn.active {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.fin-ai-btn.loading {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.fin-ai-content {
+  min-height: 100px;
+  line-height: 1.7;
+  font-size: 0.9rem;
+}
+
+.fin-ai-content h1,
+.fin-ai-content h2,
+.fin-ai-content h3 {
+  margin: 12px 0 6px;
+  font-size: 1rem;
+}
+
+.fin-ai-content ul,
+.fin-ai-content ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.fin-ai-content strong {
+  color: var(--accent, #6366f1);
+}
+
+.fin-ai-placeholder {
+  color: var(--text-muted, #8b92a5);
+  text-align: center;
+  padding: 30px 10px;
+  font-style: italic;
+}
+
+.fin-ai-loading {
+  text-align: center;
+  padding: 30px;
+  color: var(--text-muted, #8b92a5);
+}
+
+.fin-ai-loading::after {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(99, 102, 241, 0.3);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: fin-spin 0.8s linear infinite;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+@keyframes fin-spin {
+  to { transform: rotate(360deg); }
+}
+
+.fin-ai-chat {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.fin-ai-chat input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 8px 14px;
+  color: var(--text, #e2e8f0);
+  font-size: 0.88rem;
+}
+
+.fin-ai-chat input:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.fin-ai-chat button {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.fin-ai-chat button:hover {
+  opacity: 0.85;
+}
+
+.fin-ai-chat-history {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+
+.fin-chat-msg {
+  padding: 10px 14px;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.fin-chat-msg.user {
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  margin-left: 40px;
+}
+
+.fin-chat-msg.ai {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+  margin-right: 40px;
+}
+
+/* ── Modal ────────────────────────────────────────────── */
+.fin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fin-modal {
+  background: var(--card-bg, #0f172a);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 16px;
+  width: 90%;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.fin-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.fin-modal-header h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.fin-modal-body {
+  padding: 16px 20px 20px;
+}
+
+.fin-form-group {
+  margin-bottom: 14px;
+}
+
+.fin-form-group label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted, #8b92a5);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+}
+
+.fin-form-group input,
+.fin-form-group select,
+.fin-form-group textarea {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text, #e2e8f0);
+  font-size: 0.88rem;
+  box-sizing: border-box;
+}
+
+.fin-form-group input:focus,
+.fin-form-group select:focus,
+.fin-form-group textarea:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.fin-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.fin-form-submit {
+  width: 100%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  color: #fff;
+  padding: 10px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.92rem;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: opacity 0.2s;
+}
+
+.fin-form-submit:hover {
+  opacity: 0.85;
+}
+
+/* ── Empty States ─────────────────────────────────────── */
+.fin-empty {
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--text-muted, #8b92a5);
+  font-style: italic;
+  font-size: 0.88rem;
+}
+
+/* ── Skeleton ─────────────────────────────────────────── */
+.fin-card .skeleton {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.03) 25%,
+    rgba(255,255,255,0.06) 50%,
+    rgba(255,255,255,0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: fin-shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+@keyframes fin-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Light Theme ──────────────────────────────────────── */
+body.light .fin-summary-card,
+body.light .fin-card {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light .fin-summary-label {
+  color: #64748b;
+}
+
+body.light .fin-summary-value {
+  color: #1e293b;
+}
+
+body.light .fin-table th {
+  color: #64748b;
+}
+
+body.light .fin-modal {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light .fin-form-group input,
+body.light .fin-form-group select,
+body.light .fin-form-group textarea {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1e293b;
+}
+
+body.light .fin-ai-chat input {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1e293b;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+@media (max-width: 768px) {
+  .fin-summary-bar {
+    padding: 12px 12px 0;
+    gap: 8px;
+  }
+
+  .fin-summary-card {
+    min-width: 130px;
+    padding: 12px 14px;
+  }
+
+  .fin-summary-value {
+    font-size: 1.1rem;
+  }
+
+  .fin-grid {
+    grid-template-columns: 1fr;
+    padding: 12px 12px 30px;
+    gap: 12px;
+  }
+
+  .fin-card.fin-wide {
+    grid-column: 1;
+  }
+
+  .fin-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fin-ai-toolbar {
+    gap: 4px;
+  }
+
+  .fin-ai-btn {
+    padding: 5px 10px;
+    font-size: 0.76rem;
+  }
+
+  .fin-chat-msg.user { margin-left: 10px; }
+  .fin-chat-msg.ai { margin-right: 10px; }
+}

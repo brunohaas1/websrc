@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050a15" />
+    <title>Dashboard Financeiro — Personal Web Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ asset_hash('style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='finance.css') }}?v={{ asset_hash('finance.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
+    <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
+  </head>
+  <body>
+
+    <header class="topbar">
+      <div class="topbar-top">
+        <div class="brand">
+          <p class="eyebrow">Personal Web Intelligence</p>
+          <h1>💰 Dashboard Financeiro</h1>
+        </div>
+        <div class="topbar-tools">
+          <a href="/" class="btn-icon" title="Voltar ao Dashboard">🏠</a>
+          <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
+          <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Summary Cards ──────────────────────────────── -->
+    <section class="fin-summary-bar">
+      <div class="fin-summary-card" id="summaryInvested">
+        <span class="fin-summary-label">Total Investido</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+      <div class="fin-summary-card" id="summaryCurrentValue">
+        <span class="fin-summary-label">Valor Atual</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+      <div class="fin-summary-card" id="summaryPnL">
+        <span class="fin-summary-label">Lucro / Prejuízo</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+      <div class="fin-summary-card" id="summaryPnLPct">
+        <span class="fin-summary-label">Rentabilidade</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+      <div class="fin-summary-card" id="summaryAssets">
+        <span class="fin-summary-label">Ativos</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+    </section>
+
+    <main class="fin-grid">
+
+      <!-- ── Currency ─────────────────────────────────── -->
+      <section class="fin-card" id="finCurrencyCard">
+        <h2>💱 Câmbio</h2>
+        <div id="finCurrencyContent" class="fin-card-body">
+          <div class="skeleton" style="height:80px"></div>
+        </div>
+      </section>
+
+      <!-- ── Market Indices ───────────────────────────── -->
+      <section class="fin-card" id="finIndicesCard">
+        <h2>📊 Índices de Mercado</h2>
+        <div id="finIndicesContent" class="fin-card-body">
+          <div class="skeleton" style="height:80px"></div>
+        </div>
+      </section>
+
+      <!-- ── Allocation Chart ─────────────────────────── -->
+      <section class="fin-card" id="finAllocationCard">
+        <h2>🍩 Alocação do Portfólio</h2>
+        <div class="fin-card-body fin-chart-container">
+          <canvas id="allocationChart" height="280"></canvas>
+        </div>
+      </section>
+
+      <!-- ── Performance Chart ────────────────────────── -->
+      <section class="fin-card fin-wide" id="finPerformanceCard">
+        <h2>📈 Performance dos Ativos</h2>
+        <div class="fin-card-body fin-chart-container">
+          <canvas id="performanceChart" height="300"></canvas>
+        </div>
+      </section>
+
+      <!-- ── Portfolio Holdings ───────────────────────── -->
+      <section class="fin-card fin-wide" id="finPortfolioCard">
+        <h2>
+          💼 Meu Portfólio
+          <button class="btn-text" onclick="openAddAssetModal()" title="Adicionar ativo">➕ Adicionar</button>
+        </h2>
+        <div id="finPortfolioContent" class="fin-card-body">
+          <div class="skeleton" style="height:120px"></div>
+        </div>
+      </section>
+
+      <!-- ── Transactions ─────────────────────────────── -->
+      <section class="fin-card fin-wide" id="finTransactionsCard">
+        <h2>
+          🔄 Transações
+          <button class="btn-text" onclick="openAddTransactionModal()" title="Nova transação">➕ Nova</button>
+        </h2>
+        <div id="finTransactionsContent" class="fin-card-body">
+          <div class="skeleton" style="height:100px"></div>
+        </div>
+      </section>
+
+      <!-- ── Watchlist ────────────────────────────────── -->
+      <section class="fin-card" id="finWatchlistCard">
+        <h2>
+          👁️ Watchlist
+          <button class="btn-text" onclick="openAddWatchlistModal()" title="Adicionar à watchlist">➕ Adicionar</button>
+        </h2>
+        <div id="finWatchlistContent" class="fin-card-body">
+          <div class="skeleton" style="height:100px"></div>
+        </div>
+      </section>
+
+      <!-- ── Financial Goals ──────────────────────────── -->
+      <section class="fin-card" id="finGoalsCard">
+        <h2>
+          🎯 Metas Financeiras
+          <button class="btn-text" onclick="openAddGoalModal()" title="Nova meta">➕ Nova</button>
+        </h2>
+        <div id="finGoalsContent" class="fin-card-body">
+          <div class="skeleton" style="height:100px"></div>
+        </div>
+      </section>
+
+      <!-- ── P&L Chart ────────────────────────────────── -->
+      <section class="fin-card" id="finPnLCard">
+        <h2>💹 P&amp;L por Ativo</h2>
+        <div class="fin-card-body fin-chart-container">
+          <canvas id="pnlChart" height="280"></canvas>
+        </div>
+      </section>
+
+      <!-- ── AI Analysis ──────────────────────────────── -->
+      <section class="fin-card fin-wide" id="finAICard">
+        <h2>🧠 Análise IA</h2>
+        <div class="fin-ai-toolbar">
+          <button class="fin-ai-btn active" data-type="general" onclick="requestAIAnalysis('general')">📋 Geral</button>
+          <button class="fin-ai-btn" data-type="risk" onclick="requestAIAnalysis('risk')">⚠️ Risco</button>
+          <button class="fin-ai-btn" data-type="allocation" onclick="requestAIAnalysis('allocation')">🍩 Alocação</button>
+          <button class="fin-ai-btn" data-type="performance" onclick="requestAIAnalysis('performance')">📈 Performance</button>
+        </div>
+        <div id="finAIContent" class="fin-card-body fin-ai-content">
+          <p class="fin-ai-placeholder">Clique em um tipo de análise acima para a IA avaliar seu portfólio.</p>
+        </div>
+        <div class="fin-ai-chat">
+          <input id="finAIChatInput" type="text" placeholder="Pergunte sobre suas finanças..." autocomplete="off" />
+          <button id="finAIChatSend" onclick="sendFinAIChat()">Enviar</button>
+        </div>
+        <div id="finAIChatHistory" class="fin-ai-chat-history"></div>
+      </section>
+
+    </main>
+
+    <!-- ── Modals ─────────────────────────────────────── -->
+    <div id="finModalOverlay" class="fin-modal-overlay" style="display:none" onclick="closeFinModal()">
+      <div class="fin-modal" onclick="event.stopPropagation()">
+        <div class="fin-modal-header">
+          <h3 id="finModalTitle">Modal</h3>
+          <button class="btn-icon" onclick="closeFinModal()">✕</button>
+        </div>
+        <div id="finModalBody" class="fin-modal-body"></div>
+      </div>
+    </div>
+
+  </body>
+</html>

@@ -9,6 +9,7 @@ from flask import Flask, g, request
 from .config import Config
 from .db import close_pool, init_db
 from .metrics import mark_start, observe_request
+from .finance_routes import register_finance_routes
 from .routes import register_routes
 from .scheduler import ScraperScheduler
 from .utils import setup_logging
@@ -24,6 +25,7 @@ def create_app(start_scheduler: bool = True) -> Flask:
 
     init_db(app.config["DATABASE_TARGET"])
     register_routes(app)
+    register_finance_routes(app, app.extensions["limiter"])
 
     # ── Cache-bust helper for static assets ──────────────
     _static_hashes: dict[str, str] = {}

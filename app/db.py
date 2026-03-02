@@ -204,6 +204,90 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
 ON shared_dashboards(token);
+
+CREATE TABLE IF NOT EXISTS fin_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    currency TEXT DEFAULT 'BRL',
+    current_price REAL,
+    previous_close REAL,
+    day_change REAL,
+    day_change_pct REAL,
+    market_cap REAL,
+    volume REAL,
+    extra_json TEXT DEFAULT '{}',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_assets_symbol
+ON fin_assets(symbol);
+
+CREATE TABLE IF NOT EXISTS fin_asset_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    price REAL NOT NULL,
+    volume REAL,
+    captured_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (asset_id) REFERENCES fin_assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fin_asset_history_asset
+ON fin_asset_history(asset_id, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_portfolio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0,
+    avg_price REAL NOT NULL DEFAULT 0,
+    total_invested REAL NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (asset_id) REFERENCES fin_assets(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_portfolio_asset
+ON fin_portfolio(asset_id);
+
+CREATE TABLE IF NOT EXISTS fin_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    tx_type TEXT NOT NULL DEFAULT 'buy',
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    total REAL NOT NULL,
+    fees REAL DEFAULT 0,
+    notes TEXT,
+    tx_date TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (asset_id) REFERENCES fin_assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fin_transactions_asset
+ON fin_transactions(asset_id, tx_date DESC);
+
+CREATE TABLE IF NOT EXISTS fin_watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    target_price REAL,
+    alert_above INTEGER DEFAULT 0,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_watchlist_symbol
+ON fin_watchlist(symbol);
+
+CREATE TABLE IF NOT EXISTS fin_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    target_amount REAL NOT NULL,
+    current_amount REAL DEFAULT 0,
+    deadline TEXT,
+    category TEXT DEFAULT 'savings',
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -381,6 +465,87 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
 ON shared_dashboards(token);
+
+CREATE TABLE IF NOT EXISTS fin_assets (
+    id BIGSERIAL PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    currency TEXT DEFAULT 'BRL',
+    current_price DOUBLE PRECISION,
+    previous_close DOUBLE PRECISION,
+    day_change DOUBLE PRECISION,
+    day_change_pct DOUBLE PRECISION,
+    market_cap DOUBLE PRECISION,
+    volume DOUBLE PRECISION,
+    extra_json TEXT DEFAULT '{}',
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_assets_symbol
+ON fin_assets(symbol);
+
+CREATE TABLE IF NOT EXISTS fin_asset_history (
+    id BIGSERIAL PRIMARY KEY,
+    asset_id BIGINT NOT NULL REFERENCES fin_assets(id) ON DELETE CASCADE,
+    price DOUBLE PRECISION NOT NULL,
+    volume DOUBLE PRECISION,
+    captured_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_asset_history_asset
+ON fin_asset_history(asset_id, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_portfolio (
+    id BIGSERIAL PRIMARY KEY,
+    asset_id BIGINT NOT NULL REFERENCES fin_assets(id) ON DELETE CASCADE,
+    quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+    avg_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_invested DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_portfolio_asset
+ON fin_portfolio(asset_id);
+
+CREATE TABLE IF NOT EXISTS fin_transactions (
+    id BIGSERIAL PRIMARY KEY,
+    asset_id BIGINT NOT NULL REFERENCES fin_assets(id) ON DELETE CASCADE,
+    tx_type TEXT NOT NULL DEFAULT 'buy',
+    quantity DOUBLE PRECISION NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    total DOUBLE PRECISION NOT NULL,
+    fees DOUBLE PRECISION DEFAULT 0,
+    notes TEXT,
+    tx_date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_transactions_asset
+ON fin_transactions(asset_id, tx_date DESC);
+
+CREATE TABLE IF NOT EXISTS fin_watchlist (
+    id BIGSERIAL PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    target_price DOUBLE PRECISION,
+    alert_above BOOLEAN DEFAULT FALSE,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_watchlist_symbol
+ON fin_watchlist(symbol);
+
+CREATE TABLE IF NOT EXISTS fin_goals (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    target_amount DOUBLE PRECISION NOT NULL,
+    current_amount DOUBLE PRECISION DEFAULT 0,
+    deadline TEXT,
+    category TEXT DEFAULT 'savings',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
