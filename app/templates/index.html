@@ -3,10 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050a15" />
     <title>Dashboard Pessoal da Internet</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body>
+
     <header class="topbar">
       <div class="brand">
         <p class="eyebrow">Personal Web Intelligence</p>
@@ -17,6 +21,7 @@
           id="searchInput"
           type="search"
           placeholder="Buscar notícias, vagas, vídeos..."
+          autocomplete="off"
         />
         <select id="aiCategoryFilter" aria-label="Filtrar por categoria da IA">
           <option value="">Todas categorias</option>
@@ -38,25 +43,26 @@
     </header>
 
     <section class="status-bar" aria-label="Resumo do dashboard">
-      <div class="status-pill"><span>Notícias</span><strong id="countNews">0</strong></div>
-      <div class="status-pill"><span>Promoções</span><strong id="countPromo">0</strong></div>
-      <div class="status-pill"><span>Vagas</span><strong id="countJobs">0</strong></div>
-      <div class="status-pill"><span>Vídeos</span><strong id="countVideos">0</strong></div>
-      <div class="status-pill"><span>IA enriquecidos</span><strong id="aiEnrichedPct">0%</strong></div>
-      <div class="status-pill"><span>Latência IA</span><strong id="aiLatency">--</strong></div>
-      <div class="status-pill"><span>Fallback/h</span><strong id="aiFallbackHour">--</strong></div>
-      <div class="status-pill"><span>Atualizado</span><strong id="lastUpdated">--</strong></div>
+      <div class="status-pill"><span>Notícias</span><strong id="countNews">—</strong></div>
+      <div class="status-pill"><span>Promoções</span><strong id="countPromo">—</strong></div>
+      <div class="status-pill"><span>Vagas</span><strong id="countJobs">—</strong></div>
+      <div class="status-pill"><span>Vídeos</span><strong id="countVideos">—</strong></div>
+      <div class="status-pill"><span>IA enriquecidos</span><strong id="aiEnrichedPct">—</strong></div>
+      <div class="status-pill"><span>Latência IA</span><strong id="aiLatency">—</strong></div>
+      <div class="status-pill"><span>Fallback/h</span><strong id="aiFallbackHour">—</strong></div>
+      <div class="status-pill"><span>Atualizado</span><strong id="lastUpdated">—</strong></div>
     </section>
 
     <main class="grid" id="dashboardGrid">
+
       <section class="card" id="weatherCard" draggable="true" data-card-id="weather">
         <h2>🌤️ Clima</h2>
-        <div id="weatherContent">Carregando...</div>
+        <div id="weatherContent"><div class="skeleton" style="height:80px"></div></div>
       </section>
 
       <section class="card" draggable="true" data-card-id="alerts">
         <h2>🔔 Alertas de preço</h2>
-        <div id="alertsList" class="list"></div>
+        <div id="alertsList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 
       <section class="card wide" draggable="true" data-card-id="prices">
@@ -64,7 +70,7 @@
         <form id="priceForm" class="inline-form">
           <input name="name" placeholder="Nome do produto" required />
           <input name="product_url" placeholder="URL do produto" required />
-          <input name="css_selector" placeholder="Seletor CSS do preço (ex: .price)" />
+          <input name="css_selector" placeholder="Seletor CSS (ex: .price)" />
           <input name="target_price" type="number" step="0.01" placeholder="Preço alvo" required />
           <button type="submit">Adicionar</button>
         </form>
@@ -84,17 +90,17 @@
           <button data-topic="guerra_ira">Guerra Irã</button>
           <button data-topic="brasil_hoje">Brasil Hoje</button>
         </div>
-        <div id="newsList" class="list"></div>
+        <div id="newsList" class="list"><div class="skeleton" style="height:64px"></div><div class="skeleton" style="height:64px"></div></div>
       </section>
 
       <section class="card" draggable="true" data-card-id="promotions">
         <h2>🎮 Promoções e jogos grátis</h2>
-        <div id="promoList" class="list"></div>
+        <div id="promoList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 
       <section class="card wide" draggable="true" data-card-id="videos">
         <h2>📺 Novos vídeos (canais do Brasil)</h2>
-        <div id="videosList" class="list"></div>
+        <div id="videosList" class="list"><div class="skeleton" style="height:64px"></div><div class="skeleton" style="height:64px"></div></div>
       </section>
 
       <section class="card wide" draggable="true" data-card-id="jobs">
@@ -105,23 +111,24 @@
           <button data-term="remote">Remoto</button>
           <button data-term="junior">Júnior</button>
         </div>
-        <div id="jobsList" class="list"></div>
+        <div id="jobsList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 
       <section class="card" draggable="true" data-card-id="tech">
         <h2>🤖 Tech e IA</h2>
-        <div id="techList" class="list"></div>
+        <div id="techList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 
       <section class="card" draggable="true" data-card-id="ai-observability">
         <h2>📊 Observabilidade IA</h2>
-        <div id="aiObservabilityContent" class="ai-observability">Carregando...</div>
+        <div id="aiObservabilityContent" class="ai-observability"><div class="skeleton" style="height:120px"></div></div>
       </section>
 
       <section class="card" draggable="true" data-card-id="releases">
         <h2>🚀 Releases monitoradas</h2>
-        <div id="releasesList" class="list"></div>
+        <div id="releasesList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
+
     </main>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>

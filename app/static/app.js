@@ -158,14 +158,14 @@ function renderItems(target, items, options = {}) {
   const filteredAndSorted = sortByMode(filtered).slice(0, max);
 
   if (!filteredAndSorted.length) {
-    target.innerHTML = "<small>Nenhum item no momento.</small>";
+    target.innerHTML = '<small style="color:var(--text-faint)">Nenhum item no momento.</small>';
     return;
   }
 
   target.innerHTML = filteredAndSorted
     .map(
-      (item) => `
-        <article class="item">
+      (item, idx) => `
+        <article class="item" style="animation:item-fade-in 0.3s ease both;animation-delay:${Math.min(idx * 30, 300)}ms">
           ${showImage && item.image_url ? `<img class="item-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.title)}" loading="lazy" />` : ""}
           ${buildItemBadges(item)}
           <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
@@ -541,27 +541,43 @@ function renderWeather(weatherItems) {
   `;
 }
 
+function animateValue(el, newText) {
+  if (!el || el.textContent === newText) return;
+  el.style.transition = 'opacity 0.15s, transform 0.15s';
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(-4px)';
+  setTimeout(() => {
+    el.textContent = newText;
+    el.style.opacity = '1';
+    el.style.transform = 'translateY(0)';
+  }, 150);
+}
+
 function render() {
   const data = state.snapshot;
   if (!data) return;
 
-  byId("countNews").textContent = String((data.news || []).length);
-  byId("countPromo").textContent = String((data.promotions || []).length);
-  byId("countJobs").textContent = String((data.jobs || []).length);
-  byId("countVideos").textContent = String((data.videos || []).length);
-  byId("lastUpdated").textContent = new Date().toLocaleTimeString("pt-BR");
+  animateValue(byId("countNews"), String((data.news || []).length));
+  animateValue(byId("countPromo"), String((data.promotions || []).length));
+  animateValue(byId("countJobs"), String((data.jobs || []).length));
+  animateValue(byId("countVideos"), String((data.videos || []).length));
+  animateValue(byId("lastUpdated"), new Date().toLocaleTimeString("pt-BR"));
 
   const aiMetrics = data.ai_observability || {};
-  byId("aiEnrichedPct").textContent = `${aiMetrics.enriched_percent ?? 0}%`;
-  byId("aiLatency").textContent = Number.isFinite(aiMetrics.avg_ai_latency_ms)
-    ? `${aiMetrics.avg_ai_latency_ms} ms`
-    : "--";
+  animateValue(byId("aiEnrichedPct"), `${aiMetrics.enriched_percent ?? 0}%`);
+  animateValue(
+    byId("aiLatency"),
+    Number.isFinite(aiMetrics.avg_ai_latency_ms)
+      ? `${aiMetrics.avg_ai_latency_ms} ms`
+      : "—"
+  );
   const latestFallback = Array.isArray(aiMetrics.fallback_rate_by_hour)
     ? aiMetrics.fallback_rate_by_hour[0]
     : null;
-  byId("aiFallbackHour").textContent = latestFallback
-    ? `${latestFallback.fallback_rate}%`
-    : "--";
+  animateValue(
+    byId("aiFallbackHour"),
+    latestFallback ? `${latestFallback.fallback_rate}%` : "—"
+  );
 
   renderWeather(data.weather || []);
   renderResponsiveCollections(data);
@@ -598,6 +614,12 @@ async function addPriceWatch(event) {
 }
 
 async function runNow() {
+  const btn = byId("refreshBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Atualizando...";
+    btn.style.opacity = "0.7";
+  }
   try {
     const response = await fetch("/api/run-now", { method: "POST" });
     if (!response.ok) {
@@ -607,6 +629,11 @@ async function runNow() {
     console.error("run-now error:", err);
   }
   await fetchDashboard();
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Atualizar agora";
+    btn.style.opacity = "1";
+  }
 }
 
 function setupEvents() {
