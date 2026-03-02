@@ -901,6 +901,139 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "Falha ao gerar relatório"}), 500
 
     # ==================================================================
+    # App Settings (Settings Panel)
+    # ==================================================================
+
+    # Keys that can be changed via the settings panel
+    SETTINGS_SCHEMA: dict = {
+        # ── Geral ──
+        "scrape_interval_minutes": {"type": "int", "min": 1, "max": 1440, "default": "30"},
+        "daily_interval_hours": {"type": "int", "min": 1, "max": 168, "default": "24"},
+        "feed_entry_limit": {"type": "int", "min": 5, "max": 200, "default": "30"},
+        "data_retention_days": {"type": "int", "min": 7, "max": 3650, "default": "90"},
+        "cache_ttl_seconds": {"type": "int", "min": 10, "max": 3600, "default": "90"},
+        # ── Clima ──
+        "weather_city": {"type": "str", "max_len": 100, "default": "Lajeado"},
+        "weather_state": {"type": "str", "max_len": 100, "default": "Rio Grande do Sul"},
+        "weather_country_code": {"type": "str", "max_len": 5, "default": "BR"},
+        "weather_lat": {"type": "float", "min": -90, "max": 90, "default": "-29.4669"},
+        "weather_lon": {"type": "float", "min": -180, "max": 180, "default": "-51.9614"},
+        # ── IA Local ──
+        "ai_local_enabled": {"type": "bool", "default": "0"},
+        "ai_local_backend": {"type": "str", "choices": ["ollama", "llama_cpp"], "default": "llama_cpp"},
+        "ai_local_url": {"type": "url", "max_len": 300, "default": "http://llamacpp:8080"},
+        "ai_local_model": {"type": "str", "max_len": 200, "default": "qwen2.5:7b-instruct"},
+        "ai_local_timeout_seconds": {"type": "int", "min": 5, "max": 300, "default": "30"},
+        "ai_local_retries": {"type": "int", "min": 0, "max": 10, "default": "2"},
+        "ai_local_max_enrich_per_run": {"type": "int", "min": 0, "max": 100, "default": "12"},
+        # ── Moedas ──
+        "currency_api_url": {"type": "url", "max_len": 500, "default": "https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL"},
+        "currency_update_minutes": {"type": "int", "min": 1, "max": 1440, "default": "15"},
+        # ── Monitor de Serviços ──
+        "service_monitor_interval_minutes": {"type": "int", "min": 1, "max": 1440, "default": "5"},
+        # ── Email Digest ──
+        "smtp_host": {"type": "str", "max_len": 300, "default": ""},
+        "smtp_port": {"type": "int", "min": 1, "max": 65535, "default": "587"},
+        "smtp_user": {"type": "str", "max_len": 200, "default": ""},
+        "smtp_from": {"type": "str", "max_len": 200, "default": ""},
+        "email_digest_recipients": {"type": "str", "max_len": 500, "default": ""},
+        # ── Fontes (JSON arrays) ──
+        "news_feeds_custom": {"type": "json", "default": "[]"},
+        "youtube_feeds_custom": {"type": "json", "default": "[]"},
+        "github_repos_custom": {"type": "json", "default": "[]"},
+        "job_feeds_custom": {"type": "json", "default": "[]"},
+    }
+
+    def _validate_setting(key: str, value: str) -> tuple[bool, str]:
+        schema = SETTINGS_SCHEMA.get(key)
+        if not schema:
+            return False, f"Unknown setting: {key}"
+        stype = schema["type"]
+        if stype == "int":
+            try:
+                v = int(value)
+                if v < schema.get("min", -9999999) or v > schema.get("max", 9999999):
+                    return False, f"{key}: valor fora do intervalo"
+            except ValueError:
+                return False, f"{key}: deve ser número inteiro"
+        elif stype == "float":
+            try:
+                v = float(value)
+                if v < schema.get("min", -9999999) or v > schema.get("max", 9999999):
+                    return False, f"{key}: valor fora do intervalo"
+            except ValueError:
+                return False, f"{key}: deve ser número"
+        elif stype == "bool":
+            if value not in ("0", "1"):
+                return False, f"{key}: deve ser 0 ou 1"
+        elif stype == "str":
+            if len(value) > schema.get("max_len", 500):
+                return False, f"{key}: texto muito longo"
+            if "choices" in schema and value and value not in schema["choices"]:
+                return False, f"{key}: valor inválido"
+        elif stype == "url":
+            if value and len(value) > schema.get("max_len", 500):
+                return False, f"{key}: URL muito longa"
+        elif stype == "json":
+            try:
+                _json.loads(value)
+            except _json.JSONDecodeError:
+                return False, f"{key}: JSON inválido"
+        return True, ""
+
+    @app.get("/api/settings")
+    @limiter.limit("30/minute")
+    def get_settings():
+        db_settings = repo.get_all_settings()
+        # Merge defaults with stored values
+        result = {}
+        for key, schema in SETTINGS_SCHEMA.items():
+            config_key = key.upper()
+            env_val = str(app.config.get(config_key, schema["default"]))
+            result[key] = db_settings.get(key, env_val)
+        return jsonify(result)
+
+    @app.put("/api/settings")
+    @limiter.limit("10/minute")
+    def update_settings():
+        body = request.get_json(silent=True) or {}
+        errors = []
+        valid = {}
+        for key, value in body.items():
+            if key not in SETTINGS_SCHEMA:
+                continue
+            ok, msg = _validate_setting(key, str(value))
+            if ok:
+                valid[key] = str(value)
+            else:
+                errors.append(msg)
+        if errors:
+            return jsonify({"error": "; ".join(errors)}), 400
+        if not valid:
+            return jsonify({"error": "Nenhuma configuração válida enviada"}), 400
+        repo.set_settings_bulk(valid)
+
+        # Reload config values into app.config for immediate effect
+        for key, value in valid.items():
+            config_key = key.upper()
+            schema = SETTINGS_SCHEMA[key]
+            if schema["type"] == "int":
+                app.config[config_key] = int(value)
+            elif schema["type"] == "float":
+                app.config[config_key] = float(value)
+            elif schema["type"] == "bool":
+                app.config[config_key] = value == "1"
+            else:
+                app.config[config_key] = value
+
+        return jsonify({"updated": list(valid.keys()), "count": len(valid)})
+
+    @app.get("/api/settings/schema")
+    @limiter.limit("30/minute")
+    def get_settings_schema():
+        return jsonify(SETTINGS_SCHEMA)
+
+    # ==================================================================
     # System Uptime / Health-check Dashboard (#1)
     # ==================================================================
 

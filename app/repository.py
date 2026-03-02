@@ -1694,3 +1694,56 @@ class Repository:
             conn.commit()
             return cursor.rowcount or 0
 
+    # ── App Settings ───────────────────────────────────────
+    def get_all_settings(self) -> dict[str, str]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+            return {r["key"]: r["value"] for r in rows}
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = %s"
+                if self.is_postgres else
+                "SELECT value FROM app_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with get_connection(self.database_target) as conn:
+            if self.is_postgres:
+                conn.execute(
+                    """INSERT INTO app_settings (key, value, updated_at)
+                       VALUES (%s, %s, CURRENT_TIMESTAMP)
+                       ON CONFLICT (key) DO UPDATE
+                       SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP""",
+                    (key, value),
+                )
+            else:
+                conn.execute(
+                    """INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                       VALUES (?, ?, CURRENT_TIMESTAMP)""",
+                    (key, value),
+                )
+            conn.commit()
+
+    def set_settings_bulk(self, settings: dict[str, str]) -> None:
+        with get_connection(self.database_target) as conn:
+            for key, value in settings.items():
+                if self.is_postgres:
+                    conn.execute(
+                        """INSERT INTO app_settings (key, value, updated_at)
+                           VALUES (%s, %s, CURRENT_TIMESTAMP)
+                           ON CONFLICT (key) DO UPDATE
+                           SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP""",
+                        (key, str(value)),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                           VALUES (?, ?, CURRENT_TIMESTAMP)""",
+                        (key, str(value)),
+                    )
+            conn.commit()
+

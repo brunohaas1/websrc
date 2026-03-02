@@ -196,6 +196,12 @@ CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
 ON currency_rates(pair, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_read
 ON notifications(read, created_at DESC);
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
 ON shared_dashboards(token);
 """
@@ -367,6 +373,12 @@ CREATE INDEX IF NOT EXISTS idx_currency_rates_pair
 ON currency_rates(pair, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_read
 ON notifications(read, created_at DESC);
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_shared_dashboards_token
 ON shared_dashboards(token);
 """

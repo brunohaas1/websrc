@@ -1934,6 +1934,10 @@ function setupEvents() {
   const shareBtn = byId("shareDashBtn");
   if (shareBtn) shareBtn.addEventListener("click", createShareLink);
 
+  // Settings button
+  const settingsBtn = byId("settingsBtn");
+  if (settingsBtn) settingsBtn.addEventListener("click", openSettingsPanel);
+
   // AI Chat form
   const aiChatForm = byId("aiChatForm");
   if (aiChatForm) aiChatForm.addEventListener("submit", sendAiChat);
@@ -2579,6 +2583,7 @@ function setupKeyboardShortcuts() {
       closeCommandPalette();
       closePiP();
       closeNotifPanel();
+      closeSettingsPanel();
       return;
     }
 
@@ -2820,6 +2825,7 @@ const CMD_REGISTRY = [
   { id: "shortcuts", label: "⌨️ Atalhos de teclado", keywords: "shortcuts atalhos keyboard", action: () => showToast("Ctrl+K = paleta · R = atualizar · T = tema · F = focus · N = notif", "info", 6000) },
   { id: "export", label: "📄 Exportar PDF", keywords: "export pdf download", action: () => window.open("/api/export/pdf", "_blank") },
   { id: "docs", label: "📚 API Docs", keywords: "documentation api swagger", action: () => window.open("/docs", "_blank") },
+  { id: "settings", label: "⚙️ Configurações", keywords: "settings configurações config opções preferências", action: () => openSettingsPanel() },
   { id: "ai-chat", label: "💬 Chat com IA", keywords: "chat ia ai conversar", action: () => { byId("aiChatInput")?.focus(); scrollToCard("ai-chat"); } },
   { id: "layout-default", label: "📐 Layout Padrão", keywords: "layout default padrao", action: () => applyLayoutPreset("default") },
   { id: "layout-compact", label: "📐 Layout Compacto", keywords: "layout compact compacto", action: () => applyLayoutPreset("compact") },
@@ -3256,6 +3262,310 @@ function renderPriceWatchTags(watch) {
   }
   if (!Array.isArray(tagsArray) || !tagsArray.length) return "";
   return `<div class="price-tags">${tagsArray.map(t => `<span class="price-tag">${escapeHtml(t)}</span>`).join("")}</div>`;
+}
+
+/* ── Settings Panel ──────────────────────────────────── */
+
+let _settingsOpen = false;
+let _settingsData = {};
+let _settingsSchema = {};
+
+const SETTINGS_SECTIONS = [
+  {
+    id: "general",
+    icon: "⚙️",
+    label: "Geral",
+    fields: [
+      { key: "scrape_interval_minutes", label: "Intervalo de scraping (min)", type: "number" },
+      { key: "daily_interval_hours", label: "Intervalo diário (horas)", type: "number" },
+      { key: "feed_entry_limit", label: "Limite de entradas por feed", type: "number" },
+      { key: "data_retention_days", label: "Retenção de dados (dias)", type: "number" },
+      { key: "cache_ttl_seconds", label: "Cache TTL (segundos)", type: "number" },
+    ],
+  },
+  {
+    id: "weather",
+    icon: "🌤️",
+    label: "Clima",
+    fields: [
+      { key: "weather_city", label: "Cidade", type: "text" },
+      { key: "weather_state", label: "Estado", type: "text" },
+      { key: "weather_country_code", label: "Código do país", type: "text" },
+      { key: "weather_lat", label: "Latitude", type: "number", step: "0.0001" },
+      { key: "weather_lon", label: "Longitude", type: "number", step: "0.0001" },
+    ],
+  },
+  {
+    id: "ai",
+    icon: "🤖",
+    label: "IA Local",
+    fields: [
+      { key: "ai_local_enabled", label: "IA habilitada", type: "toggle" },
+      { key: "ai_local_backend", label: "Backend", type: "select", options: [
+        { value: "ollama", label: "Ollama" },
+        { value: "llama_cpp", label: "llama.cpp" },
+      ]},
+      { key: "ai_local_url", label: "URL do servidor", type: "url" },
+      { key: "ai_local_model", label: "Modelo", type: "text" },
+      { key: "ai_local_timeout_seconds", label: "Timeout (seg)", type: "number" },
+      { key: "ai_local_retries", label: "Retentativas", type: "number" },
+      { key: "ai_local_max_enrich_per_run", label: "Máx. enriquecimentos/run", type: "number" },
+    ],
+  },
+  {
+    id: "currency",
+    icon: "💱",
+    label: "Moedas",
+    fields: [
+      { key: "currency_api_url", label: "URL da API de câmbio", type: "url" },
+      { key: "currency_update_minutes", label: "Atualizar a cada (min)", type: "number" },
+    ],
+  },
+  {
+    id: "monitor",
+    icon: "🖥️",
+    label: "Monitor",
+    fields: [
+      { key: "service_monitor_interval_minutes", label: "Intervalo de checagem (min)", type: "number" },
+    ],
+  },
+  {
+    id: "email",
+    icon: "📧",
+    label: "E-mail / SMTP",
+    fields: [
+      { key: "smtp_host", label: "SMTP Host", type: "text" },
+      { key: "smtp_port", label: "SMTP Port", type: "number" },
+      { key: "smtp_user", label: "SMTP Usuário", type: "text" },
+      { key: "smtp_from", label: "E-mail remetente", type: "text" },
+      { key: "email_digest_recipients", label: "Destinatários (vírgula)", type: "text" },
+    ],
+  },
+  {
+    id: "feeds",
+    icon: "📡",
+    label: "Fontes RSS",
+    fields: [
+      { key: "news_feeds_custom", label: "News Feeds extras (JSON)", type: "json", placeholder: '[{"source":"Nome","url":"https://..."}]' },
+      { key: "youtube_feeds_custom", label: "YouTube Feeds extras (JSON)", type: "json", placeholder: '[{"source":"Canal","url":"https://..."}]' },
+      { key: "github_repos_custom", label: "Repos GitHub extras (JSON)", type: "json", placeholder: '["user/repo"]' },
+      { key: "job_feeds_custom", label: "Job Feeds extras (JSON)", type: "json", placeholder: '[{"source":"Nome","url":"https://..."}]' },
+    ],
+  },
+];
+
+async function openSettingsPanel() {
+  _settingsOpen = true;
+  try {
+    const [settingsResp, schemaResp] = await Promise.all([
+      fetch("/api/settings"),
+      fetch("/api/settings/schema"),
+    ]);
+    _settingsData = await settingsResp.json();
+    _settingsSchema = await schemaResp.json();
+  } catch {
+    showToast("Erro ao carregar configurações", "error");
+    return;
+  }
+  renderSettingsModal();
+}
+
+function closeSettingsPanel() {
+  _settingsOpen = false;
+  const modal = byId("settingsModal");
+  if (modal) modal.remove();
+}
+
+function renderSettingsModal() {
+  let modal = byId("settingsModal");
+  if (modal) modal.remove();
+
+  modal = document.createElement("div");
+  modal.id = "settingsModal";
+  modal.className = "modal-overlay settings-overlay";
+
+  const sidebarHtml = SETTINGS_SECTIONS.map((s, i) =>
+    `<button class="settings-nav-item${i === 0 ? " active" : ""}" data-section="${s.id}">
+      <span class="settings-nav-icon">${s.icon}</span>
+      <span>${s.label}</span>
+    </button>`
+  ).join("");
+
+  const sectionsHtml = SETTINGS_SECTIONS.map((s, i) =>
+    `<div class="settings-section${i === 0 ? " active" : ""}" data-section="${s.id}">
+      <h3>${s.icon} ${s.label}</h3>
+      ${s.fields.map(f => renderSettingsField(f)).join("")}
+    </div>`
+  ).join("");
+
+  modal.innerHTML = `
+    <div class="settings-container">
+      <div class="settings-header">
+        <h2>⚙️ Configurações</h2>
+        <div class="settings-header-actions">
+          <button class="btn-small settings-reset-btn" id="settingsResetBtn" title="Restaurar padrões">🔄 Reset</button>
+          <button class="modal-close" id="settingsCloseBtn">✕</button>
+        </div>
+      </div>
+      <div class="settings-body">
+        <nav class="settings-sidebar">${sidebarHtml}</nav>
+        <div class="settings-content">
+          ${sectionsHtml}
+          <div class="settings-actions">
+            <button class="btn-settings-save" id="settingsSaveBtn">💾 Salvar configurações</button>
+            <span id="settingsSaveStatus" class="settings-save-status"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Navigation
+  modal.querySelectorAll(".settings-nav-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      modal.querySelectorAll(".settings-nav-item").forEach(b => b.classList.remove("active"));
+      modal.querySelectorAll(".settings-section").forEach(s => s.classList.remove("active"));
+      btn.classList.add("active");
+      modal.querySelector(`.settings-section[data-section="${btn.dataset.section}"]`)?.classList.add("active");
+    });
+  });
+
+  // Close
+  byId("settingsCloseBtn").addEventListener("click", closeSettingsPanel);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeSettingsPanel(); });
+
+  // Save
+  byId("settingsSaveBtn").addEventListener("click", saveSettings);
+
+  // Reset
+  byId("settingsResetBtn").addEventListener("click", resetSettings);
+
+  // Toggle switches
+  modal.querySelectorAll(".settings-toggle").forEach(toggle => {
+    toggle.addEventListener("click", () => {
+      const isOn = toggle.classList.toggle("on");
+      toggle.dataset.value = isOn ? "1" : "0";
+    });
+  });
+}
+
+function renderSettingsField(field) {
+  const value = _settingsData[field.key] ?? "";
+
+  if (field.type === "toggle") {
+    const isOn = value === "1" || value === "true" || value === true;
+    return `
+      <div class="settings-field">
+        <label>${escapeHtml(field.label)}</label>
+        <div class="settings-toggle${isOn ? " on" : ""}" data-key="${field.key}" data-value="${isOn ? "1" : "0"}">
+          <div class="settings-toggle-track"><div class="settings-toggle-thumb"></div></div>
+        </div>
+      </div>`;
+  }
+
+  if (field.type === "select") {
+    const opts = (field.options || []).map(o =>
+      `<option value="${escapeHtml(o.value)}"${o.value === value ? " selected" : ""}>${escapeHtml(o.label)}</option>`
+    ).join("");
+    return `
+      <div class="settings-field">
+        <label for="setting_${field.key}">${escapeHtml(field.label)}</label>
+        <select id="setting_${field.key}" class="settings-input" data-key="${field.key}">${opts}</select>
+      </div>`;
+  }
+
+  if (field.type === "json") {
+    const prettyVal = (() => {
+      try { return JSON.stringify(JSON.parse(value || "[]"), null, 2); } catch { return value || "[]"; }
+    })();
+    return `
+      <div class="settings-field settings-field-wide">
+        <label for="setting_${field.key}">${escapeHtml(field.label)}</label>
+        <textarea id="setting_${field.key}" class="settings-input settings-textarea"
+          data-key="${field.key}" rows="4" placeholder="${escapeHtml(field.placeholder || "")}">${escapeHtml(prettyVal)}</textarea>
+      </div>`;
+  }
+
+  const inputType = field.type === "url" ? "url" : field.type === "number" ? "number" : "text";
+  const step = field.step ? ` step="${field.step}"` : "";
+  return `
+    <div class="settings-field">
+      <label for="setting_${field.key}">${escapeHtml(field.label)}</label>
+      <input id="setting_${field.key}" class="settings-input" type="${inputType}"
+        data-key="${field.key}" value="${escapeHtml(value)}"${step} />
+    </div>`;
+}
+
+async function saveSettings() {
+  const statusEl = byId("settingsSaveStatus");
+  const btn = byId("settingsSaveBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Salvando..."; }
+  if (statusEl) statusEl.textContent = "";
+
+  const payload = {};
+  const modal = byId("settingsModal");
+  if (!modal) return;
+
+  // Collect from inputs and selects
+  modal.querySelectorAll(".settings-input").forEach(el => {
+    const key = el.dataset.key;
+    if (key) payload[key] = el.value;
+  });
+
+  // Collect from toggles
+  modal.querySelectorAll(".settings-toggle").forEach(el => {
+    const key = el.dataset.key;
+    if (key) payload[key] = el.dataset.value;
+  });
+
+  try {
+    const resp = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao salvar", "error");
+      if (statusEl) statusEl.textContent = "❌ Erro";
+    } else {
+      showToast(`✅ ${data.count} configurações salvas!`, "success");
+      if (statusEl) statusEl.textContent = `✅ ${data.count} salvas`;
+      _settingsData = { ..._settingsData, ...payload };
+    }
+  } catch {
+    showToast("Erro de rede", "error");
+    if (statusEl) statusEl.textContent = "❌ Erro de rede";
+  }
+  if (btn) { btn.disabled = false; btn.textContent = "💾 Salvar configurações"; }
+}
+
+async function resetSettings() {
+  if (!confirm("Restaurar todas as configurações para os valores padrão?")) return;
+  const defaults = {};
+  for (const section of SETTINGS_SECTIONS) {
+    for (const field of section.fields) {
+      const schema = _settingsSchema[field.key];
+      if (schema) defaults[field.key] = schema.default;
+    }
+  }
+  try {
+    const resp = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(defaults),
+    });
+    if (resp.ok) {
+      showToast("Configurações restauradas!", "success");
+      _settingsData = { ..._settingsData, ...defaults };
+      closeSettingsPanel();
+      openSettingsPanel();
+    }
+  } catch {
+    showToast("Erro ao restaurar", "error");
+  }
 }
 
 /* ── PWA: Register service worker ─────────────────────── */
