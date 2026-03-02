@@ -5,9 +5,140 @@ const state = {
   newsTopic: "",
   aiCategory: "",
   sortMode: "recency",
+  theme: localStorage.getItem("dashboard-theme") || "dark",
 };
 
 const CARD_ORDER_KEY = "dashboard-card-order-v2";
+const COLLAPSED_KEY = "dashboard-collapsed-cards-v1";
+
+/* ── Toast notification system ────────────────────────── */
+
+function getOrCreateToastContainer() {
+  let container = document.getElementById("toastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toastContainer";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+  return container;
+}
+
+function showToast(message, type = "info", durationMs = 3500) {
+  const container = getOrCreateToastContainer();
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+
+  const icons = { success: "✓", error: "✕", info: "ℹ", warning: "⚠" };
+  toast.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span><span class="toast-msg">${escapeHtml(message)}</span>`;
+
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("toast-visible"));
+
+  const timer = setTimeout(() => dismissToast(toast), durationMs);
+  toast.addEventListener("click", () => { clearTimeout(timer); dismissToast(toast); });
+}
+
+function dismissToast(toast) {
+  toast.classList.remove("toast-visible");
+  toast.classList.add("toast-exit");
+  toast.addEventListener("animationend", () => toast.remove(), { once: true });
+  setTimeout(() => toast.remove(), 400);
+}
+
+/* ── Relative time (há X min) ─────────────────────────── */
+
+function timeAgo(dateValue) {
+  if (!dateValue) return "sem data";
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return String(dateValue);
+
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  if (diffMs < 0) return "agora";
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return "agora";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `há ${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `há ${days}d`;
+  if (days < 30) return `há ${Math.floor(days / 7)} sem`;
+  return date.toLocaleDateString("pt-BR");
+}
+
+/* ── Theme toggle ─────────────────────────────────────── */
+
+function applyTheme(theme) {
+  state.theme = theme;
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("dashboard-theme", theme);
+  const btn = byId("themeToggle");
+  if (btn) btn.textContent = theme === "dark" ? "☀️" : "🌙";
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = theme === "dark" ? "#050a15" : "#f0f2f5";
+}
+
+function toggleTheme() {
+  applyTheme(state.theme === "dark" ? "light" : "dark");
+}
+
+/* ── Card collapse ────────────────────────────────────── */
+
+function getCollapsedCards() {
+  try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]"); } catch { return []; }
+}
+
+function setCollapsedCards(ids) {
+  localStorage.setItem(COLLAPSED_KEY, JSON.stringify(ids));
+}
+
+function toggleCardCollapse(cardId) {
+  const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+  if (!card) return;
+  const collapsed = getCollapsedCards();
+  const isCollapsed = collapsed.includes(cardId);
+
+  if (isCollapsed) {
+    card.classList.remove("collapsed");
+    setCollapsedCards(collapsed.filter((id) => id !== cardId));
+  } else {
+    card.classList.add("collapsed");
+    setCollapsedCards([...collapsed, cardId]);
+  }
+}
+
+function applySavedCollapseState() {
+  const collapsed = getCollapsedCards();
+  collapsed.forEach((cardId) => {
+    const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+    if (card) card.classList.add("collapsed");
+  });
+}
+
+function injectCardControls() {
+  document.querySelectorAll(".card[data-card-id]").forEach((card) => {
+    if (card.querySelector(".card-collapse-btn")) return;
+    const btn = document.createElement("button");
+    btn.className = "card-collapse-btn";
+    btn.title = "Minimizar / Expandir";
+    btn.textContent = "−";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleCardCollapse(card.dataset.cardId);
+      btn.textContent = card.classList.contains("collapsed") ? "+" : "−";
+    });
+    card.prepend(btn);
+  });
+  // Fix button label for already-collapsed
+  getCollapsedCards().forEach((cardId) => {
+    const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+    const btn = card?.querySelector(".card-collapse-btn");
+    if (btn) btn.textContent = "+";
+  });
+}
 const CARD_HEIGHT_KEY = "dashboard-card-height-v2";
 const CARD_SPAN_KEY = "dashboard-card-span-v1";
 const CARD_MIN_HEIGHT = 90;
@@ -170,7 +301,7 @@ function renderItems(target, items, options = {}) {
           ${buildItemBadges(item)}
           <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
           <div class="item-summary">${escapeHtml(toOneLineSummary(resolveItemSummary(item), summaryLength))}</div>
-          <small>${escapeHtml(item.source ?? "fonte")} • ${fmtDate(item.published_at || item.created_at)}</small>
+          <small>${escapeHtml(item.source ?? "fonte")} • ${timeAgo(item.published_at || item.created_at)}</small>
         </article>
       `
     )
@@ -601,15 +732,16 @@ async function addPriceWatch(event) {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      alert(body.error || "Erro ao criar monitor de preço");
+      showToast(body.error || "Erro ao criar monitor de preço", "error");
       return;
     }
 
     form.reset();
+    showToast("Monitor de preço adicionado!", "success");
     await fetchDashboard();
   } catch (err) {
     console.error("Price watch error:", err);
-    alert("Erro de rede ao criar monitor de preço");
+    showToast("Erro de rede ao criar monitor de preço", "error");
   }
 }
 
@@ -623,10 +755,13 @@ async function runNow() {
   try {
     const response = await fetch("/api/run-now", { method: "POST" });
     if (!response.ok) {
-      console.error("run-now failed:", response.status);
+      showToast("Falha ao iniciar atualização", "error");
+    } else {
+      showToast("Atualização iniciada!", "success");
     }
   } catch (err) {
     console.error("run-now error:", err);
+    showToast("Erro de rede", "error");
   }
   await fetchDashboard();
   if (btn) {
@@ -644,6 +779,7 @@ function setupEvents() {
 
   byId("priceForm").addEventListener("submit", addPriceWatch);
   byId("refreshBtn").addEventListener("click", runNow);
+  byId("themeToggle")?.addEventListener("click", toggleTheme);
 
   byId("jobFilters").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-term]");
@@ -1080,12 +1216,57 @@ function setupCardDragAndDrop() {
   });
 }
 
+/* ── Keyboard shortcuts ───────────────────────────────── */
+
+function setupKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    // Ctrl+K or Cmd+K → focus search
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      e.preventDefault();
+      const input = byId("searchInput");
+      if (input) { input.focus(); input.select(); }
+      return;
+    }
+
+    // Don't trigger shortcuts when typing in inputs
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      runNow();
+    }
+
+    if (e.key === "t" || e.key === "T") {
+      e.preventDefault();
+      toggleTheme();
+    }
+
+    if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      showToast("Ctrl+K = busca · R = atualizar · T = tema · ? = atalhos", "info", 5000);
+    }
+  });
+}
+
+/* ── PWA: Register service worker ─────────────────────── */
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/static/sw.js").catch(() => {});
+}
+
+/* ── Bootstrap ────────────────────────────────────────── */
+
+applyTheme(state.theme);
 setupEvents();
 applySavedCardOrder();
 applySavedCardHeights();
 applySavedCardSpans();
+applySavedCollapseState();
+injectCardControls();
 setupCardResize();
 setupCardDragAndDrop();
+setupKeyboardShortcuts();
 normalizeCardHeightsToViewport();
 normalizeCardSpansToViewport();
 updateAllCardListHeights();

@@ -1,0 +1,19 @@
+{
+  "name": "Dashboard Pessoal da Internet",
+  "short_name": "WebDash",
+  "description": "Dashboard pessoal agregando notícias, vagas, preços, clima e IA",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050a15",
+  "theme_color": "#050a15",
+  "orientation": "any",
+  "categories": ["news", "utilities"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%236366f1'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white'>📊</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

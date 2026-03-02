@@ -37,7 +37,47 @@ def register_routes(app: Flask) -> None:
     @app.get("/health")
     @limiter.exempt
     def health():
-        return jsonify({"status": "ok"})
+        checks: dict = {}
+        overall = "ok"
+
+        # Postgres
+        try:
+            from .db import get_connection
+            with get_connection(app.config["DATABASE_TARGET"]) as conn:
+                conn.execute("SELECT 1")
+            checks["postgres"] = "ok"
+        except Exception as exc:
+            checks["postgres"] = f"error: {exc}"
+            overall = "degraded"
+
+        # Redis
+        if app.config["QUEUE_ENABLED"]:
+            try:
+                import redis as _redis
+                r = _redis.from_url(app.config["REDIS_URL"])
+                r.ping()
+                checks["redis"] = "ok"
+            except Exception as exc:
+                checks["redis"] = f"error: {exc}"
+                overall = "degraded"
+
+        # LLaMA.cpp
+        if app.config.get("AI_LOCAL_ENABLED"):
+            try:
+                import urllib.request
+                url = app.config["AI_LOCAL_URL"].rstrip("/") + "/health"
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    llm_ok = resp.status == 200
+                    checks["llamacpp"] = (
+                        "ok" if llm_ok else f"status {resp.status}"
+                    )
+            except Exception as exc:
+                checks["llamacpp"] = f"error: {exc}"
+                overall = "degraded"
+
+        status_code = 200 if overall == "ok" else 207
+        return jsonify({"status": overall, "checks": checks}), status_code
 
     @app.get("/metrics")
     @limiter.exempt
