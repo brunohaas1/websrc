@@ -2,6 +2,8 @@
 
 Projeto completo de **agregador pessoal inteligente** para rodar 24/7 em servidor Linux doméstico (Ubuntu/CasaOS), coletando metadados da internet e exibindo tudo em um dashboard web único.
 
+Inclui também um **Dashboard Financeiro** com carteira, transações, dividendos, watchlist, relatório de IR, análise por IA, importação de dados e configurações próprias.
+
 ## 1) O que este projeto já entrega
 
 - Agregador de notícias via RSS (multi-fontes)
@@ -13,6 +15,10 @@ Projeto completo de **agregador pessoal inteligente** para rodar 24/7 em servido
 - Tracker de vídeos YouTube por feed cronológico (sem algoritmo)
 - Clima atual (Open-Meteo)
 - Dashboard web responsivo, com busca e filtros
+- Dashboard financeiro completo (`/finance`) com:
+  - ativos, transações, metas, dividendos, rebalanceamento e relatório IR
+  - importação CSV/Excel, nota de corretagem e movimentação B3/CEI
+  - configuração in-app (token BRAPI, chave finance, IA local e câmbio)
 - Execução automática com scheduler interno (APScheduler)
 - Persistência em SQLite
 - Dockerfile + docker-compose para rodar no servidor
@@ -130,6 +136,7 @@ docker compose up -d --build
 - Banco: `DATABASE_URL` (Postgres) ou `DATABASE_PATH` (SQLite fallback)
 - Health diário: `bash ./scripts/daily-health-check.sh`
 - Limpeza de resumos duplicados: `bash ./scripts/cleanup-duplicate-summaries.sh`
+- Cotações de ações no financeiro: `BRAPI_TOKEN` (com fallback automático)
 
 ## 9) Próximos passos sugeridos
 
@@ -273,7 +280,9 @@ AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT=/v1/chat/completions
 AI_LOCAL_MODEL=llama-3.2-3b-instruct-q4_k_m
 LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:full
 LLAMACPP_HOST_PORT=8081
-LLAMACPP_GPU_LAYERS=35
+LLAMACPP_GPU_LAYERS=60
+LLAMACPP_MEM_LIMIT=3g
+LLAMACPP_CTX_SIZE=2048
 LLAMACPP_DRI_RENDER=/dev/dri/renderD128
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
 AI_LOCAL_TIMEOUT_SECONDS=25
@@ -283,7 +292,21 @@ AI_LOCAL_CIRCUIT_FAIL_THRESHOLD=3
 AI_LOCAL_CIRCUIT_OPEN_SECONDS=120
 AI_LOCAL_ADAPTIVE_MIN_PER_RUN=5
 AI_LOCAL_MAX_ENRICH_PER_RUN=16
+BRAPI_TOKEN=seu_token_brapi
 ```
+
+### Financeiro: importação e configurações
+
+- Endpoint principal: `/finance`
+- Importações disponíveis no modal de importação:
+  - Importação geral (`/api/finance/import`)
+  - Nota de corretagem (`/api/finance/import-nota`)
+  - Movimentação B3/CEI (`/api/finance/import-b3`)
+- Configurações no botão `⚙️` do topo do financeiro:
+  - BRAPI Token
+  - Finance API Key
+  - URL/modelo/timeout da IA local
+  - API e intervalo de atualização de câmbio
 
 ### Preparar modelo
 
