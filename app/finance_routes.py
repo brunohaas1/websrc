@@ -723,7 +723,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             import openpyxl
 
             wb = openpyxl.load_workbook(
-                io.BytesIO(f.read()), read_only=True,
+                io.BytesIO(f.read()), read_only=False,
             )
             # Find the Movimentação sheet or use active
             ws = None
