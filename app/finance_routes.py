@@ -672,6 +672,273 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "errors": errors_list[:20],
         }), 200 if imported else 400
 
+    # ── Import B3 Movimentação (CEI) ──────────────────────
+
+    @app.post("/api/finance/import-b3")
+    @limiter.limit("5/minute")
+    @require_finance_key
+    def finance_import_b3():
+        """Import B3/CEI 'Movimentação' xlsx export.
+
+        Expected columns:
+          Entrada/Saída | Data | Movimentação | Produto |
+          Instituição | Quantidade | Preço unitário | Valor da Operação
+        """
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "Envie o arquivo xlsx"}), 400
+
+        fname = f.filename.lower()
+        if not fname.endswith((".xlsx", ".xls")):
+            return jsonify({
+                "error": "Formato não suportado. Use .xlsx",
+            }), 400
+
+        # Movement types that generate BUY/SELL transactions
+        TX_BUY_TYPES = {
+            "transferência - liquidação",
+            "bonificação em ativos",
+            "fração em ativos",
+        }
+        TX_TRADE = "compra / venda"
+        TX_SELL_TYPES = {"leilão de fração"}
+        # Movement types that generate dividends
+        DIV_TYPE_MAP = {
+            "rendimento": "rendimento",
+            "dividendo": "dividendo",
+            "juros sobre capital próprio": "jcp",
+            "juros sobre capital próprio - transferido": "jcp",
+        }
+        # Movement types to skip
+        SKIP_TYPES = {
+            "atualização",
+            "transferência",
+            "cessão de direitos",
+            "cessão de direitos - solicitada",
+            "direito de subscrição",
+            "direitos de subscrição - não exercido",
+        }
+
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(
+                io.BytesIO(f.read()), read_only=True,
+            )
+            # Find the Movimentação sheet or use active
+            ws = None
+            for name in wb.sheetnames:
+                if "movimenta" in name.lower():
+                    ws = wb[name]
+                    break
+            if ws is None:
+                ws = wb.active
+
+            raw_rows: list[dict] = []
+            headers: list[str] = []
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i == 0:
+                    headers = [
+                        str(c or "").strip() for c in row
+                    ]
+                    continue
+                d: dict = {}
+                for j, val in enumerate(row):
+                    if j < len(headers):
+                        d[headers[j]] = val
+                raw_rows.append(d)
+            wb.close()
+        except Exception as exc:
+            logger.warning("B3 import parse error: %s", exc)
+            return jsonify({"error": f"Erro ao ler: {exc}"}), 400
+
+        if not raw_rows:
+            return jsonify({
+                "error": "Arquivo vazio ou sem dados.",
+            }), 400
+
+        # Validate expected columns
+        expected = {"Produto", "Movimentação", "Quantidade"}
+        found = set(headers)
+        if not expected.issubset(found):
+            missing = expected - found
+            return jsonify({
+                "error": (
+                    "Colunas esperadas não encontradas: "
+                    f"{', '.join(missing)}. "
+                    "Este arquivo é um export de Movimentação "
+                    "do B3/CEI?"
+                ),
+            }), 400
+
+        tx_imported = 0
+        div_imported = 0
+        skipped = 0
+        errors_list: list[str] = []
+
+        for idx, row in enumerate(raw_rows, start=2):
+            try:
+                mov = str(row.get("Movimentação", "")).strip()
+                mov_lower = mov.lower()
+                entrada = str(
+                    row.get("Entrada/Saída", ""),
+                ).strip().lower()
+                produto = str(row.get("Produto", "")).strip()
+                qty_raw = row.get("Quantidade")
+                price_raw = row.get("Preço unitário")
+                val_raw = row.get("Valor da Operação")
+
+                # Skip known non-actionable types
+                if mov_lower in SKIP_TYPES:
+                    skipped += 1
+                    continue
+
+                # Extract ticker and name from Produto
+                if " - " in produto:
+                    parts = produto.split(" - ", 1)
+                    symbol = parts[0].strip().upper()
+                    name = parts[1].strip()
+                else:
+                    symbol = produto.strip().upper()
+                    name = symbol
+
+                if not symbol:
+                    skipped += 1
+                    continue
+
+                # Skip subscription rights tickers (e.g. XPML12)
+                # that are not actual tradeable assets
+                if symbol.endswith("12") and mov_lower in (
+                    "cessão de direitos",
+                    "direito de subscrição",
+                ):
+                    skipped += 1
+                    continue
+
+                # Parse date DD/MM/YYYY → YYYY-MM-DD
+                raw_date = str(row.get("Data", "")).strip()
+                tx_date = ""
+                if "/" in raw_date:
+                    dp = raw_date.split("/")
+                    if len(dp) == 3:
+                        tx_date = (
+                            f"{dp[2]}-{dp[1].zfill(2)}"
+                            f"-{dp[0].zfill(2)}"
+                        )
+                if not tx_date:
+                    tx_date = datetime.now().strftime("%Y-%m-%d")
+
+                # Parse qty, price, total
+                qty = _parse_number(str(qty_raw or "0"))
+                price = _parse_number(str(price_raw or "0"))
+                total = _parse_number(str(val_raw or "0"))
+
+                # Auto-detect asset type
+                asset_type = "stock"
+                sym_upper = symbol.upper()
+                if sym_upper.endswith(("11", "11B")):
+                    if len(sym_upper) >= 5:
+                        asset_type = "fii"
+                elif sym_upper.startswith("CDB"):
+                    asset_type = "renda-fixa"
+
+                # Truncate name to 100 chars
+                name = sanitize_text(name, 100)
+                symbol = sanitize_text(symbol, 20)
+
+                # ── Handle DIVIDENDS ──
+                if mov_lower in DIV_TYPE_MAP:
+                    if qty <= 0 or price <= 0:
+                        skipped += 1
+                        continue
+
+                    div_type = DIV_TYPE_MAP[mov_lower]
+                    asset_id = repo.upsert_fin_asset({
+                        "symbol": symbol,
+                        "name": name,
+                        "asset_type": asset_type,
+                        "currency": "BRL",
+                    })
+                    repo.add_fin_dividend({
+                        "asset_id": asset_id,
+                        "div_type": div_type,
+                        "amount_per_share": price,
+                        "total_amount": total if total > 0
+                        else qty * price,
+                        "quantity": qty,
+                        "ex_date": tx_date,
+                        "pay_date": tx_date,
+                        "notes": f"Importado B3: {mov}",
+                    })
+                    div_imported += 1
+                    continue
+
+                # ── Handle TRANSACTIONS ──
+                tx_type = None
+
+                if mov_lower == TX_TRADE:
+                    # COMPRA / VENDA: Debito=buy, Credito=sell
+                    tx_type = (
+                        "buy" if entrada == "debito"
+                        else "sell"
+                    )
+                elif mov_lower in TX_BUY_TYPES:
+                    tx_type = "buy"
+                elif mov_lower in TX_SELL_TYPES:
+                    tx_type = "sell"
+                else:
+                    # Unknown type, skip
+                    skipped += 1
+                    continue
+
+                if qty <= 0 or price <= 0:
+                    # Bonificação / fração may have price=0
+                    if mov_lower in (
+                        "bonificação em ativos",
+                        "fração em ativos",
+                    ) and qty > 0:
+                        price = 0.0
+                        total = 0.0
+                    else:
+                        skipped += 1
+                        continue
+
+                if total <= 0:
+                    total = qty * price
+
+                asset_id = repo.upsert_fin_asset({
+                    "symbol": symbol,
+                    "name": name,
+                    "asset_type": asset_type,
+                    "currency": "BRL",
+                })
+                repo.add_fin_transaction({
+                    "asset_id": asset_id,
+                    "tx_type": tx_type,
+                    "quantity": qty,
+                    "price": price,
+                    "total": total,
+                    "fees": 0,
+                    "notes": f"Importado B3: {mov}",
+                    "tx_date": tx_date,
+                })
+                _recalc_portfolio(repo, asset_id)
+                tx_imported += 1
+
+            except Exception as exc:
+                errors_list.append(f"Linha {idx}: {exc}")
+
+        cache.delete("finance:summary")
+        total_imported = tx_imported + div_imported
+        return jsonify({
+            "ok": total_imported > 0,
+            "transactions": tx_imported,
+            "dividends": div_imported,
+            "skipped": skipped,
+            "total_rows": len(raw_rows),
+            "errors": errors_list[:20],
+        }), 200 if total_imported else 400
+
     # ── Dividends CRUD ─────────────────────────────────────
 
     @app.get("/api/finance/dividends")

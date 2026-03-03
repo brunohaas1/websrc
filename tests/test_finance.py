@@ -671,3 +671,199 @@ class TestFinanceAuth:
         app.config["FINANCE_API_KEY"] = ""
         resp = jpost(client, "/api/finance/assets", {"symbol": "VALE3"})
         assert resp.status_code == 201
+
+
+# ── B3 Movimentação Import ─────────────────────────────────
+
+
+def _make_b3_xlsx(rows):
+    """Create a B3-style xlsx file in memory."""
+    import io
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Movimentação"
+    ws.append([
+        "Entrada/Saída", "Data", "Movimentação", "Produto",
+        "Instituição", "Quantidade", "Preço unitário",
+        "Valor da Operação",
+    ])
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+class TestImportB3:
+    """Tests for /api/finance/import-b3 (B3 CEI Movimentação)."""
+
+    def test_buy_via_liquidacao(self, client):
+        """Transferência - Liquidação should create a BUY transaction."""
+        buf = _make_b3_xlsx([
+            ["Credito", "24/02/2026", "Transferência - Liquidação",
+             "BTLG11 - BTG PACTUAL LOGISTICA", "XP", 10, 95.73, 957.30],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["transactions"] == 1
+        assert data["dividends"] == 0
+
+    def test_rendimento_creates_dividend(self, client):
+        """Rendimento should create a dividend record."""
+        buf = _make_b3_xlsx([
+            ["Credito", "25/02/2026", "Rendimento",
+             "BTLG11 - BTG PACTUAL LOGISTICA", "XP", 112, 0.8, 89.6],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["dividends"] == 1
+        assert data["transactions"] == 0
+
+    def test_dividendo_creates_dividend(self, client):
+        """Dividendo type should create a dividend."""
+        buf = _make_b3_xlsx([
+            ["Credito", "07/01/2026", "Dividendo",
+             "VALE3 - VALE S.A.", "XP", 17, 1.244, 21.14],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["dividends"] == 1
+
+    def test_jcp_creates_dividend(self, client):
+        """Juros Sobre Capital Próprio should create JCP dividend."""
+        buf = _make_b3_xlsx([
+            ["Credito", "12/12/2025",
+             "Juros Sobre Capital Próprio",
+             "BBAS3 - BANCO DO BRASIL S/A", "XP", 101, 0.046, 3.93],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["dividends"] == 1
+
+    def test_compra_venda_debito_is_buy(self, client):
+        """COMPRA / VENDA + Debito = buy."""
+        buf = _make_b3_xlsx([
+            ["Debito", "28/11/2024", "COMPRA / VENDA",
+             "CDB - CDBB2454XCL - BANCO BMG S/A", "XP",
+             1, 1004.2, 1004.2],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["transactions"] == 1
+
+    def test_skip_atualizacao(self, client):
+        """Atualização rows should be skipped."""
+        buf = _make_b3_xlsx([
+            ["Credito", "19/02/2026", "Atualização",
+             "VALE3 - VALE S.A.", "XP", 17, "-", "-"],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert data["skipped"] == 1
+        assert data["transactions"] == 0
+        assert data["dividends"] == 0
+
+    def test_skip_transferencia_plain(self, client):
+        """Plain Transferência (no price) should be skipped."""
+        buf = _make_b3_xlsx([
+            ["Credito", "17/01/2025", "Transferência",
+             "BBAS3 - BANCO DO BRASIL S/A", "XP", 44, "-", "-"],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert data["skipped"] == 1
+
+    def test_mixed_rows(self, client):
+        """Multiple row types processed together."""
+        buf = _make_b3_xlsx([
+            ["Credito", "24/02/2026",
+             "Transferência - Liquidação",
+             "RBRY11 - FII RBRY PAX", "XP", 61, 95.73, 5839.53],
+            ["Credito", "25/02/2026", "Rendimento",
+             "BTLG11 - BTG PACTUAL", "XP", 112, 0.8, 89.6],
+            ["Credito", "07/01/2026", "Dividendo",
+             "VALE3 - VALE S.A.", "XP", 17, 1.244, 21.14],
+            ["Credito", "19/02/2026", "Atualização",
+             "VALE3 - VALE S.A.", "XP", 17, "-", "-"],
+            ["Credito", "17/01/2025", "Transferência",
+             "BBAS3 - BANCO DO BRASIL S/A", "XP", 44, "-", "-"],
+        ])
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["transactions"] == 1
+        assert data["dividends"] == 2
+        assert data["skipped"] == 2
+
+    def test_wrong_format_rejected(self, client):
+        """Non-xlsx file should fail."""
+        import io
+        buf = io.BytesIO(b"not an xlsx file")
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.csv")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 400
+
+    def test_missing_columns_rejected(self, client):
+        """xlsx without expected B3 columns should fail."""
+        import io
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Col1", "Col2", "Col3"])
+        ws.append(["a", "b", "c"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        resp = client.post(
+            "/api/finance/import-b3",
+            data={"file": (buf, "mov.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "Colunas esperadas" in data["error"]

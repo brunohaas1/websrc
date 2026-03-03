@@ -745,6 +745,7 @@ function openImportModal() {
       <div class="fin-import-tabs">
         <button class="fin-import-tab active" data-tab="general">📥 Importação Geral</button>
         <button class="fin-import-tab" data-tab="nota">📄 Nota de Corretagem</button>
+        <button class="fin-import-tab" data-tab="b3">📊 Movimentação B3</button>
       </div>
 
       <!-- General Import -->
@@ -822,6 +823,39 @@ function openImportModal() {
           </button>
         </form>
       </div>
+
+      <!-- B3 Movimentação Import -->
+      <div id="importTabB3" class="fin-import-tab-content" style="display:none">
+        <p class="fin-import-desc">
+          Importe o extrato de <strong>Movimentação</strong> exportado do <strong>B3 / CEI</strong> (Área do Investidor).<br>
+          O sistema reconhece automaticamente compras, vendas, rendimentos, dividendos e JCP.
+        </p>
+
+        <div class="fin-import-cols">
+          <h4>O que será importado:</h4>
+          <div class="fin-import-cols-grid">
+            <span class="fin-import-col"><strong>Transferência - Liquidação</strong> → compras</span>
+            <span class="fin-import-col"><strong>COMPRA / VENDA</strong> → compras e vendas</span>
+            <span class="fin-import-col"><strong>Rendimento</strong> → dividendos de FIIs</span>
+            <span class="fin-import-col"><strong>Dividendo</strong> → dividendos de ações</span>
+            <span class="fin-import-col"><strong>JCP</strong> → juros sobre capital próprio</span>
+            <span class="fin-import-col"><strong>Bonificação</strong> → bonificação em ativos</span>
+          </div>
+        </div>
+
+        <form id="finB3Form" class="fin-import-form">
+          <label class="fin-import-dropzone" id="finB3Dropzone">
+            <input type="file" id="finB3File" accept=".xlsx,.xls" style="display:none" />
+            <span class="fin-import-dropzone-icon">📊</span>
+            <span class="fin-import-dropzone-text">Clique ou arraste o arquivo de Movimentação aqui</span>
+            <span class="fin-import-dropzone-hint">Excel (.xlsx) exportado do CEI/B3</span>
+          </label>
+          <div id="finB3Status" class="fin-import-status" style="display:none"></div>
+          <button type="submit" class="fin-form-submit" id="finB3Submit" disabled>
+            📊 Importar Movimentação B3
+          </button>
+        </form>
+      </div>
     </div>
   `);
 
@@ -830,11 +864,13 @@ function openImportModal() {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".fin-import-tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
-      const isNota = tab.dataset.tab === "nota";
+      const sel = tab.dataset.tab;
       const genTab = byId("importTabGeneral");
       const notaTab = byId("importTabNota");
-      if (genTab) genTab.style.display = isNota ? "none" : "";
-      if (notaTab) notaTab.style.display = isNota ? "" : "none";
+      const b3Tab = byId("importTabB3");
+      if (genTab) genTab.style.display = sel === "general" ? "" : "none";
+      if (notaTab) notaTab.style.display = sel === "nota" ? "" : "none";
+      if (b3Tab) b3Tab.style.display = sel === "b3" ? "" : "none";
     });
   });
 
@@ -908,6 +944,42 @@ function openImportModal() {
     notaForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       await submitNotaImport();
+    });
+  }
+
+  // B3 Movimentação tab
+  const b3File = byId("finB3File");
+  const b3Drop = byId("finB3Dropzone");
+  const b3Submit = byId("finB3Submit");
+
+  if (b3File) {
+    b3File.addEventListener("change", () => {
+      if (b3File.files.length) {
+        b3Drop.querySelector(".fin-import-dropzone-text").textContent = b3File.files[0].name;
+        b3Drop.classList.add("has-file");
+        b3Submit.disabled = false;
+      }
+    });
+  }
+  if (b3Drop) {
+    b3Drop.addEventListener("dragover", (e) => { e.preventDefault(); b3Drop.classList.add("dragover"); });
+    b3Drop.addEventListener("dragleave", () => b3Drop.classList.remove("dragover"));
+    b3Drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      b3Drop.classList.remove("dragover");
+      if (e.dataTransfer.files.length) {
+        b3File.files = e.dataTransfer.files;
+        b3Drop.querySelector(".fin-import-dropzone-text").textContent = e.dataTransfer.files[0].name;
+        b3Drop.classList.add("has-file");
+        b3Submit.disabled = false;
+      }
+    });
+  }
+  const b3Form = byId("finB3Form");
+  if (b3Form) {
+    b3Form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await submitB3Import();
     });
   }
 }
@@ -1001,6 +1073,57 @@ async function submitNotaImport() {
   }
 
   submitBtn.textContent = "📄 Importar Nota";
+  submitBtn.disabled = false;
+}
+
+async function submitB3Import() {
+  const fileInput = byId("finB3File");
+  const status = byId("finB3Status");
+  const submitBtn = byId("finB3Submit");
+  if (!fileInput || !fileInput.files.length) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "⏳ Importando movimentação...";
+  status.style.display = "block";
+  status.className = "fin-import-status loading";
+  status.textContent = "Processando arquivo de movimentação B3...";
+
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+
+  try {
+    const resp = await finFetch("/api/finance/import-b3", {
+      method: "POST",
+      body: fd,
+    });
+    const data = await resp.json();
+
+    if (resp.ok && data.ok) {
+      status.className = "fin-import-status success";
+      let msg = `✅ Importado com sucesso!\n`;
+      msg += `📈 ${data.transactions || 0} transações (compras/vendas)\n`;
+      msg += `💰 ${data.dividends || 0} dividendos/rendimentos\n`;
+      msg += `⏭️ ${data.skipped || 0} registros ignorados\n`;
+      msg += `📋 ${data.total_rows || 0} linhas no arquivo`;
+      if (data.errors && data.errors.length) {
+        msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
+      }
+      status.textContent = msg;
+      status.style.whiteSpace = "pre-line";
+      loadAll();
+    } else {
+      status.className = "fin-import-status error";
+      status.textContent = `❌ ${data.error || "Erro ao importar"}`;
+      if (data.errors && data.errors.length) {
+        status.textContent += "\n" + data.errors.join("\n");
+      }
+    }
+  } catch {
+    status.className = "fin-import-status error";
+    status.textContent = "❌ Erro de rede ao enviar arquivo";
+  }
+
+  submitBtn.textContent = "📊 Importar Movimentação B3";
   submitBtn.disabled = false;
 }
 
