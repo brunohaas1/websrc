@@ -968,3 +968,315 @@ body.light .fin-form-new-asset {
   background: rgba(99, 102, 241, 0.04);
   border-color: rgba(99, 102, 241, 0.15);
 }
+
+/* ══════════════════════════════════════════════════════════
+   Dividends
+   ══════════════════════════════════════════════════════════ */
+
+.fin-dividend-summary {
+  padding: 0 18px;
+}
+.fin-div-totals {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.fin-div-total-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 18px;
+  background: rgba(99, 102, 241, 0.08);
+  border-radius: 10px;
+  min-width: 100px;
+}
+.fin-div-total-item span {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-s, #94a3b8);
+}
+.fin-div-total-item strong {
+  font-size: 1.05rem;
+  color: #22c55e;
+}
+.fin-div-grand {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+/* ══════════════════════════════════════════════════════════
+   History Chart / Inline Select
+   ══════════════════════════════════════════════════════════ */
+
+.fin-inline-select {
+  font-size: 0.82rem;
+  padding: 4px 10px;
+  margin-left: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #e2e8f0);
+  outline: none;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.fin-inline-select:focus {
+  border-color: #6366f1;
+}
+body.light .fin-inline-select {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #1e293b;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Rebalancing
+   ══════════════════════════════════════════════════════════ */
+
+.fin-rebal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fin-rebal-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.fin-rebal-type {
+  min-width: 80px;
+  font-size: 0.82rem;
+  text-transform: capitalize;
+}
+.fin-rebal-bars {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fin-rebal-bar-container {
+  position: relative;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fin-rebal-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+.fin-rebal-current {
+  background: rgba(99, 102, 241, 0.5);
+}
+.fin-rebal-target {
+  background: rgba(34, 197, 94, 0.35);
+}
+.fin-rebal-label {
+  position: absolute;
+  top: 1px;
+  left: 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.fin-rebal-diff {
+  min-width: 90px;
+  text-align: right;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+/* Allocation total warning */
+.fin-alloc-total {
+  text-align: center;
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 8px;
+  margin: 8px 0;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #22c55e;
+}
+.fin-alloc-total.fin-alloc-warning {
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+}
+
+/* ══════════════════════════════════════════════════════════
+   IR Report
+   ══════════════════════════════════════════════════════════ */
+
+.fin-ir-section {
+  margin-bottom: 18px;
+}
+.fin-ir-section h4 {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--text, #e2e8f0);
+}
+.fin-ir-months {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+.fin-ir-month {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.78rem;
+}
+.fin-ir-month.over {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.06);
+}
+.fin-ir-month-name {
+  font-weight: 700;
+  color: var(--text, #e2e8f0);
+}
+.fin-ir-month-sell {
+  color: var(--text-s, #94a3b8);
+}
+.fin-ir-month-pnl {
+  font-weight: 600;
+}
+.fin-ir-darf {
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+.fin-ir-divs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fin-ir-div-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px;
+  background: rgba(34, 197, 94, 0.08);
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+.fin-ir-div-row span {
+  color: var(--text-s, #94a3b8);
+  text-transform: capitalize;
+  font-size: 0.72rem;
+}
+.fin-ir-div-row strong {
+  color: #22c55e;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Export Section
+   ══════════════════════════════════════════════════════════ */
+
+.fin-export-section p {
+  margin-bottom: 14px;
+  color: var(--text-s, #94a3b8);
+  font-size: 0.88rem;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Import Tabs (Nota de Corretagem)
+   ══════════════════════════════════════════════════════════ */
+
+.fin-import-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 4px;
+}
+.fin-import-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-s, #94a3b8);
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.fin-import-tab.active {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+}
+.fin-import-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.06);
+}
+body.light .fin-import-tabs {
+  background: rgba(0, 0, 0, 0.03);
+}
+body.light .fin-import-tab.active {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4338ca;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Light theme overrides for new sections
+   ══════════════════════════════════════════════════════════ */
+
+body.light .fin-div-total-item {
+  background: rgba(99, 102, 241, 0.06);
+}
+body.light .fin-div-grand {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+body.light .fin-rebal-row {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+body.light .fin-rebal-bar-container {
+  background: rgba(0, 0, 0, 0.05);
+}
+body.light .fin-rebal-label {
+  color: #1e293b;
+}
+body.light .fin-ir-month {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+body.light .fin-ir-month.over {
+  background: rgba(239, 68, 68, 0.04);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+body.light .fin-alloc-total {
+  background: rgba(34, 197, 94, 0.06);
+}
+
+/* ── Renda Fixa info tag ──────────────────────────────── */
+
+.fin-rf-info {
+  font-size: 0.68rem;
+  color: var(--text-s, #94a3b8);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+.fin-badge-renda-fixa {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}

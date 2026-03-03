@@ -288,6 +288,29 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fin_dividends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    div_type TEXT NOT NULL DEFAULT 'dividend',
+    amount_per_share REAL NOT NULL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    quantity REAL NOT NULL DEFAULT 0,
+    ex_date TEXT,
+    pay_date TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (asset_id) REFERENCES fin_assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fin_dividends_asset
+ON fin_dividends(asset_id, pay_date DESC);
+
+CREATE TABLE IF NOT EXISTS fin_allocation_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_type TEXT NOT NULL UNIQUE,
+    target_pct REAL NOT NULL DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -544,6 +567,28 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     category TEXT DEFAULT 'savings',
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fin_dividends (
+    id BIGSERIAL PRIMARY KEY,
+    asset_id BIGINT NOT NULL REFERENCES fin_assets(id) ON DELETE CASCADE,
+    div_type TEXT NOT NULL DEFAULT 'dividend',
+    amount_per_share DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ex_date TEXT,
+    pay_date TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_dividends_asset
+ON fin_dividends(asset_id, pay_date DESC);
+
+CREATE TABLE IF NOT EXISTS fin_allocation_targets (
+    id BIGSERIAL PRIMARY KEY,
+    asset_type TEXT NOT NULL UNIQUE,
+    target_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 """

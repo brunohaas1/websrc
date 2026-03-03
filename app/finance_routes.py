@@ -469,6 +469,437 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             },
         )
 
+    # ── Import Nota de Corretagem (brokerage note) ─────────
+
+    @app.post("/api/finance/import-nota")
+    @limiter.limit("5/minute")
+    def finance_import_nota():
+        """Import brokerage note (nota de corretagem) CSV/Excel.
+
+        Supports B3/CEI export and common broker formats.
+        Expected columns (flexible mapping):
+          - papel/titulo/ativo/symbol
+          - tipo negociacao/operacao (C/V or Compra/Venda)
+          - quantidade/qtd
+          - preco/valor unitario
+          - valor total/total
+          - taxa corretagem/corretagem/emolumentos
+          - data pregao/data/date
+        """
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({
+                "error": "Envie o arquivo da nota de corretagem",
+            }), 400
+
+        fname = f.filename.lower()
+
+        # Extra column mappings for brokerage notes
+        nota_col_map = {
+            "papel": "symbol", "titulo": "symbol", "ativo": "symbol",
+            "cod_negociacao": "symbol", "codigo": "symbol",
+            "especificacao_titulo": "name",
+            "tipo_negociacao": "tx_type", "tipo_operacao": "tx_type",
+            "c_v": "tx_type", "cv": "tx_type", "operacao": "tx_type",
+            "quantidade": "quantity", "qtd": "quantity",
+            "qtde": "quantity", "qtd_negociada": "quantity",
+            "preco": "price", "preco_unitario": "price",
+            "valor_unitario": "price", "pu": "price",
+            "preco_ajuste": "price",
+            "valor_total": "total", "valor_operacao": "total",
+            "valor_liquido": "total",
+            "corretagem": "fees", "taxa_corretagem": "fees",
+            "emolumentos": "fees2", "taxa_liquidacao": "fees3",
+            "impostos": "fees4",
+            "data_pregao": "date", "data_negocio": "date",
+            "data": "date", "dt_negocio": "date",
+            "prazo": "notes",
+            "mercado": "market",
+        }
+
+        def normalize_nota_col(col: str) -> str:
+            """Normalise brokerage note column name."""
+            c = col.strip().lower()
+            for a, b in [("á", "a"), ("é", "e"), ("í", "i"),
+                         ("ó", "o"), ("ú", "u"), ("ã", "a"),
+                         ("õ", "o"), ("ç", "c")]:
+                c = c.replace(a, b)
+            c = c.replace(" ", "_").replace("-", "_").replace("/", "_")
+            return nota_col_map.get(c, _normalize_col(c))
+
+        rows: list[dict] = []
+        try:
+            if fname.endswith((".csv", ".tsv")):
+                raw = f.read()
+                try:
+                    text = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    text = raw.decode("latin-1")
+                first_line = text.split("\n")[0]
+                sep = "\t" if "\t" in first_line else (
+                    ";" if ";" in first_line else ","
+                )
+                reader = csv.DictReader(
+                    io.StringIO(text), delimiter=sep,
+                )
+                for row in reader:
+                    mapped = {}
+                    for k, v in row.items():
+                        if k and v:
+                            mapped[normalize_nota_col(k)] = v.strip()
+                    if mapped.get("symbol"):
+                        rows.append(mapped)
+            elif fname.endswith((".xlsx", ".xls")):
+                import openpyxl
+
+                wb = openpyxl.load_workbook(
+                    io.BytesIO(f.read()), read_only=True,
+                )
+                ws = wb.active
+                headers: list[str] = []
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i == 0:
+                        headers = [
+                            normalize_nota_col(str(c or ""))
+                            for c in row
+                        ]
+                        continue
+                    mapped = {}
+                    for j, val in enumerate(row):
+                        if j < len(headers) and val is not None:
+                            mapped[headers[j]] = str(val).strip()
+                    if mapped.get("symbol"):
+                        rows.append(mapped)
+                wb.close()
+            else:
+                return jsonify({
+                    "error": "Use arquivo .csv, .tsv ou .xlsx",
+                }), 400
+        except Exception as exc:
+            logger.warning("Nota import parse: %s", exc)
+            return jsonify({"error": f"Erro ao ler: {exc}"}), 400
+
+        if not rows:
+            return jsonify({
+                "error": "Nenhuma operação encontrada. "
+                "Verifique se o arquivo contém colunas como "
+                "'papel', 'quantidade', 'preço'.",
+            }), 400
+
+        imported = 0
+        errors_list: list[str] = []
+
+        for idx, row in enumerate(rows, 2):
+            try:
+                symbol = sanitize_text(
+                    row["symbol"].upper().strip(), 20,
+                )
+                # Guess asset type from symbol
+                at = "stock"
+                if symbol.endswith("11") and len(symbol) >= 5:
+                    at = "fii"
+                elif symbol.endswith("11B"):
+                    at = "fii"
+
+                name = sanitize_text(
+                    row.get("name", symbol), 100,
+                )
+                asset_id = repo.upsert_fin_asset({
+                    "symbol": symbol,
+                    "name": name,
+                    "asset_type": at,
+                    "currency": "BRL",
+                })
+
+                qty = _parse_number(row.get("quantity", "0"))
+                price = _parse_number(row.get("price", "0"))
+                if qty <= 0 or price <= 0:
+                    errors_list.append(
+                        f"Linha {idx}: quantidade ou preço inválido",
+                    )
+                    continue
+
+                # Aggregate fees from multiple fee columns
+                fees = sum(
+                    _parse_number(row.get(k, "0"))
+                    for k in ("fees", "fees2", "fees3", "fees4")
+                )
+
+                total = _parse_number(row.get("total", "0"))
+                if total <= 0:
+                    total = qty * price + fees
+
+                tx_type = _parse_tx_type(row.get("tx_type", "buy"))
+                tx_date = row.get("date", "")
+                if not tx_date:
+                    tx_date = datetime.now().strftime("%Y-%m-%d")
+
+                repo.add_fin_transaction({
+                    "asset_id": asset_id,
+                    "tx_type": tx_type,
+                    "quantity": qty,
+                    "price": price,
+                    "total": total,
+                    "fees": fees,
+                    "notes": sanitize_text(
+                        row.get("notes", "Importado de nota"),
+                        500,
+                    ),
+                    "tx_date": tx_date,
+                })
+                _recalc_portfolio(repo, asset_id)
+                imported += 1
+            except Exception as exc:
+                errors_list.append(f"Linha {idx}: {exc}")
+
+        cache.delete("finance:summary")
+        return jsonify({
+            "ok": True,
+            "imported": imported,
+            "total_rows": len(rows),
+            "errors": errors_list[:20],
+        }), 200 if imported else 400
+
+    # ── Dividends CRUD ─────────────────────────────────────
+
+    @app.get("/api/finance/dividends")
+    @limiter.limit("30/minute")
+    def finance_list_dividends():
+        asset_id = request.args.get("asset_id", type=int)
+        return jsonify(repo.list_fin_dividends(asset_id=asset_id))
+
+    @app.post("/api/finance/dividends")
+    @limiter.limit("15/minute")
+    def finance_add_dividend():
+        body = request.get_json(silent=True)
+        if not body or not body.get("asset_id"):
+            return jsonify({"error": "asset_id obrigatório"}), 400
+        data = {
+            "asset_id": int(body["asset_id"]),
+            "div_type": sanitize_text(
+                str(body.get("div_type", "dividend")), 20,
+            ),
+            "amount_per_share": float(body.get("amount_per_share", 0)),
+            "total_amount": float(body.get("total_amount", 0)),
+            "quantity": float(body.get("quantity", 0)),
+            "ex_date": str(body.get("ex_date", "")) or None,
+            "pay_date": str(body.get("pay_date", ""))
+            or datetime.now().strftime("%Y-%m-%d"),
+            "notes": sanitize_text(str(body.get("notes", "")), 500),
+        }
+        # Auto-calc total if only per_share given
+        if data["amount_per_share"] > 0 and data["quantity"] > 0 and not data["total_amount"]:
+            data["total_amount"] = data["amount_per_share"] * data["quantity"]
+        div_id = repo.add_fin_dividend(data)
+        cache.delete("finance:summary")
+        return jsonify({"ok": True, "id": div_id}), 201
+
+    @app.delete("/api/finance/dividends/<int:div_id>")
+    @limiter.limit("15/minute")
+    def finance_delete_dividend(div_id: int):
+        repo.delete_fin_dividend(div_id)
+        cache.delete("finance:summary")
+        return jsonify({"ok": True})
+
+    @app.get("/api/finance/dividend-summary")
+    @limiter.limit("30/minute")
+    def finance_dividend_summary():
+        return jsonify(repo.get_fin_dividend_summary())
+
+    # ── Asset Price History ─────────────────────────────────
+
+    @app.get("/api/finance/asset-history/<int:asset_id>")
+    @limiter.limit("30/minute")
+    def finance_asset_history_alt(asset_id: int):
+        limit = request.args.get("limit", 90, type=int)
+        return jsonify(repo.get_fin_asset_history(asset_id, limit))
+
+    # ── Export Data ─────────────────────────────────────────
+
+    @app.get("/api/finance/export")
+    @limiter.limit("5/minute")
+    def finance_export():
+        """Export portfolio + transactions as CSV or Excel."""
+        fmt = request.args.get("format", "csv")
+        export_type = request.args.get("type", "all")
+
+        portfolio = repo.get_fin_portfolio()
+        transactions = repo.list_fin_transactions(limit=5000)
+        dividends = repo.list_fin_dividends()
+
+        if fmt == "xlsx":
+            import openpyxl
+
+            wb = openpyxl.Workbook()
+
+            # Portfolio sheet
+            if export_type in ("all", "portfolio"):
+                ws = wb.active
+                ws.title = "Portfólio"
+                ws.append([
+                    "Símbolo", "Nome", "Tipo", "Quantidade",
+                    "Preço Médio", "Preço Atual", "Total Investido",
+                    "Valor Atual", "P&L", "P&L %",
+                ])
+                for p in portfolio:
+                    current_val = (p.get("current_price") or 0) * p.get("quantity", 0)
+                    pnl = current_val - p.get("total_invested", 0)
+                    pnl_pct = (
+                        (pnl / p["total_invested"] * 100)
+                        if p["total_invested"] else 0
+                    )
+                    ws.append([
+                        p["symbol"], p.get("name", ""), p.get("asset_type", ""),
+                        p["quantity"], p["avg_price"],
+                        p.get("current_price", 0), p["total_invested"],
+                        round(current_val, 2), round(pnl, 2),
+                        round(pnl_pct, 2),
+                    ])
+
+            # Transactions sheet
+            if export_type in ("all", "transactions"):
+                ws2 = wb.create_sheet("Transações")
+                ws2.append([
+                    "Data", "Tipo", "Símbolo", "Quantidade",
+                    "Preço", "Total", "Taxas", "Notas",
+                ])
+                for t in transactions:
+                    ws2.append([
+                        (t.get("tx_date") or "")[:10],
+                        t["tx_type"].upper(), t["symbol"],
+                        t["quantity"], t["price"], t["total"],
+                        t.get("fees", 0), t.get("notes", ""),
+                    ])
+
+            # Dividends sheet
+            if export_type in ("all", "dividends") and dividends:
+                ws3 = wb.create_sheet("Dividendos")
+                ws3.append([
+                    "Data", "Símbolo", "Tipo", "Valor/Ação",
+                    "Quantidade", "Total", "Notas",
+                ])
+                for d in dividends:
+                    ws3.append([
+                        (d.get("pay_date") or "")[:10],
+                        d.get("symbol", ""), d.get("div_type", ""),
+                        d.get("amount_per_share", 0),
+                        d.get("quantity", 0),
+                        d.get("total_amount", 0),
+                        d.get("notes", ""),
+                    ])
+
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            return (
+                buf.getvalue(),
+                200,
+                {
+                    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "Content-Disposition": "attachment; filename=financeiro.xlsx",
+                },
+            )
+
+        # CSV default
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=";")
+        writer.writerow([
+            "Tipo", "Data", "Símbolo", "Nome", "Classe",
+            "Quantidade", "Preço", "Total", "Taxas", "Notas",
+        ])
+        for t in transactions:
+            writer.writerow([
+                t["tx_type"].upper(),
+                (t.get("tx_date") or "")[:10],
+                t["symbol"], t.get("name", ""), t.get("asset_type", ""),
+                t["quantity"], t["price"], t["total"],
+                t.get("fees", 0), t.get("notes", ""),
+            ])
+        for d in dividends:
+            writer.writerow([
+                d.get("div_type", "DIVIDEND").upper(),
+                (d.get("pay_date") or "")[:10],
+                d.get("symbol", ""), d.get("asset_name", ""), "",
+                d.get("quantity", 0), d.get("amount_per_share", 0),
+                d.get("total_amount", 0), 0, d.get("notes", ""),
+            ])
+        return (
+            output.getvalue(),
+            200,
+            {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": "attachment; filename=financeiro.csv",
+            },
+        )
+
+    # ── Allocation Targets ──────────────────────────────────
+
+    @app.get("/api/finance/allocation-targets")
+    @limiter.limit("30/minute")
+    def finance_list_allocation_targets():
+        return jsonify(repo.list_fin_allocation_targets())
+
+    @app.post("/api/finance/allocation-targets")
+    @limiter.limit("15/minute")
+    def finance_save_allocation_targets():
+        body = request.get_json(silent=True)
+        if not body or not isinstance(body.get("targets"), list):
+            return jsonify({"error": "targets array obrigatório"}), 400
+        for t in body["targets"]:
+            asset_type = sanitize_text(str(t.get("asset_type", "")), 20)
+            target_pct = float(t.get("target_pct", 0))
+            if asset_type:
+                repo.upsert_fin_allocation_target(asset_type, target_pct)
+        return jsonify({"ok": True})
+
+    # ── Rebalancing Suggestion ──────────────────────────────
+
+    @app.get("/api/finance/rebalance")
+    @limiter.limit("15/minute")
+    def finance_rebalance():
+        """Calculate rebalancing suggestions."""
+        summary = repo.get_fin_summary()
+        targets = repo.list_fin_allocation_targets()
+        total_value = summary["current_value"]
+
+        if not targets or total_value <= 0:
+            return jsonify({
+                "suggestions": [],
+                "message": "Configure suas metas de alocação primeiro.",
+            })
+
+        target_map = {t["asset_type"]: t["target_pct"] for t in targets}
+        current_alloc = summary.get("allocation", {})
+
+        suggestions = []
+        for asset_type, target_pct in target_map.items():
+            current_val = current_alloc.get(asset_type, 0)
+            current_pct = (current_val / total_value * 100) if total_value else 0
+            target_val = total_value * target_pct / 100
+            diff_val = target_val - current_val
+            diff_pct = target_pct - current_pct
+            suggestions.append({
+                "asset_type": asset_type,
+                "target_pct": round(target_pct, 1),
+                "current_pct": round(current_pct, 1),
+                "current_value": round(current_val, 2),
+                "target_value": round(target_val, 2),
+                "diff_value": round(diff_val, 2),
+                "diff_pct": round(diff_pct, 1),
+                "action": "comprar" if diff_val > 0 else "vender" if diff_val < 0 else "ok",
+            })
+
+        return jsonify({"suggestions": suggestions, "total_value": total_value})
+
+    # ── IR Report ───────────────────────────────────────────
+
+    @app.get("/api/finance/ir-report")
+    @limiter.limit("10/minute")
+    def finance_ir_report():
+        year = request.args.get("year", datetime.now().year, type=int)
+        report = repo.get_fin_ir_report(year)
+        return jsonify(report)
+
     # ── Market Data (brapi.dev for BR stocks, CoinGecko for crypto) ──
 
     @app.get("/api/finance/market-data")
@@ -526,7 +957,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "updated": item.get("regularMarketTime"),
                         }
                         # Update asset in DB
-                        repo.upsert_fin_asset({
+                        _aid = repo.upsert_fin_asset({
                             "symbol": sym,
                             "name": item.get("longName", sym),
                             "asset_type": "stock",
@@ -547,6 +978,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                                 "low": item.get("regularMarketDayLow"),
                             },
                         })
+                        _price = item.get("regularMarketPrice")
+                        if _aid and _price:
+                            repo.record_fin_asset_price(
+                                _aid, _price,
+                                item.get("regularMarketVolume"),
+                            )
             except Exception as exc:
                 logger.warning("brapi.dev fetch failed: %s", exc)
 
@@ -576,7 +1013,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "market_cap": info.get("brl_market_cap"),
                             "volume_24h": info.get("brl_24h_vol"),
                         }
-                        repo.upsert_fin_asset({
+                        _aid = repo.upsert_fin_asset({
                             "symbol": cid.upper(),
                             "name": cid.title(),
                             "asset_type": "crypto",
@@ -586,6 +1023,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "market_cap": info.get("brl_market_cap"),
                             "volume": info.get("brl_24h_vol"),
                         })
+                        _cprice = info.get("brl")
+                        if _aid and _cprice:
+                            repo.record_fin_asset_price(
+                                _aid, _cprice,
+                                info.get("brl_24h_vol"),
+                            )
             except Exception as exc:
                 logger.warning("CoinGecko fetch failed: %s", exc)
 

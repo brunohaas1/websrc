@@ -23,7 +23,9 @@
         </div>
         <div class="topbar-tools">
           <a href="/" class="btn-icon" title="Voltar ao Dashboard">🏠</a>
+          <button id="btnExportData" class="btn-icon" title="Exportar dados">📤</button>
           <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV">📥</button>
+          <button id="btnNotifications" class="btn-icon" title="Ativar notificações">🔔</button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
           <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
         </div>
@@ -140,7 +142,53 @@
           <canvas id="pnlChart" height="280"></canvas>
         </div>
       </section>
+      <!-- ── Dividendos / Proventos ───────────────────── -->
+      <section class="fin-card fin-wide" id="finDividendsCard">
+        <h2>
+          💸 Dividendos &amp; Proventos
+          <button id="btnAddDividend" class="btn-text" title="Registrar dividendo">➕ Novo</button>
+        </h2>
+        <div id="finDividendSummary" class="fin-dividend-summary"></div>
+        <div id="finDividendsContent" class="fin-card-body">
+          <div class="skeleton" style="height:100px"></div>
+        </div>
+      </section>
 
+      <!-- ── Evolução Patrimonial (Price History) ─────── -->
+      <section class="fin-card fin-wide" id="finHistoryCard">
+        <h2>📈 Evolução Patrimonial
+          <select id="historyAssetSelect" class="fin-inline-select">
+            <option value="">Selecione um ativo...</option>
+          </select>
+        </h2>
+        <div class="fin-card-body fin-chart-container">
+          <canvas id="historyChart" height="300"></canvas>
+          <p id="historyEmpty" class="fin-empty">Selecione um ativo para ver o histórico de preços.</p>
+        </div>
+      </section>
+
+      <!-- ── Rebalanceamento ──────────────────────────── -->
+      <section class="fin-card" id="finRebalanceCard">
+        <h2>
+          ⚖️ Rebalanceamento
+          <button id="btnEditAllocation" class="btn-text" title="Configurar metas de alocação">⚙️ Metas</button>
+        </h2>
+        <div id="finRebalanceContent" class="fin-card-body">
+          <p class="fin-empty">Configure suas metas de alocação para ver sugestões.</p>
+        </div>
+      </section>
+
+      <!-- ── Relatório IR ─────────────────────────────── -->
+      <section class="fin-card" id="finIRCard">
+        <h2>
+          🧾 Relatório IR
+          <select id="irYearSelect" class="fin-inline-select">
+          </select>
+        </h2>
+        <div id="finIRContent" class="fin-card-body">
+          <p class="fin-empty">Selecione o ano para gerar o relatório.</p>
+        </div>
+      </section>
       <!-- ── AI Analysis ──────────────────────────────── -->
       <section class="fin-card fin-wide" id="finAICard">
         <h2>🧠 Análise IA <span class="fin-ai-hint">💡 Dica: peça para a IA cadastrar ativos, transações, metas — ex: "comprei 100 PETR4 a R$35"</span></h2>

@@ -1884,7 +1884,7 @@ class Repository:
         with get_connection(self.database_target) as conn:
             rows = conn.execute("""
                 SELECT p.*, a.symbol, a.name, a.asset_type, a.currency,
-                       a.current_price, a.day_change_pct
+                       a.current_price, a.day_change_pct, a.extra_json
                 FROM fin_portfolio p
                 JOIN fin_assets a ON a.id = p.asset_id
                 ORDER BY p.total_invested DESC
@@ -2143,4 +2143,241 @@ class Repository:
             },
             "portfolio": portfolio,
         }
+
+    # ── Dividends ───────────────────────────────────────────
+
+    def add_fin_dividend(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql("""
+                INSERT INTO fin_dividends
+                    (asset_id, div_type, amount_per_share, total_amount,
+                     quantity, ex_date, pay_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """)
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (
+                    data["asset_id"],
+                    data.get("div_type", "dividend"),
+                    data.get("amount_per_share", 0),
+                    data.get("total_amount", 0),
+                    data.get("quantity", 0),
+                    data.get("ex_date"),
+                    data.get("pay_date"),
+                    data.get("notes"),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_dividends(
+        self, asset_id: int | None = None, limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            if asset_id:
+                rows = conn.execute(
+                    self._sql("""
+                        SELECT d.*, a.symbol, a.name AS asset_name
+                        FROM fin_dividends d
+                        JOIN fin_assets a ON a.id = d.asset_id
+                        WHERE d.asset_id = ?
+                        ORDER BY d.pay_date DESC LIMIT ?
+                    """),
+                    (asset_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    self._sql("""
+                        SELECT d.*, a.symbol, a.name AS asset_name
+                        FROM fin_dividends d
+                        JOIN fin_assets a ON a.id = d.asset_id
+                        ORDER BY d.pay_date DESC LIMIT ?
+                    """),
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_fin_dividend(self, div_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_dividends WHERE id = ?"),
+                (div_id,),
+            )
+            conn.commit()
+            return True
+
+    def get_fin_dividend_summary(self) -> dict[str, Any]:
+        """Get total dividends grouped by asset and type."""
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute("""
+                SELECT a.symbol, d.div_type,
+                       SUM(d.total_amount) AS total,
+                       COUNT(*) AS count
+                FROM fin_dividends d
+                JOIN fin_assets a ON a.id = d.asset_id
+                GROUP BY a.symbol, d.div_type
+                ORDER BY total DESC
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Allocation Targets ──────────────────────────────────
+
+    def list_fin_allocation_targets(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM fin_allocation_targets ORDER BY asset_type",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_fin_allocation_target(
+        self, asset_type: str, target_pct: float,
+    ) -> None:
+        with get_connection(self.database_target) as conn:
+            existing = conn.execute(
+                self._sql(
+                    "SELECT id FROM fin_allocation_targets WHERE asset_type = ?",
+                ),
+                (asset_type,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    self._sql("""
+                        UPDATE fin_allocation_targets
+                        SET target_pct = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE asset_type = ?
+                    """),
+                    (target_pct, asset_type),
+                )
+            else:
+                conn.execute(
+                    self._sql("""
+                        INSERT INTO fin_allocation_targets (asset_type, target_pct)
+                        VALUES (?, ?)
+                    """),
+                    (asset_type, target_pct),
+                )
+            conn.commit()
+
+    def delete_fin_allocation_target(self, asset_type: str) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql(
+                    "DELETE FROM fin_allocation_targets WHERE asset_type = ?",
+                ),
+                (asset_type,),
+            )
+            conn.commit()
+            return True
+
+    # ── IR Report Helper ────────────────────────────────────
+
+    def get_fin_ir_report(self, year: int) -> dict[str, Any]:
+        """Calculate IR-relevant data for a given year."""
+        with get_connection(self.database_target) as conn:
+            # All transactions in the year grouped by month
+            if self.is_postgres:
+                month_expr = "TO_CHAR(t.tx_date, 'YYYY-MM')"
+            else:
+                month_expr = "SUBSTR(t.tx_date, 1, 7)"
+
+            rows = conn.execute(
+                f"""
+                SELECT {month_expr} AS month, t.tx_type,
+                       a.symbol, a.asset_type, a.name,
+                       t.quantity, t.price, t.total, t.fees, t.tx_date
+                FROM fin_transactions t
+                JOIN fin_assets a ON a.id = t.asset_id
+                WHERE {month_expr} LIKE ?
+                ORDER BY t.tx_date
+                """,
+                (f"{year}-%",),
+            ).fetchall()
+            transactions = [dict(r) for r in rows]
+
+            # Dividends in the year
+            divs = conn.execute(
+                self._sql("""
+                    SELECT d.*, a.symbol, a.name AS asset_name
+                    FROM fin_dividends d
+                    JOIN fin_assets a ON a.id = d.asset_id
+                    WHERE d.pay_date LIKE ?
+                    ORDER BY d.pay_date
+                """),
+                (f"{year}-%",),
+            ).fetchall()
+            dividends = [dict(r) for r in divs]
+
+        # Calculate monthly sell totals & cost basis
+        monthly_sells: dict[str, float] = {}
+        positions: dict[str, dict] = {}  # symbol -> {qty, avg_cost}
+
+        for t in transactions:
+            sym = t["symbol"]
+            if sym not in positions:
+                positions[sym] = {"qty": 0.0, "total_cost": 0.0}
+
+            if t["tx_type"] == "buy":
+                positions[sym]["qty"] += t["quantity"]
+                positions[sym]["total_cost"] += t["total"]
+            elif t["tx_type"] == "sell":
+                month = t["month"]
+                pos = positions[sym]
+                avg_cost = (
+                    pos["total_cost"] / pos["qty"]
+                ) if pos["qty"] > 0 else 0
+                sell_qty = min(t["quantity"], pos["qty"])
+                sell_total = t["quantity"] * t["price"]
+                cost_basis = avg_cost * sell_qty
+                month_profit = sell_total - cost_basis - t.get("fees", 0)
+
+                monthly_sells.setdefault(month, {"total": 0.0, "profit": 0.0})
+                monthly_sells[month]["total"] += sell_total
+                monthly_sells[month]["profit"] += month_profit
+
+                pos["qty"] -= sell_qty
+                pos["total_cost"] -= avg_cost * sell_qty
+
+        # DARF calculation: months where sells > R$20k
+        darf_months = []
+        for month, data in sorted(monthly_sells.items()):
+            total = data["total"]
+            profit = data["profit"]
+            darf_months.append({
+                "month": month,
+                "total_sell": round(total, 2),
+                "profit": round(profit, 2),
+                "needs_darf": total > 20000,
+            })
+
+        total_dividends = sum(d.get("total_amount", 0) for d in dividends)
+
+        # Current positions for declaration
+        final_positions = []
+        for sym, pos in positions.items():
+            if pos["qty"] > 0:
+                final_positions.append({
+                    "symbol": sym,
+                    "quantity": round(pos["qty"], 6),
+                    "avg_cost": round(
+                        pos["total_cost"] / pos["qty"], 2,
+                    ) if pos["qty"] > 0 else 0,
+                    "total_cost": round(pos["total_cost"], 2),
+                })
+
+        return {
+            "year": year,
+            "transactions": transactions,
+            "dividends": dividends,
+            "total_dividends": round(total_dividends, 2),
+            "monthly_sells": darf_months,
+            "positions_dec31": sorted(
+                final_positions, key=lambda x: x["total_cost"], reverse=True,
+            ),
+        }
+
 
