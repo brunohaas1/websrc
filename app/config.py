@@ -68,6 +68,7 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "").strip()
     FINANCE_API_KEY = os.getenv("FINANCE_API_KEY", "").strip()
+    BRAPI_TOKEN = os.getenv("BRAPI_TOKEN", "").strip()
 
     DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "90"))
 
