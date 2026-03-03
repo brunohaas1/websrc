@@ -1408,6 +1408,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 syms = ",".join(stock_symbols)
                 params = {"fundamental": "true"}
                 brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
+                if not brapi_token:
+                    brapi_token = repo.get_setting("brapi_token", "").strip()
+                    if brapi_token:
+                        app.config["BRAPI_TOKEN"] = brapi_token
                 if brapi_token:
                     params["token"] = brapi_token
                 resp = http_requests.get(
