@@ -867,3 +867,57 @@ class TestImportB3:
         assert resp.status_code == 400
         data = resp.get_json()
         assert "Colunas esperadas" in data["error"]
+
+
+class TestFinanceSettings:
+    """Tests for /api/finance/settings."""
+
+    def test_get_finance_settings(self, client):
+        resp = client.get("/api/finance/settings")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "ai_local_url" in data
+        assert "currency_api_url" in data
+        assert "brapi_token" in data
+        assert "brapi_token_set" in data
+
+    def test_update_finance_settings_non_secret(self, client):
+        resp = client.put(
+            "/api/finance/settings",
+            data=json.dumps({
+                "ai_local_timeout_seconds": 77,
+                "currency_update_minutes": 22,
+                "ai_local_enabled": "1",
+            }),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["count"] == 3
+
+        check = client.get("/api/finance/settings")
+        cfg = check.get_json()
+        assert str(cfg["ai_local_timeout_seconds"]) == "77"
+        assert str(cfg["currency_update_minutes"]) == "22"
+        assert str(cfg["ai_local_enabled"]) == "1"
+
+    def test_update_finance_settings_secret_masking(self, client):
+        resp = client.put(
+            "/api/finance/settings",
+            data=json.dumps({"brapi_token": "abc123token"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+        check = client.get("/api/finance/settings")
+        cfg = check.get_json()
+        assert cfg["brapi_token"] == ""
+        assert cfg["brapi_token_set"] is True
+
+    def test_update_finance_settings_invalid(self, client):
+        resp = client.put(
+            "/api/finance/settings",
+            data=json.dumps({"ai_local_timeout_seconds": 9999}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400

@@ -719,7 +719,16 @@ function openFinModal(title, bodyHtml) {
   byId("finModalOverlay").style.display = "flex";
 
   // Bind form submit via data-form-action (CSP-safe)
-  const formActionMap = { submitAddAsset, submitAddTransaction, submitAddWatchlist, submitAddGoal, submitEditGoal, submitAddDividend, submitAllocationTargets };
+  const formActionMap = {
+    submitAddAsset,
+    submitAddTransaction,
+    submitAddWatchlist,
+    submitAddGoal,
+    submitEditGoal,
+    submitAddDividend,
+    submitAllocationTargets,
+    submitFinanceSettings,
+  };
   const form = byId("finModalBody").querySelector("form[data-form-action]");
   if (form) {
     form.addEventListener("submit", (e) => {
@@ -2252,6 +2261,114 @@ function checkWatchlistAlerts() {
 }
 
 // ══════════════════════════════════════════════════════════
+// Finance Settings
+// ══════════════════════════════════════════════════════════
+
+async function openFinanceSettingsModal() {
+  try {
+    const resp = await finFetch("/api/finance/settings");
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao carregar configurações", "error");
+      return;
+    }
+
+    openFinModal("Configurações Financeiras", `
+      <form data-form-action="submitFinanceSettings">
+        <p class="fin-empty" style="text-align:left;margin-bottom:12px">
+          Ajuste API keys e provedores do módulo financeiro. Para campos de chave,
+          deixe em branco para manter o valor atual.
+        </p>
+
+        <div class="fin-form-group">
+          <label>BRAPI Token</label>
+          <input type="password" id="finSetBrapiToken" placeholder="${data.brapi_token_set ? "•••••••• (já configurado)" : "cole seu token aqui"}" autocomplete="off" />
+        </div>
+
+        <div class="fin-form-group">
+          <label>Finance API Key</label>
+          <input type="password" id="finSetFinanceApiKey" placeholder="${data.finance_api_key_set ? "•••••••• (já configurado)" : "opcional"}" autocomplete="off" />
+        </div>
+
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>IA local habilitada</label>
+            <select id="finSetAiEnabled">
+              <option value="1" ${String(data.ai_local_enabled) === "1" ? "selected" : ""}>Sim</option>
+              <option value="0" ${String(data.ai_local_enabled) === "0" ? "selected" : ""}>Não</option>
+            </select>
+          </div>
+          <div class="fin-form-group">
+            <label>Timeout IA (segundos)</label>
+            <input type="number" id="finSetAiTimeout" min="5" max="300" value="${escapeHtml(data.ai_local_timeout_seconds || "45")}" />
+          </div>
+        </div>
+
+        <div class="fin-form-group">
+          <label>URL IA Local</label>
+          <input type="url" id="finSetAiUrl" value="${escapeHtml(data.ai_local_url || "")}" />
+        </div>
+
+        <div class="fin-form-group">
+          <label>Modelo IA</label>
+          <input type="text" id="finSetAiModel" value="${escapeHtml(data.ai_local_model || "")}" />
+        </div>
+
+        <div class="fin-form-group">
+          <label>URL API de Câmbio</label>
+          <input type="url" id="finSetCurrencyApi" value="${escapeHtml(data.currency_api_url || "")}" />
+        </div>
+
+        <div class="fin-form-group">
+          <label>Atualização de câmbio (min)</label>
+          <input type="number" id="finSetCurrencyUpdate" min="1" max="1440" value="${escapeHtml(data.currency_update_minutes || "15")}" />
+        </div>
+
+        <button type="submit" class="fin-form-submit">💾 Salvar configurações</button>
+      </form>
+    `);
+  } catch {
+    showToast("Erro de rede ao carregar configurações", "error");
+  }
+}
+
+async function submitFinanceSettings() {
+  const payload = {
+    ai_local_enabled: byId("finSetAiEnabled")?.value || "1",
+    ai_local_timeout_seconds: byId("finSetAiTimeout")?.value || "45",
+    ai_local_url: byId("finSetAiUrl")?.value?.trim() || "",
+    ai_local_model: byId("finSetAiModel")?.value?.trim() || "",
+    currency_api_url: byId("finSetCurrencyApi")?.value?.trim() || "",
+    currency_update_minutes: byId("finSetCurrencyUpdate")?.value || "15",
+  };
+
+  const brapiToken = byId("finSetBrapiToken")?.value?.trim() || "";
+  const financeApiKey = byId("finSetFinanceApiKey")?.value?.trim() || "";
+  if (brapiToken) payload.brapi_token = brapiToken;
+  if (financeApiKey) payload.finance_api_key = financeApiKey;
+
+  try {
+    const resp = await finFetch("/api/finance/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao salvar configurações", "error");
+      return;
+    }
+
+    showToast("Configurações salvas com sucesso!", "success");
+    closeFinModal();
+    loadAll();
+  } catch {
+    showToast("Erro de rede ao salvar configurações", "error");
+  }
+}
+
+// ══════════════════════════════════════════════════════════
 // AI Analysis
 // ══════════════════════════════════════════════════════════
 
@@ -2394,6 +2511,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddDividend", openAddDividendModal);
   bind("btnEditAllocation", openAllocationModal);
   bind("btnExportData", openExportModal);
+  bind("btnFinanceSettings", openFinanceSettingsModal);
   bind("btnNotifications", setupNotifications);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);

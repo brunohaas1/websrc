@@ -42,6 +42,152 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         cache.set("finance:summary", summary, 60)
         return jsonify(summary)
 
+    # ── Finance Settings (keys & providers) ───────────────
+
+    FINANCE_SETTINGS_SCHEMA: dict[str, dict] = {
+        "brapi_token": {
+            "type": "str", "max_len": 300, "default": "", "secret": True,
+        },
+        "finance_api_key": {
+            "type": "str", "max_len": 300, "default": "", "secret": True,
+        },
+        "ai_local_enabled": {"type": "bool", "default": "1"},
+        "ai_local_url": {
+            "type": "url", "max_len": 300,
+            "default": "http://llamacpp:8080",
+        },
+        "ai_local_model": {
+            "type": "str", "max_len": 200,
+            "default": "qwen2.5:7b-instruct",
+        },
+        "ai_local_timeout_seconds": {
+            "type": "int", "min": 5, "max": 300, "default": "45",
+        },
+        "currency_api_url": {
+            "type": "url", "max_len": 500,
+            "default": "https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL",
+        },
+        "currency_update_minutes": {
+            "type": "int", "min": 1, "max": 1440, "default": "15",
+        },
+    }
+
+    def _bool_to_01(value: object) -> str:
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        txt = str(value).strip().lower()
+        return "1" if txt in ("1", "true", "yes", "on") else "0"
+
+    def _validate_fin_setting(key: str, value: object) -> tuple[bool, str, str]:
+        schema = FINANCE_SETTINGS_SCHEMA.get(key)
+        if not schema:
+            return False, "", f"Unknown setting: {key}"
+
+        stype = schema["type"]
+        raw = str(value).strip()
+
+        if stype == "int":
+            try:
+                v = int(raw)
+                if v < schema.get("min", -9999999) or v > schema.get("max", 9999999):
+                    return False, "", f"{key}: valor fora do intervalo"
+                return True, str(v), ""
+            except ValueError:
+                return False, "", f"{key}: deve ser número inteiro"
+
+        if stype == "bool":
+            if isinstance(value, bool):
+                return True, "1" if value else "0", ""
+            if raw.lower() in ("0", "1", "true", "false", "yes", "no", "on", "off"):
+                return True, _bool_to_01(raw), ""
+            return False, "", f"{key}: deve ser booleano"
+
+        if stype == "url":
+            if len(raw) > schema.get("max_len", 500):
+                return False, "", f"{key}: URL muito longa"
+            return True, raw, ""
+
+        if stype == "str":
+            if len(raw) > schema.get("max_len", 500):
+                return False, "", f"{key}: texto muito longo"
+            return True, raw, ""
+
+        return True, raw, ""
+
+    @app.get("/api/finance/settings")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_get_settings():
+        db_settings = repo.get_all_settings()
+        result: dict[str, object] = {}
+
+        for key, schema in FINANCE_SETTINGS_SCHEMA.items():
+            config_key = key.upper()
+            cfg_val = app.config.get(config_key, schema.get("default", ""))
+            if schema["type"] == "bool":
+                cfg_default = _bool_to_01(cfg_val)
+            else:
+                cfg_default = str(cfg_val or "")
+
+            value = db_settings.get(key, cfg_default)
+            if schema.get("secret"):
+                result[key] = ""
+                result[f"{key}_set"] = bool(str(value).strip())
+            else:
+                result[key] = value
+
+        return jsonify(result)
+
+    @app.put("/api/finance/settings")
+    @limiter.limit("10/minute")
+    @require_finance_key
+    def finance_update_settings():
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON inválido"}), 400
+
+        errors: list[str] = []
+        valid: dict[str, str] = {}
+
+        for key, value in body.items():
+            schema = FINANCE_SETTINGS_SCHEMA.get(key)
+            if not schema:
+                continue
+
+            # For secret fields: blank means keep current value
+            if schema.get("secret") and not str(value).strip():
+                continue
+
+            ok, normalized, msg = _validate_fin_setting(key, value)
+            if ok:
+                valid[key] = normalized
+            else:
+                errors.append(msg)
+
+        if errors:
+            return jsonify({"error": "; ".join(errors)}), 400
+        if not valid:
+            return jsonify({"error": "Nenhuma configuração válida enviada"}), 400
+
+        repo.set_settings_bulk(valid)
+
+        # Apply immediately to app.config
+        for key, value in valid.items():
+            schema = FINANCE_SETTINGS_SCHEMA[key]
+            config_key = key.upper()
+            if schema["type"] == "int":
+                app.config[config_key] = int(value)
+            elif schema["type"] == "bool":
+                app.config[config_key] = value == "1"
+            else:
+                app.config[config_key] = value
+
+        # Invalidate caches affected by provider/config updates
+        cache.delete("finance:market")
+        cache.delete("finance:summary")
+
+        return jsonify({"updated": list(valid.keys()), "count": len(valid)})
+
     # ── Assets CRUD ─────────────────────────────────────────
 
     @app.get("/api/finance/assets")
