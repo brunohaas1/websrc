@@ -1403,71 +1403,73 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 if _aid and price:
                     repo.record_fin_asset_price(_aid, price, volume)
 
-            brapi_loaded = False
-            try:
-                syms = ",".join(stock_symbols)
-                params = {"fundamental": "true"}
-                brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
-                if not brapi_token:
-                    brapi_token = repo.get_setting("brapi_token", "").strip()
-                    if brapi_token:
-                        app.config["BRAPI_TOKEN"] = brapi_token
+            brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
+            if not brapi_token:
+                brapi_token = repo.get_setting("brapi_token", "").strip()
                 if brapi_token:
-                    params["token"] = brapi_token
-                resp = http_requests.get(
-                    f"https://brapi.dev/api/quote/{syms}",
-                    params=params,
-                    timeout=10,
-                )
-                if resp.ok:
-                    data = resp.json()
-                    items = data.get("results", [])
-                    for item in items:
-                        sym = item.get("symbol", "")
-                        _save_stock_quote(
-                            sym=sym,
-                            name=item.get("longName", sym),
-                            price=item.get("regularMarketPrice"),
-                            previous_close=item.get(
-                                "regularMarketPreviousClose",
-                            ),
-                            change=item.get("regularMarketChange"),
-                            change_pct=item.get(
-                                "regularMarketChangePercent",
-                            ),
-                            volume=item.get("regularMarketVolume"),
-                            market_cap=item.get("marketCap"),
-                            high=item.get("regularMarketDayHigh"),
-                            low=item.get("regularMarketDayLow"),
-                            updated=item.get("regularMarketTime"),
-                        )
-                    brapi_loaded = bool(items)
-            except Exception as exc:
-                logger.warning("brapi.dev fetch failed: %s", exc)
+                    app.config["BRAPI_TOKEN"] = brapi_token
 
-            if brapi_loaded:
-                return
+            for sym in sorted(stock_symbols):
+                if not sym or sym.startswith("^"):
+                    continue
 
-            try:
-                yahoo_symbols = []
-                for sym in sorted(stock_symbols):
-                    if sym.startswith("^"):
+                loaded = False
+
+                # 1) brapi: one asset per request
+                try:
+                    params = {"fundamental": "true"}
+                    if brapi_token:
+                        params["token"] = brapi_token
+                    resp = http_requests.get(
+                        f"https://brapi.dev/api/quote/{sym}",
+                        params=params,
+                        timeout=10,
+                    )
+                    if resp.ok:
+                        data = resp.json()
+                        items = data.get("results", [])
+                        if items:
+                            item = items[0]
+                            price = item.get("regularMarketPrice")
+                            if price is not None:
+                                _save_stock_quote(
+                                    sym=sym,
+                                    name=item.get("longName", sym),
+                                    price=price,
+                                    previous_close=item.get(
+                                        "regularMarketPreviousClose",
+                                    ),
+                                    change=item.get("regularMarketChange"),
+                                    change_pct=item.get(
+                                        "regularMarketChangePercent",
+                                    ),
+                                    volume=item.get("regularMarketVolume"),
+                                    market_cap=item.get("marketCap"),
+                                    high=item.get("regularMarketDayHigh"),
+                                    low=item.get("regularMarketDayLow"),
+                                    updated=item.get("regularMarketTime"),
+                                )
+                                loaded = True
+                except Exception as exc:
+                    logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
+
+                if loaded:
+                    continue
+
+                # 2) Yahoo fallback: one asset per request
+                try:
+                    yresp = http_requests.get(
+                        "https://query1.finance.yahoo.com/v7/finance/quote",
+                        params={"symbols": f"{sym}.SA"},
+                        timeout=10,
+                    )
+                    if not yresp.ok:
                         continue
-                    yahoo_symbols.append(f"{sym}.SA")
-                if not yahoo_symbols:
-                    return
-
-                yresp = http_requests.get(
-                    "https://query1.finance.yahoo.com/v7/finance/quote",
-                    params={"symbols": ",".join(yahoo_symbols)},
-                    timeout=10,
-                )
-                if not yresp.ok:
-                    return
-                ydata = yresp.json()
-                for item in ydata.get("quoteResponse", {}).get("result", []):
-                    ysym = str(item.get("symbol", ""))
-                    sym = ysym[:-3] if ysym.endswith(".SA") else ysym
+                    ydata = yresp.json()
+                    items = ydata.get("quoteResponse", {}).get("result", [])
+                    if not items:
+                        continue
+                    item = items[0]
                     price = item.get("regularMarketPrice")
                     if price is None:
                         continue
@@ -1488,8 +1490,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         low=item.get("regularMarketDayLow"),
                         updated=item.get("regularMarketTime"),
                     )
-            except Exception as exc:
-                logger.warning("Yahoo Finance fetch failed: %s", exc)
+                except Exception as exc:
+                    logger.warning("Yahoo Finance fetch failed for %s: %s", sym, exc)
 
         def _fetch_crypto():
             """Fetch crypto from CoinGecko."""
