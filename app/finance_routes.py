@@ -1680,6 +1680,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "AI_LOCAL_LLAMA_CPP_CHAT_ENDPOINT",
                 "/v1/chat/completions",
             )
+            timeout_s = max(
+                90,
+                int(app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 30)),
+            )
             resp = http_requests.post(
                 f"{ai_url}{endpoint}",
                 json={
@@ -1690,12 +1694,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_msg},
                     ],
-                    "max_tokens": 800,
+                    "max_tokens": 600,
                     "temperature": 0.7,
                 },
-                timeout=app.config.get(
-                    "AI_LOCAL_TIMEOUT_SECONDS", 90,
-                ),
+                timeout=timeout_s,
             )
             if resp.ok:
                 data = resp.json()
