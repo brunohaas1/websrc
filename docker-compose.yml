@@ -127,12 +127,12 @@ services:
       - --port
       - "8080"
       - --ctx-size
-      - "4096"
+      - "${LLAMACPP_CTX_SIZE:-2048}"
       - --n-predict
       - "384"
       - --n-gpu-layers
-      - "${LLAMACPP_GPU_LAYERS:-35}"
-    mem_limit: 5g
+      - "${LLAMACPP_GPU_LAYERS:-60}"
+    mem_limit: ${LLAMACPP_MEM_LIMIT:-3g}
     cpus: 2.0
     volumes:
       - ./models:/models
