@@ -1203,7 +1203,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "max_tokens": 800,
                     "temperature": 0.7,
                 },
-                timeout=app.config.get("AI_LOCAL_TIMEOUT_SECONDS", 30),
+                timeout=app.config.get(
+                    "AI_LOCAL_TIMEOUT_SECONDS", 90,
+                ),
             )
             if resp.ok:
                 data = resp.json()
