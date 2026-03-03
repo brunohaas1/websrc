@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import requests as http_requests
@@ -13,7 +14,7 @@ from flask_limiter import Limiter
 
 from .cache import get_cache
 from .repository import Repository
-from .security import sanitize_text
+from .security import require_finance_key, sanitize_text
 
 
 def register_finance_routes(app: Flask, limiter: Limiter) -> None:
@@ -50,10 +51,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/assets")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_add_asset():
         body = request.get_json(silent=True)
         if not body or not body.get("symbol"):
             return jsonify({"error": "symbol obrigatório"}), 400
+        extra = body.get("extra") or {}
+        if not isinstance(extra, dict):
+            extra = {}
         data = {
             "symbol": sanitize_text(str(body["symbol"]).upper().strip(), 20),
             "name": sanitize_text(str(body.get("name", body["symbol"])), 100),
@@ -61,12 +66,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 str(body.get("asset_type", "stock")), 20,
             ),
             "currency": sanitize_text(str(body.get("currency", "BRL")), 10),
+            "extra": extra,
         }
         asset_id = repo.upsert_fin_asset(data)
         return jsonify({"ok": True, "id": asset_id}), 201
 
     @app.delete("/api/finance/assets/<int:asset_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_delete_asset(asset_id: int):
         repo.delete_fin_asset(asset_id)
         return jsonify({"ok": True})
@@ -95,6 +102,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/transactions")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_add_transaction():
         body = request.get_json(silent=True)
         if not body:
@@ -133,14 +141,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.delete("/api/finance/transactions/<int:tx_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_delete_transaction(tx_id: int):
         # Get asset_id before deleting
-        txns = repo.list_fin_transactions(limit=500)
-        asset_id = None
-        for t in txns:
-            if t.get("id") == tx_id:
-                asset_id = t.get("asset_id")
-                break
+        tx = repo.get_fin_transaction(tx_id)
+        asset_id = tx.get("asset_id") if tx else None
         repo.delete_fin_transaction(tx_id)
         if asset_id:
             _recalc_portfolio(repo, asset_id)
@@ -156,6 +161,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/watchlist")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_add_watchlist():
         body = request.get_json(silent=True)
         if not body or not body.get("symbol"):
@@ -175,6 +181,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.delete("/api/finance/watchlist/<int:wl_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_delete_watchlist(wl_id: int):
         repo.delete_fin_watchlist(wl_id)
         return jsonify({"ok": True})
@@ -188,6 +195,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/goals")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_add_goal():
         body = request.get_json(silent=True)
         if not body or not body.get("name") or not body.get("target_amount"):
@@ -207,6 +215,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.put("/api/finance/goals/<int:goal_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_update_goal(goal_id: int):
         body = request.get_json(silent=True)
         if not body:
@@ -229,6 +238,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.delete("/api/finance/goals/<int:goal_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_delete_goal(goal_id: int):
         repo.delete_fin_goal(goal_id)
         return jsonify({"ok": True})
@@ -314,6 +324,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/import")
     @limiter.limit("5/minute")
+    @require_finance_key
     def finance_import():
         """Import assets & transactions from CSV or Excel file."""
         f = request.files.get("file")
@@ -473,6 +484,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/import-nota")
     @limiter.limit("5/minute")
+    @require_finance_key
     def finance_import_nota():
         """Import brokerage note (nota de corretagem) CSV/Excel.
 
@@ -670,6 +682,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/dividends")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_add_dividend():
         body = request.get_json(silent=True)
         if not body or not body.get("asset_id"):
@@ -696,6 +709,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.delete("/api/finance/dividends/<int:div_id>")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_delete_dividend(div_id: int):
         repo.delete_fin_dividend(div_id)
         cache.delete("finance:summary")
@@ -841,6 +855,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/allocation-targets")
     @limiter.limit("15/minute")
+    @require_finance_key
     def finance_save_allocation_targets():
         body = request.get_json(silent=True)
         if not body or not isinstance(body.get("targets"), list):
@@ -926,8 +941,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
         results: dict = {"stocks": {}, "crypto": {}, "indices": {}}
 
-        # Fetch BR stock data from brapi.dev
-        if stock_symbols:
+        def _fetch_stocks():
+            """Fetch BR stock data from brapi.dev."""
+            if not stock_symbols:
+                return
             try:
                 syms = ",".join(stock_symbols)
                 resp = http_requests.get(
@@ -956,7 +973,6 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "low": item.get("regularMarketDayLow"),
                             "updated": item.get("regularMarketTime"),
                         }
-                        # Update asset in DB
                         _aid = repo.upsert_fin_asset({
                             "symbol": sym,
                             "name": item.get("longName", sym),
@@ -987,8 +1003,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             except Exception as exc:
                 logger.warning("brapi.dev fetch failed: %s", exc)
 
-        # Fetch crypto from CoinGecko
-        if crypto_ids:
+        def _fetch_crypto():
+            """Fetch crypto from CoinGecko."""
+            if not crypto_ids:
+                return
             try:
                 ids_param = ",".join(crypto_ids)
                 resp = http_requests.get(
@@ -1032,25 +1050,36 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             except Exception as exc:
                 logger.warning("CoinGecko fetch failed: %s", exc)
 
-        # Fetch market indices (IBOV, IFIX, etc)
-        try:
-            resp = http_requests.get(
-                "https://brapi.dev/api/quote/%5EBVSP",
-                timeout=8,
-            )
-            if resp.ok:
-                data = resp.json()
-                for item in data.get("results", []):
-                    results["indices"][item.get("symbol", "IBOV")] = {
-                        "name": item.get("longName", "Ibovespa"),
-                        "price": item.get("regularMarketPrice"),
-                        "change": item.get("regularMarketChange"),
-                        "change_pct": item.get(
-                            "regularMarketChangePercent",
-                        ),
-                    }
-        except Exception as exc:
-            logger.warning("indices fetch failed: %s", exc)
+        def _fetch_indices():
+            """Fetch market indices (IBOV, etc)."""
+            try:
+                resp = http_requests.get(
+                    "https://brapi.dev/api/quote/%5EBVSP",
+                    timeout=8,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    for item in data.get("results", []):
+                        results["indices"][item.get("symbol", "IBOV")] = {
+                            "name": item.get("longName", "Ibovespa"),
+                            "price": item.get("regularMarketPrice"),
+                            "change": item.get("regularMarketChange"),
+                            "change_pct": item.get(
+                                "regularMarketChangePercent",
+                            ),
+                        }
+            except Exception as exc:
+                logger.warning("indices fetch failed: %s", exc)
+
+        # Run all fetches in parallel
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [
+                executor.submit(_fetch_stocks),
+                executor.submit(_fetch_crypto),
+                executor.submit(_fetch_indices),
+            ]
+            for f in as_completed(futures):
+                f.result()  # propagate any unexpected errors
 
         cache.set("finance:market", results, 120)
         return jsonify(results)
@@ -1059,6 +1088,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/ai-analysis")
     @limiter.limit("6/minute")
+    @require_finance_key
     def finance_ai_analysis():
         """AI-powered financial analysis."""
         if not app.config.get("AI_LOCAL_ENABLED"):
@@ -1361,6 +1391,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     @app.post("/api/finance/ai-chat")
     @limiter.limit("8/minute")
+    @require_finance_key
     def finance_ai_chat():
         """Open-ended financial chat with AI + auto-register."""
         if not app.config.get("AI_LOCAL_ENABLED"):

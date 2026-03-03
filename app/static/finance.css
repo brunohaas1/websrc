@@ -1280,3 +1280,92 @@ body.light .fin-alloc-total {
   background: rgba(234, 179, 8, 0.15);
   color: #eab308;
 }
+
+/* ── Toast Notifications ──────────────────────────────── */
+
+.fin-toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.fin-toast {
+  pointer-events: auto;
+  max-width: 380px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: #fff;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  transform: translateX(120%);
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.fin-toast-show {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.fin-toast-error {
+  background: rgba(239, 68, 68, 0.9);
+  border-left: 4px solid #dc2626;
+}
+
+.fin-toast-success {
+  background: rgba(34, 197, 94, 0.9);
+  border-left: 4px solid #16a34a;
+}
+
+.fin-toast-info {
+  background: rgba(59, 130, 246, 0.9);
+  border-left: 4px solid #2563eb;
+}
+
+.fin-toast-warning {
+  background: rgba(234, 179, 8, 0.9);
+  border-left: 4px solid #ca8a04;
+  color: #1a1a1a;
+}
+
+/* ── Pagination ───────────────────────────────────────── */
+
+.fin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0 4px;
+}
+
+.fin-page-btn {
+  background: var(--card-bg, rgba(15, 23, 42, 0.7));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  color: var(--text, #e2e8f0);
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+
+.fin-page-btn:hover:not(:disabled) {
+  background: var(--accent, #3b82f6);
+}
+
+.fin-page-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.fin-page-info {
+  font-size: 0.8rem;
+  color: var(--text-s, #94a3b8);
+}

@@ -62,3 +62,27 @@ def require_admin_key(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def require_finance_key(fn):
+    """Decorator: reject requests without a valid FINANCE_API_KEY.
+
+    When FINANCE_API_KEY is empty/unset the endpoint is open (dev mode).
+    Accepts the key via ``X-Finance-Key`` header or ``finance_key`` query param.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        configured_key = current_app.config.get("FINANCE_API_KEY") or ""
+        if not configured_key:
+            return fn(*args, **kwargs)
+
+        provided = (
+            request.headers.get("X-Finance-Key", "")
+            or request.args.get("finance_key", "")
+        )
+        if not provided or not hmac.compare_digest(provided, configured_key):
+            return jsonify({"error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+
+    return wrapper

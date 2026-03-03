@@ -18,6 +18,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.Config.AI_LOCAL_ENABLED", False)
     monkeypatch.setattr("app.config.Config.LOG_JSON", False)
     monkeypatch.setattr("app.config.Config.ADMIN_API_KEY", "")
+    monkeypatch.setattr("app.config.Config.FINANCE_API_KEY", "")
 
     from app import create_app
 

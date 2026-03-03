@@ -19,6 +19,27 @@ const FIN = {
 
 const byId = (id) => document.getElementById(id);
 
+// ── Toast notifications (replaces alert()) ────────────────
+function showToast(message, type = "error") {
+  let container = byId("finToastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "finToastContainer";
+    container.className = "fin-toast-container";
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement("div");
+  toast.className = `fin-toast fin-toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("fin-toast-show"));
+  setTimeout(() => {
+    toast.classList.remove("fin-toast-show");
+    toast.addEventListener("transitionend", () => toast.remove());
+    setTimeout(() => toast.remove(), 400);
+  }, 3500);
+}
+
 function escapeHtml(text) {
   const d = document.createElement("div");
   d.textContent = String(text ?? "");
@@ -50,6 +71,17 @@ function formatNumber(value, decimals = 2) {
 function changeClass(value) {
   if (value == null) return "";
   return value >= 0 ? "fin-up" : "fin-down";
+}
+
+// ── Authenticated fetch helper ────────────────────────────
+// The finance key can be provided via a <meta name="finance-key"> tag in the template.
+function finFetch(url, opts = {}) {
+  const meta = document.querySelector('meta[name="finance-key"]');
+  const key = meta ? meta.getAttribute("content") : "";
+  if (key) {
+    opts.headers = { ...(opts.headers || {}), "X-Finance-Key": key };
+  }
+  return fetch(url, opts);
 }
 
 function badgeClass(type) {
@@ -88,14 +120,14 @@ function initTheme() {
 async function loadAll() {
   try {
     const [summary, transactions, watchlist, goals, market, assets, dividends, allocTargets] = await Promise.all([
-      fetch("/api/finance/summary").then((r) => r.json()),
-      fetch("/api/finance/transactions").then((r) => r.json()),
-      fetch("/api/finance/watchlist").then((r) => r.json()),
-      fetch("/api/finance/goals").then((r) => r.json()),
-      fetch("/api/finance/market-data").then((r) => r.json()),
-      fetch("/api/finance/assets").then((r) => r.json()),
-      fetch("/api/finance/dividends").then((r) => r.json()),
-      fetch("/api/finance/allocation-targets").then((r) => r.json()),
+      finFetch("/api/finance/summary").then((r) => r.json()),
+      finFetch("/api/finance/transactions").then((r) => r.json()),
+      finFetch("/api/finance/watchlist").then((r) => r.json()),
+      finFetch("/api/finance/goals").then((r) => r.json()),
+      finFetch("/api/finance/market-data").then((r) => r.json()),
+      finFetch("/api/finance/assets").then((r) => r.json()),
+      finFetch("/api/finance/dividends").then((r) => r.json()),
+      finFetch("/api/finance/allocation-targets").then((r) => r.json()),
     ]);
 
     FIN.summary = summary;
@@ -291,6 +323,9 @@ function renderPortfolio(portfolio) {
   `;
 }
 
+let _txPage = 0;
+const _TX_PER_PAGE = 20;
+
 function renderTransactions(txns) {
   const el = byId("finTransactionsContent");
   if (!el) return;
@@ -299,8 +334,13 @@ function renderTransactions(txns) {
     return;
   }
 
-  const rows = txns
-    .slice(0, 50)
+  const totalPages = Math.ceil(txns.length / _TX_PER_PAGE);
+  if (_txPage >= totalPages) _txPage = totalPages - 1;
+  if (_txPage < 0) _txPage = 0;
+  const start = _txPage * _TX_PER_PAGE;
+  const page = txns.slice(start, start + _TX_PER_PAGE);
+
+  const rows = page
     .map((t) => {
       const typeCls = t.tx_type === "buy" ? "fin-badge-buy" : "fin-badge-sell";
       const label = t.tx_type === "buy" ? "COMPRA" : "VENDA";
@@ -323,6 +363,15 @@ function renderTransactions(txns) {
     })
     .join("");
 
+  let paginationHtml = "";
+  if (totalPages > 1) {
+    paginationHtml = `<div class="fin-pagination">
+      <button class="fin-page-btn" data-action="txPagePrev" ${_txPage === 0 ? "disabled" : ""}>◀</button>
+      <span class="fin-page-info">${_txPage + 1} / ${totalPages} (${txns.length} itens)</span>
+      <button class="fin-page-btn" data-action="txPageNext" ${_txPage >= totalPages - 1 ? "disabled" : ""}>▶</button>
+    </div>`;
+  }
+
   el.innerHTML = `
     <div class="fin-table-wrap">
       <table class="fin-table">
@@ -342,6 +391,7 @@ function renderTransactions(txns) {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${paginationHtml}
   `;
 }
 
@@ -878,7 +928,7 @@ async function submitImport() {
   fd.append("file", fileInput.files[0]);
 
   try {
-    const resp = await fetch("/api/finance/import", {
+    const resp = await finFetch("/api/finance/import", {
       method: "POST",
       body: fd,
     });
@@ -924,7 +974,7 @@ async function submitNotaImport() {
   fd.append("file", fileInput.files[0]);
 
   try {
-    const resp = await fetch("/api/finance/import-nota", {
+    const resp = await finFetch("/api/finance/import-nota", {
       method: "POST",
       body: fd,
     });
@@ -1049,7 +1099,7 @@ async function submitAddAsset(e) {
     };
   }
   try {
-    const resp = await fetch("/api/finance/assets", {
+    const resp = await finFetch("/api/finance/assets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1059,20 +1109,20 @@ async function submitAddAsset(e) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao adicionar ativo");
+      showToast(data.error || "Erro ao adicionar ativo");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
 async function deleteAsset(assetId) {
   if (!confirm("Remover este ativo e todas as transações associadas?")) return;
   try {
-    await fetch(`/api/finance/assets/${assetId}`, { method: "DELETE" });
+    await finFetch(`/api/finance/assets/${assetId}`, { method: "DELETE" });
     loadAll();
   } catch {
-    alert("Erro ao remover ativo");
+    showToast("Erro ao remover ativo");
   }
 }
 
@@ -1184,9 +1234,9 @@ async function submitAddTransaction(e) {
   // If user chose to create a new asset, do that first
   if (assetId === "__new__") {
     const sym = (byId("fmTxNewSymbol").value || "").trim().toUpperCase();
-    if (!sym) { alert("Informe o símbolo do ativo"); return; }
+    if (!sym) { showToast("Informe o símbolo do ativo"); return; }
     try {
-      const aResp = await fetch("/api/finance/assets", {
+      const aResp = await finFetch("/api/finance/assets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1198,13 +1248,13 @@ async function submitAddTransaction(e) {
       });
       if (!aResp.ok) {
         const d = await aResp.json();
-        alert(d.error || "Erro ao criar ativo");
+        showToast(d.error || "Erro ao criar ativo");
         return;
       }
       const aData = await aResp.json();
       assetId = aData.id;
     } catch {
-      alert("Erro de rede ao criar ativo");
+      showToast("Erro de rede ao criar ativo");
       return;
     }
   }
@@ -1219,11 +1269,11 @@ async function submitAddTransaction(e) {
     tx_date: byId("fmTxDate").value,
   };
   if (!body.asset_id) {
-    alert("Selecione ou crie um ativo");
+    showToast("Selecione ou crie um ativo");
     return;
   }
   try {
-    const resp = await fetch("/api/finance/transactions", {
+    const resp = await finFetch("/api/finance/transactions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1233,20 +1283,20 @@ async function submitAddTransaction(e) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao registrar transação");
+      showToast(data.error || "Erro ao registrar transação");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
 async function deleteTransaction(txId) {
   if (!confirm("Excluir esta transação?")) return;
   try {
-    await fetch(`/api/finance/transactions/${txId}`, { method: "DELETE" });
+    await finFetch(`/api/finance/transactions/${txId}`, { method: "DELETE" });
     loadAll();
   } catch {
-    alert("Erro ao excluir transação");
+    showToast("Erro ao excluir transação");
   }
 }
 
@@ -1302,7 +1352,7 @@ async function submitAddWatchlist(e) {
     alert_above: byId("fmWlAlertAbove").value === "1",
   };
   try {
-    const resp = await fetch("/api/finance/watchlist", {
+    const resp = await finFetch("/api/finance/watchlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1312,20 +1362,20 @@ async function submitAddWatchlist(e) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao adicionar à watchlist");
+      showToast(data.error || "Erro ao adicionar à watchlist");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
 async function deleteWatchlistItem(wlId) {
   if (!confirm("Remover da watchlist?")) return;
   try {
-    await fetch(`/api/finance/watchlist/${wlId}`, { method: "DELETE" });
+    await finFetch(`/api/finance/watchlist/${wlId}`, { method: "DELETE" });
     loadAll();
   } catch {
-    alert("Erro ao remover item");
+    showToast("Erro ao remover item");
   }
 }
 
@@ -1386,7 +1436,7 @@ async function submitAddGoal(e) {
     notes: byId("fmGoalNotes").value.trim(),
   };
   try {
-    const resp = await fetch("/api/finance/goals", {
+    const resp = await finFetch("/api/finance/goals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1396,10 +1446,10 @@ async function submitAddGoal(e) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao criar meta");
+      showToast(data.error || "Erro ao criar meta");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
@@ -1456,7 +1506,7 @@ async function submitEditGoal(e, goalId) {
     category: byId("fmGoalCategory").value,
   };
   try {
-    const resp = await fetch(`/api/finance/goals/${goalId}`, {
+    const resp = await finFetch(`/api/finance/goals/${goalId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1466,20 +1516,20 @@ async function submitEditGoal(e, goalId) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao salvar meta");
+      showToast(data.error || "Erro ao salvar meta");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
 async function deleteGoal(goalId) {
   if (!confirm("Excluir esta meta?")) return;
   try {
-    await fetch(`/api/finance/goals/${goalId}`, { method: "DELETE" });
+    await finFetch(`/api/finance/goals/${goalId}`, { method: "DELETE" });
     loadAll();
   } catch {
-    alert("Erro ao excluir meta");
+    showToast("Erro ao excluir meta");
   }
 }
 
@@ -1641,7 +1691,7 @@ async function submitAddDividend(e) {
     notes: byId("fmDivNotes").value.trim(),
   };
   try {
-    const resp = await fetch("/api/finance/dividends", {
+    const resp = await finFetch("/api/finance/dividends", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1651,20 +1701,20 @@ async function submitAddDividend(e) {
       loadAll();
     } else {
       const data = await resp.json();
-      alert(data.error || "Erro ao registrar dividendo");
+      showToast(data.error || "Erro ao registrar dividendo");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
 async function deleteDividend(divId) {
   if (!confirm("Excluir este dividendo?")) return;
   try {
-    await fetch(`/api/finance/dividends/${divId}`, { method: "DELETE" });
+    await finFetch(`/api/finance/dividends/${divId}`, { method: "DELETE" });
     loadAll();
   } catch {
-    alert("Erro ao excluir dividendo");
+    showToast("Erro ao excluir dividendo");
   }
 }
 
@@ -1695,7 +1745,7 @@ async function loadHistoryChart(assetId) {
   }
 
   try {
-    const resp = await fetch(`/api/finance/asset-history/${assetId}?limit=180`);
+    const resp = await finFetch(`/api/finance/asset-history/${assetId}?limit=180`);
     const data = await resp.json();
 
     if (!data.length) {
@@ -1772,7 +1822,7 @@ async function renderRebalance() {
   }
 
   try {
-    const resp = await fetch("/api/finance/rebalance");
+    const resp = await finFetch("/api/finance/rebalance");
     const data = await resp.json();
     const suggestions = data.suggestions || [];
 
@@ -1783,7 +1833,8 @@ async function renderRebalance() {
 
     const rows = suggestions.map((s) => {
       const diffCls = s.diff_pct > 0 ? "fin-up" : s.diff_pct < 0 ? "fin-down" : "";
-      const actionCls = s.action === "COMPRAR" ? "fin-badge-buy" : s.action === "VENDER" ? "fin-badge-sell" : "fin-badge-stock";
+      const act = (s.action || "").toUpperCase();
+      const actionCls = act === "COMPRAR" ? "fin-badge-buy" : act === "VENDER" ? "fin-badge-sell" : "fin-badge-stock";
       return `
         <div class="fin-rebal-row">
           <div class="fin-rebal-type">
@@ -1867,7 +1918,7 @@ async function submitAllocationTargets(e) {
     }
   });
   try {
-    const resp = await fetch("/api/finance/allocation-targets", {
+    const resp = await finFetch("/api/finance/allocation-targets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ targets }),
@@ -1875,14 +1926,14 @@ async function submitAllocationTargets(e) {
     if (resp.ok) {
       closeFinModal();
       // Reload targets
-      const tResp = await fetch("/api/finance/allocation-targets");
+      const tResp = await finFetch("/api/finance/allocation-targets");
       FIN.allocationTargets = await tResp.json();
       renderRebalance();
     } else {
-      alert("Erro ao salvar metas");
+      showToast("Erro ao salvar metas");
     }
   } catch {
-    alert("Erro de rede");
+    showToast("Erro de rede");
   }
 }
 
@@ -1908,7 +1959,7 @@ async function loadIRReport(year) {
   el.innerHTML = '<div class="fin-ai-loading">Gerando relatório IR...</div>';
 
   try {
-    const resp = await fetch(`/api/finance/ir-report?year=${year}`);
+    const resp = await finFetch(`/api/finance/ir-report?year=${year}`);
     const data = await resp.json();
 
     if (data.error) {
@@ -1927,9 +1978,11 @@ async function loadIRReport(year) {
       months.forEach((m) => {
         const overLimit = m.total_sell > 20000;
         const cls = overLimit ? "fin-ir-month over" : "fin-ir-month";
+        // m.month is string like "2026-01" — extract month number
+        const monthIdx = typeof m.month === "string" ? parseInt(m.month.split("-")[1], 10) - 1 : (m.month - 1);
         html += `
           <div class="${cls}">
-            <span class="fin-ir-month-name">${monthNames[m.month - 1] || m.month}</span>
+            <span class="fin-ir-month-name">${monthNames[monthIdx] || m.month}</span>
             <span class="fin-ir-month-sell">${formatBRL(m.total_sell)}</span>
             <span class="fin-ir-month-pnl ${changeClass(m.profit)}">${formatBRL(m.profit)}</span>
             ${overLimit ? '<span class="fin-ir-darf">DARF</span>' : ""}
@@ -1940,29 +1993,37 @@ async function loadIRReport(year) {
     }
 
     // Dividend totals
-    const divTotals = data.dividend_totals || {};
-    const divEntries = Object.entries(divTotals);
-    if (divEntries.length) {
+    const totalDiv = data.total_dividends;
+    const dividends = data.dividends || [];
+    if (totalDiv || dividends.length) {
       html += '<div class="fin-ir-section"><h4>💸 Proventos no Ano</h4>';
       html += '<div class="fin-ir-divs">';
-      divEntries.forEach(([type, val]) => {
+      if (totalDiv) {
+        html += `<div class="fin-ir-div-row"><span>Total</span><strong>${formatBRL(totalDiv)}</strong></div>`;
+      }
+      // Group dividends by type
+      const byType = {};
+      dividends.forEach((d) => {
+        const t = d.dividend_type || "dividendo";
+        byType[t] = (byType[t] || 0) + (d.amount || 0);
+      });
+      Object.entries(byType).forEach(([type, val]) => {
         html += `<div class="fin-ir-div-row"><span>${escapeHtml(type)}</span><strong>${formatBRL(val)}</strong></div>`;
       });
       html += "</div></div>";
     }
 
     // Year-end positions
-    const positions = data.positions || [];
+    const positions = data.positions_dec31 || [];
     if (positions.length) {
       html += '<div class="fin-ir-section"><h4>📋 Posição em 31/12</h4>';
-      html += '<div class="fin-table-wrap"><table class="fin-table"><thead><tr><th>Ativo</th><th>Tipo</th><th class="text-right">Qtd</th><th class="text-right">Custo Médio</th><th class="text-right">Total Investido</th></tr></thead><tbody>';
+      html += '<div class="fin-table-wrap"><table class="fin-table"><thead><tr><th>Ativo</th><th class="text-right">Qtd</th><th class="text-right">Custo Médio</th><th class="text-right">Total</th></tr></thead><tbody>';
       positions.forEach((p) => {
         html += `<tr>
           <td><strong>${escapeHtml(p.symbol)}</strong></td>
-          <td>${escapeHtml(p.asset_type)}</td>
           <td class="text-right mono">${formatNumber(p.quantity)}</td>
-          <td class="text-right mono">${formatBRL(p.avg_price)}</td>
-          <td class="text-right mono">${formatBRL(p.total_invested)}</td>
+          <td class="text-right mono">${formatBRL(p.avg_cost)}</td>
+          <td class="text-right mono">${formatBRL(p.total_cost)}</td>
         </tr>`;
       });
       html += "</tbody></table></div></div>";
@@ -2025,16 +2086,16 @@ function openExportModal() {
 
 function setupNotifications() {
   if (!("Notification" in window)) {
-    alert("Seu navegador não suporta notificações.");
+    showToast("Seu navegador não suporta notificações.");
     return;
   }
   if (Notification.permission === "granted") {
-    alert("Notificações já estão ativas! Você será alertado quando metas da watchlist forem atingidas.");
+    showToast("Notificações já estão ativas! Você será alertado quando metas da watchlist forem atingidas.", "info");
     return;
   }
   Notification.requestPermission().then((perm) => {
     if (perm === "granted") {
-      alert("Notificações ativadas! Você será alertado quando metas da watchlist forem atingidas.");
+      showToast("Notificações ativadas! Você será alertado quando metas da watchlist forem atingidas.", "success");
       checkWatchlistAlerts();
     }
   });
@@ -2042,12 +2103,21 @@ function setupNotifications() {
 
 function checkWatchlistAlerts() {
   if (Notification.permission !== "granted") return;
+  const notified = JSON.parse(localStorage.getItem("fin_notified_alerts") || "{}");
+  const now = Date.now();
+  // Prune entries older than 1 hour
+  Object.keys(notified).forEach((k) => {
+    if (now - notified[k] > 3600000) delete notified[k];
+  });
   FIN.watchlist.forEach((w) => {
     if (w.current_price == null || !w.target_price) return;
     const triggered = w.alert_above
       ? w.current_price >= w.target_price
       : w.current_price <= w.target_price;
     if (triggered) {
+      const key = `${w.symbol}_${w.target_price}_${w.alert_above}`;
+      if (notified[key]) return; // Already notified recently
+      notified[key] = now;
       const dir = w.alert_above ? "subiu acima" : "caiu abaixo";
       new Notification(`🔔 ${w.symbol} atingiu alvo!`, {
         body: `${w.symbol} ${dir} de ${formatBRL(w.target_price)} — Atual: ${formatBRL(w.current_price)}`,
@@ -2055,6 +2125,7 @@ function checkWatchlistAlerts() {
       });
     }
   });
+  localStorage.setItem("fin_notified_alerts", JSON.stringify(notified));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2073,7 +2144,7 @@ async function requestAIAnalysis(type) {
   el.innerHTML = '<div class="fin-ai-loading">Analisando seus dados financeiros...</div>';
 
   try {
-    const resp = await fetch("/api/finance/ai-analysis", {
+    const resp = await finFetch("/api/finance/ai-analysis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type }),
@@ -2102,7 +2173,7 @@ async function sendFinAIChat() {
   history.scrollTop = history.scrollHeight;
 
   try {
-    const resp = await fetch("/api/finance/ai-chat", {
+    const resp = await finFetch("/api/finance/ai-chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: msg }),
@@ -2234,7 +2305,13 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
-    const fn = actionMap[btn.dataset.action];
+    const action = btn.dataset.action;
+
+    // Pagination actions
+    if (action === "txPagePrev") { _txPage = Math.max(0, _txPage - 1); renderTransactions(FIN.transactions); return; }
+    if (action === "txPageNext") { _txPage++; renderTransactions(FIN.transactions); return; }
+
+    const fn = actionMap[action];
     if (fn) fn(Number(btn.dataset.id));
   });
 });

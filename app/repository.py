@@ -1989,6 +1989,14 @@ class Repository:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_fin_transaction(self, tx_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_transactions WHERE id = ?"),
+                (tx_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def delete_fin_transaction(self, tx_id: int) -> bool:
         with get_connection(self.database_target) as conn:
             conn.execute(
@@ -2002,6 +2010,31 @@ class Repository:
 
     def add_fin_watchlist(self, data: dict[str, Any]) -> int:
         with get_connection(self.database_target) as conn:
+            # Check for existing entry with same symbol
+            existing = conn.execute(
+                self._sql("SELECT id FROM fin_watchlist WHERE UPPER(symbol) = UPPER(?)"),
+                (data["symbol"],),
+            ).fetchone()
+            if existing:
+                # Update existing watchlist item
+                conn.execute(
+                    self._sql("""
+                        UPDATE fin_watchlist
+                        SET name = ?, asset_type = ?, target_price = ?,
+                            alert_above = ?, notes = ?
+                        WHERE id = ?
+                    """),
+                    (
+                        data.get("name", data["symbol"]),
+                        data.get("asset_type", "stock"),
+                        data.get("target_price"),
+                        bool(data.get("alert_above")),
+                        data.get("notes"),
+                        existing["id"],
+                    ),
+                )
+                conn.commit()
+                return int(existing["id"])
             q = self._sql("""
                 INSERT INTO fin_watchlist
                     (symbol, name, asset_type, target_price, alert_above, notes)
