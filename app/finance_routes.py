@@ -1212,63 +1212,134 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             """Fetch BR stock data from brapi.dev."""
             if not stock_symbols:
                 return
+
+            def _save_stock_quote(
+                sym: str,
+                name: str,
+                price: float | None,
+                previous_close: float | None,
+                change: float | None,
+                change_pct: float | None,
+                volume: float | None,
+                market_cap: float | None,
+                high: float | None,
+                low: float | None,
+                updated: float | None = None,
+            ) -> None:
+                results["stocks"][sym] = {
+                    "symbol": sym,
+                    "name": name,
+                    "price": price,
+                    "previous_close": previous_close,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "volume": volume,
+                    "market_cap": market_cap,
+                    "high": high,
+                    "low": low,
+                    "updated": updated,
+                }
+                _aid = repo.upsert_fin_asset({
+                    "symbol": sym,
+                    "name": name,
+                    "asset_type": "stock",
+                    "current_price": price,
+                    "previous_close": previous_close,
+                    "day_change": change,
+                    "day_change_pct": change_pct,
+                    "market_cap": market_cap,
+                    "volume": volume,
+                    "extra": {
+                        "high": high,
+                        "low": low,
+                    },
+                })
+                if _aid and price:
+                    repo.record_fin_asset_price(_aid, price, volume)
+
+            brapi_loaded = False
             try:
                 syms = ",".join(stock_symbols)
+                params = {"fundamental": "true"}
+                brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
+                if brapi_token:
+                    params["token"] = brapi_token
                 resp = http_requests.get(
                     f"https://brapi.dev/api/quote/{syms}",
-                    params={"fundamental": "true"},
+                    params=params,
                     timeout=10,
                 )
                 if resp.ok:
                     data = resp.json()
-                    for item in data.get("results", []):
+                    items = data.get("results", [])
+                    for item in items:
                         sym = item.get("symbol", "")
-                        results["stocks"][sym] = {
-                            "symbol": sym,
-                            "name": item.get("longName", sym),
-                            "price": item.get("regularMarketPrice"),
-                            "previous_close": item.get(
+                        _save_stock_quote(
+                            sym=sym,
+                            name=item.get("longName", sym),
+                            price=item.get("regularMarketPrice"),
+                            previous_close=item.get(
                                 "regularMarketPreviousClose",
                             ),
-                            "change": item.get("regularMarketChange"),
-                            "change_pct": item.get(
+                            change=item.get("regularMarketChange"),
+                            change_pct=item.get(
                                 "regularMarketChangePercent",
                             ),
-                            "volume": item.get("regularMarketVolume"),
-                            "market_cap": item.get("marketCap"),
-                            "high": item.get("regularMarketDayHigh"),
-                            "low": item.get("regularMarketDayLow"),
-                            "updated": item.get("regularMarketTime"),
-                        }
-                        _aid = repo.upsert_fin_asset({
-                            "symbol": sym,
-                            "name": item.get("longName", sym),
-                            "asset_type": "stock",
-                            "current_price": item.get(
-                                "regularMarketPrice",
-                            ),
-                            "previous_close": item.get(
-                                "regularMarketPreviousClose",
-                            ),
-                            "day_change": item.get("regularMarketChange"),
-                            "day_change_pct": item.get(
-                                "regularMarketChangePercent",
-                            ),
-                            "market_cap": item.get("marketCap"),
-                            "volume": item.get("regularMarketVolume"),
-                            "extra": {
-                                "high": item.get("regularMarketDayHigh"),
-                                "low": item.get("regularMarketDayLow"),
-                            },
-                        })
-                        _price = item.get("regularMarketPrice")
-                        if _aid and _price:
-                            repo.record_fin_asset_price(
-                                _aid, _price,
-                                item.get("regularMarketVolume"),
-                            )
+                            volume=item.get("regularMarketVolume"),
+                            market_cap=item.get("marketCap"),
+                            high=item.get("regularMarketDayHigh"),
+                            low=item.get("regularMarketDayLow"),
+                            updated=item.get("regularMarketTime"),
+                        )
+                    brapi_loaded = bool(items)
             except Exception as exc:
                 logger.warning("brapi.dev fetch failed: %s", exc)
+
+            if brapi_loaded:
+                return
+
+            try:
+                yahoo_symbols = []
+                for sym in sorted(stock_symbols):
+                    if sym.startswith("^"):
+                        continue
+                    yahoo_symbols.append(f"{sym}.SA")
+                if not yahoo_symbols:
+                    return
+
+                yresp = http_requests.get(
+                    "https://query1.finance.yahoo.com/v7/finance/quote",
+                    params={"symbols": ",".join(yahoo_symbols)},
+                    timeout=10,
+                )
+                if not yresp.ok:
+                    return
+                ydata = yresp.json()
+                for item in ydata.get("quoteResponse", {}).get("result", []):
+                    ysym = str(item.get("symbol", ""))
+                    sym = ysym[:-3] if ysym.endswith(".SA") else ysym
+                    price = item.get("regularMarketPrice")
+                    if price is None:
+                        continue
+                    _save_stock_quote(
+                        sym=sym,
+                        name=item.get("longName")
+                        or item.get("shortName")
+                        or sym,
+                        price=price,
+                        previous_close=item.get(
+                            "regularMarketPreviousClose",
+                        ),
+                        change=item.get("regularMarketChange"),
+                        change_pct=item.get("regularMarketChangePercent"),
+                        volume=item.get("regularMarketVolume"),
+                        market_cap=item.get("marketCap"),
+                        high=item.get("regularMarketDayHigh"),
+                        low=item.get("regularMarketDayLow"),
+                        updated=item.get("regularMarketTime"),
+                    )
+            except Exception as exc:
+                logger.warning("Yahoo Finance fetch failed: %s", exc)
 
         def _fetch_crypto():
             """Fetch crypto from CoinGecko."""
