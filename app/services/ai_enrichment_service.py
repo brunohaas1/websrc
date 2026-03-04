@@ -368,9 +368,8 @@ class LocalAIEnricher:
         categories = ", ".join(self.CATEGORIES)
         return (
             "Classifique o item e responda APENAS JSON válido (sem markdown). "
-            "Chaves obrigatórias: summary_one_line, category, "
+            "Chaves obrigatórias: category, "
             "relevance_score, reason. "
-            "summary_one_line em português com no máximo 140 caracteres; "
             f"category deve ser uma destas: {categories}; "
             "relevance_score deve ser inteiro de 0 a 100. "
             f"Item type: {item_type}. "
@@ -389,10 +388,6 @@ class LocalAIEnricher:
             pass
 
         text = str(raw or "")
-        summary_match = re.search(
-            r'"summary_one_line"\s*:\s*"([^"]{1,220})"',
-            text,
-        )
         category_match = re.search(
             r'"category"\s*:\s*"([a-zA-Z_]+)"',
             text,
@@ -406,11 +401,10 @@ class LocalAIEnricher:
             text,
         )
 
-        if not (summary_match and category_match and score_match):
+        if not (category_match and score_match):
             raise ValueError("Resposta não é objeto JSON")
 
         return {
-            "summary_one_line": summary_match.group(1).strip(),
             "category": category_match.group(1).strip().lower(),
             "relevance_score": int(score_match.group(1)),
             "reason": (
@@ -445,23 +439,8 @@ class LocalAIEnricher:
             best_category = str(preferred_category)
 
         relevance = min(100, 35 + best_score * 12)
-        clean_summary = summary
-        title_low = title.lower().rstrip(" .:-–—")
-        if title_low and clean_summary.lower().startswith(title_low):
-            clean_summary = clean_summary[len(title):].lstrip(" .:-–—")
-
-        if clean_summary and clean_summary.lower() != title.lower():
-            one_line = clean_summary[:140]
-        elif title:
-            one_line = "Sem resumo adicional; confira a matéria no link."
-        else:
-            one_line = "Sem resumo disponível"
-
-        if len(one_line) > 140:
-            one_line = f"{one_line[:137]}..."
 
         return {
-            "summary_one_line": one_line,
             "category": best_category,
             "relevance_score": relevance,
             "reason": "fallback-heuristic",
@@ -657,14 +636,6 @@ class LocalAIEnricher:
                 if category not in self.CATEGORIES:
                     category = "outros"
 
-                summary_one_line = str(
-                    parsed.get("summary_one_line") or "",
-                ).strip()
-                if not summary_one_line:
-                    raise ValueError("summary_one_line ausente")
-                if len(summary_one_line) > 140:
-                    summary_one_line = f"{summary_one_line[:137]}..."
-
                 try:
                     relevance_score = int(parsed.get("relevance_score", 0))
                 except (TypeError, ValueError):
@@ -677,7 +648,6 @@ class LocalAIEnricher:
 
                 return (
                     {
-                        "summary_one_line": summary_one_line,
                         "category": category,
                         "relevance_score": relevance_score,
                         "reason": reason or "model-output",
@@ -723,7 +693,7 @@ class LocalAIEnricher:
             if isinstance(extra_raw, dict)
             else {}
         )
-        if extra.get("ai_summary") and extra.get("ai_category"):
+        if extra.get("ai_category"):
             return item
 
         source = str(item.get("source") or "desconhecida").strip().lower()
@@ -738,7 +708,6 @@ class LocalAIEnricher:
         merged_extra: dict[str, Any] = dict(extra)
         merged_extra.update(
             {
-                "ai_summary": enrichment.get("summary_one_line"),
                 "ai_category": enrichment.get("category"),
                 "ai_score": adjusted_score,
                 "ai_score_raw": int(enrichment.get("relevance_score") or 0),
