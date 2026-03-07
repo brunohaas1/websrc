@@ -13,14 +13,19 @@ CATEGORIES = [
     "Links Relevantes"
 ]
 
-SOCIAL_PATTERNS = ["linkedin", "instagram", "facebook", "twitter", "tiktok", "youtube"]
+SOCIAL_PATTERNS = [
+    "linkedin", "instagram", "facebook", "twitter", "tiktok", "youtube"
+]
 NEWS_PATTERNS = ["news", "noticia", "article"]
 
 MAX_RESULTS = 10
 
 # Carrega pipeline de classificação de texto (zero-shot)
 try:
-    classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+    classifier = pipeline(
+        "zero-shot-classification",
+        model="facebook/bart-large-mnli"
+    )
 except Exception:
     classifier = None
 
@@ -66,10 +71,18 @@ def search_people(name):
             elif any(n in url for n in NEWS_PATTERNS):
                 item['score'] = 0.6
                 results["Notícias"].append(item)
-            elif re.search(r"curriculo|cv|linkedin|empresa|cargo|profissao", url, re.I):
+            elif re.search(
+                r"curriculo|cv|linkedin|empresa|cargo|profissao",
+                url,
+                re.I
+            ):
                 item['score'] = 0.65
                 results["Profissional"].append(item)
-            elif re.search(r"blog|site|personal|portfolio", url, re.I):
+            elif re.search(
+                r"blog|site|personal|portfolio",
+                url,
+                re.I
+            ):
                 item['score'] = 0.5
                 results["Links Relevantes"].append(item)
             else:
