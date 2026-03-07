@@ -1147,6 +1147,73 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         limit = min(365, max(1, int(request.args.get("limit", "90"))))
         return jsonify(repo.get_fin_total_history(limit))
 
+    @app.get("/api/finance/benchmark-history")
+    @limiter.limit("20/minute")
+    def finance_benchmark_history():
+        benchmark = str(request.args.get("benchmark", "ibov")).strip().lower()
+        limit = min(365, max(1, int(request.args.get("limit", "180"))))
+
+        benchmark_map = {
+            "ibov": "%5EBVSP",
+        }
+        if benchmark not in benchmark_map:
+            return jsonify({"error": "benchmark inválido"}), 400
+
+        cache_key = f"finance:benchmark:{benchmark}:{limit}"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        if limit <= 30:
+            rng = "1mo"
+        elif limit <= 90:
+            rng = "3mo"
+        elif limit <= 180:
+            rng = "6mo"
+        else:
+            rng = "1y"
+
+        try:
+            resp = http_requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{benchmark_map[benchmark]}",
+                params={"interval": "1d", "range": rng},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            if not resp.ok:
+                return jsonify([])
+
+            payload = resp.json()
+            result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
+            timestamps = result.get("timestamp") or []
+            closes = (((result.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+
+            rows: list[dict] = []
+            for ts, close in zip(timestamps, closes):
+                if close is None:
+                    continue
+                dt = datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d")
+                rows.append({"captured_at": dt, "price": float(close)})
+
+            if not rows:
+                return jsonify([])
+
+            rows = rows[-limit:]
+            base = rows[0]["price"] or 1.0
+            normalized = [
+                {
+                    "captured_at": r["captured_at"],
+                    "price": r["price"],
+                    "normalized_pct": round(((r["price"] / base) - 1.0) * 100.0, 4),
+                }
+                for r in rows
+            ]
+            cache.set(cache_key, normalized, 600)
+            return jsonify(normalized)
+        except Exception as exc:
+            logger.warning("benchmark history fetch failed (%s): %s", benchmark, exc)
+            return jsonify([])
+
     # ── Export Data ─────────────────────────────────────────
 
     @app.get("/api/finance/export")

@@ -1874,15 +1874,16 @@ const HISTORY_PREFS_KEY = "fin-history-prefs";
 function readHistoryPrefs() {
   try {
     const raw = localStorage.getItem(HISTORY_PREFS_KEY);
-    if (!raw) return { assetId: "", period: "180", compareTotal: false };
+    if (!raw) return { assetId: "", period: "180", compareTotal: false, benchmark: "" };
     const parsed = JSON.parse(raw);
     return {
       assetId: String(parsed.assetId || ""),
       period: String(parsed.period || "180"),
       compareTotal: Boolean(parsed.compareTotal),
+      benchmark: String(parsed.benchmark || ""),
     };
   } catch {
-    return { assetId: "", period: "180", compareTotal: false };
+    return { assetId: "", period: "180", compareTotal: false, benchmark: "" };
   }
 }
 
@@ -1890,11 +1891,13 @@ function saveHistoryPrefs() {
   const sel = byId("historyAssetSelect");
   const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
-  if (!sel || !periodSel || !compareEl) return;
+  const benchmarkSel = byId("historyBenchmarkSelect");
+  if (!sel || !periodSel || !compareEl || !benchmarkSel) return;
   localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
     assetId: sel.value || "",
     period: periodSel.value || "180",
     compareTotal: compareEl.checked,
+    benchmark: benchmarkSel.value || "",
   }));
 }
 
@@ -1903,12 +1906,17 @@ function applyHistoryPrefs() {
   const sel = byId("historyAssetSelect");
   const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
+  const benchmarkSel = byId("historyBenchmarkSelect");
 
   if (periodSel) {
     const allowed = ["30", "90", "180", "365"];
     periodSel.value = allowed.includes(prefs.period) ? prefs.period : "180";
   }
   if (compareEl) compareEl.checked = !!prefs.compareTotal;
+  if (benchmarkSel) {
+    const allowedB = ["", "ibov"];
+    benchmarkSel.value = allowedB.includes(prefs.benchmark) ? prefs.benchmark : "";
+  }
 
   if (sel) {
     const validValues = new Set(["", "__total__", ...FIN.assets.map((a) => String(a.id))]);
@@ -1934,11 +1942,13 @@ function _historyRangeDays() {
 async function loadHistoryFromControls() {
   const sel = byId("historyAssetSelect");
   const compareEl = byId("historyCompareTotal");
+  const benchmarkSel = byId("historyBenchmarkSelect");
   if (!sel) return;
   saveHistoryPrefs();
   await loadHistoryChart(sel.value, {
     compareTotal: !!(compareEl && compareEl.checked),
     rangeDays: _historyRangeDays(),
+    benchmark: (benchmarkSel && benchmarkSel.value) || "",
   });
 }
 
@@ -1949,6 +1959,7 @@ async function loadHistoryChart(assetId, options = {}) {
   const isTotal = assetId === "__total__";
   const compareTotal = !!options.compareTotal;
   const rangeDays = Number(options.rangeDays || 180);
+  const benchmark = String(options.benchmark || "").trim().toLowerCase();
   const limit = Math.min(365, Math.max(1, rangeDays));
 
   if (!assetId) {
@@ -1969,8 +1980,11 @@ async function loadHistoryChart(assetId, options = {}) {
     if (!isTotal && compareTotal) {
       reqs.push(finFetch(`/api/finance/portfolio-history?limit=${limit}`).then((r) => r.json()));
     }
+    if (benchmark) {
+      reqs.push(finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(benchmark)}&limit=${limit}`).then((r) => r.json()));
+    }
 
-    const [primaryData, totalData] = await Promise.all(reqs);
+    const [primaryData, totalData, benchmarkData] = await Promise.all(reqs);
 
     if (!primaryData.length) {
       canvas.style.display = "none";
@@ -1990,7 +2004,7 @@ async function loadHistoryChart(assetId, options = {}) {
     const primary = (primaryData || []).slice().reverse();
     const hasCompare = !isTotal && compareTotal && Array.isArray(totalData) && totalData.length > 0;
 
-    const datasets = [];
+    let datasets = [];
     let labels = primary.map((d) => (d.captured_at || "").slice(0, 10));
 
     if (hasCompare) {
@@ -2002,6 +2016,7 @@ async function loadHistoryChart(assetId, options = {}) {
       datasets.push({
         label: "Ativo (R$)",
         data: labels.map((d) => assetMap.get(d) ?? null),
+        yAxisID: "y",
         borderColor: "#6366f1",
         backgroundColor: "rgba(99,102,241,0.08)",
         fill: false,
@@ -2013,6 +2028,7 @@ async function loadHistoryChart(assetId, options = {}) {
       datasets.push({
         label: "Total da carteira (R$)",
         data: labels.map((d) => totalMap.get(d) ?? null),
+        yAxisID: "y",
         borderColor: "#22c55e",
         backgroundColor: "rgba(34,197,94,0.08)",
         fill: false,
@@ -2026,6 +2042,7 @@ async function loadHistoryChart(assetId, options = {}) {
       datasets.push({
         label: isTotal ? "Total da carteira (R$)" : "Preço (R$)",
         data: prices,
+        yAxisID: "y",
         borderColor: "#6366f1",
         backgroundColor: "rgba(99,102,241,0.1)",
         fill: true,
@@ -2033,6 +2050,40 @@ async function loadHistoryChart(assetId, options = {}) {
         pointRadius: prices.length > 60 ? 0 : 2,
         borderWidth: 2,
       });
+    }
+
+    if (benchmark && Array.isArray(benchmarkData) && benchmarkData.length) {
+      const bMap = new Map();
+      for (const row of benchmarkData) {
+        const d = (row.captured_at || "").slice(0, 10);
+        if (!d) continue;
+        bMap.set(d, Number(row.normalized_pct || 0));
+      }
+
+      if (bMap.size) {
+        const mergedLabels = [...new Set([...labels, ...bMap.keys()])].sort();
+        datasets = datasets.map((ds) => {
+          const map = new Map(labels.map((d, i) => [d, ds.data[i] ?? null]));
+          return {
+            ...ds,
+            data: mergedLabels.map((d) => (map.has(d) ? map.get(d) : null)),
+            spanGaps: true,
+          };
+        });
+        datasets.push({
+          label: benchmark === "ibov" ? "Benchmark IBOV (%)" : "Benchmark (%)",
+          data: mergedLabels.map((d) => (bMap.has(d) ? bMap.get(d) : null)),
+          yAxisID: "y1",
+          borderColor: "#f59e0b",
+          backgroundColor: "rgba(245,158,11,0.08)",
+          fill: false,
+          tension: 0.3,
+          pointRadius: mergedLabels.length > 60 ? 0 : 2,
+          borderWidth: 2,
+          spanGaps: true,
+        });
+        labels = mergedLabels;
+      }
     }
 
     if (FIN.charts.history) FIN.charts.history.destroy();
@@ -2051,7 +2102,13 @@ async function loadHistoryChart(assetId, options = {}) {
           legend: { display: datasets.length > 1 },
           tooltip: {
             callbacks: {
-              label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
+              label: (ctx) => {
+                const raw = Number(ctx.raw || 0);
+                if (ctx.dataset.yAxisID === "y1") {
+                  return ` ${ctx.dataset.label}: ${formatPct(raw)}`;
+                }
+                return ` ${ctx.dataset.label}: ${formatBRL(raw)}`;
+              },
             },
           },
         },
@@ -2063,6 +2120,12 @@ async function loadHistoryChart(assetId, options = {}) {
           y: {
             grid: { color: "rgba(255,255,255,0.05)" },
             ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => formatBRL(v) },
+          },
+          y1: {
+            display: datasets.some((d) => d.yAxisID === "y1"),
+            position: "right",
+            grid: { drawOnChartArea: false },
+            ticks: { color: "#f59e0b", font: { size: 10 }, callback: (v) => formatPct(v) },
           },
         },
       },
@@ -2664,11 +2727,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // History chart: asset select
   const histSel = byId("historyAssetSelect");
   const histPeriodSel = byId("historyPeriodSelect");
+  const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histCompare = byId("historyCompareTotal");
   if (histSel) {
     histSel.addEventListener("change", loadHistoryFromControls);
   }
   if (histPeriodSel) histPeriodSel.addEventListener("change", loadHistoryFromControls);
+  if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
 
   // IR report: year select

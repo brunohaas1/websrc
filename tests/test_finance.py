@@ -108,6 +108,10 @@ class TestAssets:
         assert resp.status_code == 200
         assert resp.get_json() == []
 
+    def test_benchmark_history_invalid_benchmark(self, client):
+        resp = client.get("/api/finance/benchmark-history?benchmark=foo")
+        assert resp.status_code == 400
+
 
 # ══════════════════════════════════════════════════════════
 #                 PORTFOLIO
