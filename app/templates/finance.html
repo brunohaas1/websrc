@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='finance.css') }}?v={{ asset_hash('finance.css') }}" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='people_search.js') }}?v={{ asset_hash('people_search.js') }}" defer></script>
   </head>
   <body>
 
@@ -29,6 +30,7 @@
           <button id="btnNotifications" class="btn-icon" title="Ativar notificações">🔔</button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
           <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
+          <button id="btnPeopleSearchTab" class="btn-icon" title="Busca de Pessoas">🧑‍💼</button>
         </div>
       </div>
     </header>
@@ -246,6 +248,7 @@
 
     </main>
 
+    {% include 'people_search.html' %}
     <!-- ── Modals ─────────────────────────────────────── -->
     <div id="finModalOverlay" class="fin-modal-overlay" style="display:none">
       <div class="fin-modal">
