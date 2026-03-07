@@ -157,6 +157,7 @@ async function loadAll() {
     renderPerformanceChart(FIN.portfolio);
     renderDividends(FIN.dividends);
     renderRebalance();
+    renderProjection();
     populateHistorySelect();
     applyHistoryPrefs();
     loadHistoryFromControls();
@@ -2202,15 +2203,26 @@ async function renderRebalance() {
     return;
   }
 
+  const aporteInput = byId("rebalAporteInput");
+  const aporte = Math.max(0, Number((aporteInput && aporteInput.value) || 0));
+
   try {
-    const resp = await finFetch("/api/finance/rebalance");
+    const resp = await finFetch(`/api/finance/rebalance?aporte=${encodeURIComponent(aporte)}`);
     const data = await resp.json();
     const suggestions = data.suggestions || [];
 
     if (!suggestions.length) {
-      el.innerHTML = `<p class="fin-empty">${escapeHtml(data.message || "Sem sugestões no momento.")}</p>`;
+      el.innerHTML = '<p class="fin-empty">Sem sugestões no momento.</p>';
       return;
     }
+
+    const summary = `
+      <div style="font-size:0.82rem;opacity:0.9;margin-bottom:8px;display:flex;gap:16px;flex-wrap:wrap;">
+        <span>Carteira atual: <strong>${formatBRL(data.total_value || 0)}</strong></span>
+        <span>Aporte: <strong>${formatBRL(data.aporte || 0)}</strong></span>
+        <span>Total simulado: <strong>${formatBRL(data.total_after_aporte || 0)}</strong></span>
+      </div>
+    `;
 
     const rows = suggestions.map((s) => {
       const diffCls = s.diff_pct > 0 ? "fin-up" : s.diff_pct < 0 ? "fin-down" : "";
@@ -2234,14 +2246,73 @@ async function renderRebalance() {
           <div class="fin-rebal-diff ${diffCls}">
             ${formatBRL(s.diff_value)}
           </div>
+          <div style="min-width:140px;font-size:0.8rem;opacity:0.9;text-align:right;">
+            Aporte: <strong>${formatBRL(s.aporte_sugerido || 0)}</strong>
+          </div>
           <span class="fin-badge ${actionCls}">${escapeHtml(s.action)}</span>
         </div>
       `;
     }).join("");
 
-    el.innerHTML = `<div class="fin-rebal-list">${rows}</div>`;
-  } catch {
-    el.innerHTML = '<p class="fin-empty">Erro ao carregar sugestões.</p>';
+    el.innerHTML = `${summary}<div class="fin-rebal-list">${rows}</div>`;
+  } catch (err) {
+    console.error("Rebalance error:", err);
+    el.innerHTML = '<p class="fin-empty">Erro ao calcular rebalanceamento.</p>';
+  }
+}
+
+async function renderProjection() {
+  const el = byId("finProjectionContent");
+  if (!el) return;
+
+  const monthsInput = byId("projectionMonthsInput");
+  const aporteInput = byId("projectionAporteMensalInput");
+  const months = Math.min(600, Math.max(1, Number((monthsInput && monthsInput.value) || 12)));
+  const aporteMensal = Math.max(0, Number((aporteInput && aporteInput.value) || 0));
+
+  try {
+    const resp = await finFetch(
+      `/api/finance/projection?months=${months}&aporte_mensal=${encodeURIComponent(aporteMensal)}`,
+    );
+    const data = await resp.json();
+    const scenarios = data.scenarios || {};
+    const rows = [
+      ["conservador", "Conservador"],
+      ["base", "Base"],
+      ["otimista", "Otimista"],
+    ].map(([key, label]) => {
+      const item = scenarios[key] || {};
+      const rate = Number(item.annual_rate || 0) * 100;
+      const finalValue = Number(item.final_value || 0);
+      return `
+        <tr>
+          <td>${label}</td>
+          <td>${rate.toFixed(1)}% a.a.</td>
+          <td>${formatBRL(finalValue)}</td>
+        </tr>
+      `;
+    }).join("");
+
+    el.innerHTML = `
+      <div style="font-size:0.82rem;opacity:0.9;margin-bottom:8px;display:flex;gap:16px;flex-wrap:wrap;">
+        <span>Valor atual: <strong>${formatBRL(data.current_value || 0)}</strong></span>
+        <span>Horizonte: <strong>${Number(data.months || months)} meses</strong></span>
+        <span>Aporte mensal: <strong>${formatBRL(data.aporte_mensal || 0)}</strong></span>
+      </div>
+      <table class="fin-table" style="margin-top:0;">
+        <thead>
+          <tr>
+            <th>Cenário</th>
+            <th>Retorno</th>
+            <th>Patrimônio final</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } catch (err) {
+    console.error("Projection error:", err);
+    el.innerHTML = '<p class="fin-empty">Erro ao calcular projeção.</p>';
   }
 }
 
@@ -2764,6 +2835,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnNotifications", setupNotifications);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);
+  bind("btnRunRebalanceSim", renderRebalance);
+  bind("btnRunProjection", renderProjection);
 
   // Modal overlay: close on background click
   const overlay = byId("finModalOverlay");
@@ -2791,6 +2864,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histInvested) histInvested.addEventListener("change", loadHistoryFromControls);
   if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
+
+  const rebalAporteInput = byId("rebalAporteInput");
+  const projectionMonthsInput = byId("projectionMonthsInput");
+  const projectionAporteMensalInput = byId("projectionAporteMensalInput");
+  if (rebalAporteInput) rebalAporteInput.addEventListener("change", renderRebalance);
+  if (projectionMonthsInput) projectionMonthsInput.addEventListener("change", renderProjection);
+  if (projectionAporteMensalInput) projectionAporteMensalInput.addEventListener("change", renderProjection);
 
   // IR report: year select
   const irSel = byId("irYearSelect");

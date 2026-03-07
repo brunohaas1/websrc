@@ -392,6 +392,57 @@ class TestRebalance:
         for s in data["suggestions"]:
             assert s["action"] in ("comprar", "vender", "ok")
 
+    def test_rebalance_with_aporte_distribution(self, client):
+        a1 = _add_asset(client, "PETR4", asset_type="stock").get_json()
+        a2 = _add_asset(client, "XPML11", asset_type="fii").get_json()
+        _add_tx(client, a1["id"], qty=10, price=10)
+        _add_tx(client, a2["id"], qty=10, price=10)
+
+        jpost(client, "/api/finance/allocation-targets", {
+            "targets": [
+                {"asset_type": "stock", "target_pct": 70},
+                {"asset_type": "fii", "target_pct": 30},
+            ],
+        })
+
+        resp = client.get("/api/finance/rebalance?aporte=100")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["aporte"] == pytest.approx(100.0, rel=1e-2)
+        assert data["total_after_aporte"] == pytest.approx(
+            float(data.get("total_value", 0.0)) + 100.0,
+            rel=1e-2,
+        )
+
+        if data["suggestions"]:
+            suggested = sum(float(s.get("aporte_sugerido", 0.0)) for s in data["suggestions"])
+            assert suggested == pytest.approx(100.0, rel=1e-2)
+
+
+class TestProjection:
+    def test_projection_shape_and_scenarios(self, client):
+        asset = _add_asset(client, "PETR4", asset_type="stock").get_json()
+        _add_tx(client, asset["id"], qty=10, price=30)
+
+        resp = client.get("/api/finance/projection?months=12&aporte_mensal=100")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data["months"] == 12
+        assert data["aporte_mensal"] == pytest.approx(100.0, rel=1e-2)
+        assert "scenarios" in data
+        assert set(data["scenarios"].keys()) == {"conservador", "base", "otimista"}
+
+        for key in ("conservador", "base", "otimista"):
+            scenario = data["scenarios"][key]
+            assert "annual_rate" in scenario
+            assert "final_value" in scenario
+            assert "points" in scenario
+            assert len(scenario["points"]) == 13
+
+        assert data["scenarios"]["conservador"]["final_value"] <= data["scenarios"]["base"]["final_value"]
+        assert data["scenarios"]["base"]["final_value"] <= data["scenarios"]["otimista"]["final_value"]
+
 
 # ══════════════════════════════════════════════════════════
 #                 IR REPORT

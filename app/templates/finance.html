@@ -192,8 +192,25 @@
           ⚖️ Rebalanceamento
           <button id="btnEditAllocation" class="btn-text" title="Configurar metas de alocação">⚙️ Metas</button>
         </h2>
+        <div class="fin-card-body" style="padding-bottom:0;display:grid;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:0.82rem;opacity:0.9;">Aporte hoje (R$)</label>
+            <input id="rebalAporteInput" type="number" min="0" step="0.01" value="0" style="max-width:150px;" />
+            <button id="btnRunRebalanceSim" class="btn-text" title="Simular rebalanceamento">Simular</button>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:0.82rem;opacity:0.9;">Projeção (meses)</label>
+            <input id="projectionMonthsInput" type="number" min="1" max="600" step="1" value="12" style="max-width:90px;" />
+            <label style="font-size:0.82rem;opacity:0.9;">Aporte mensal (R$)</label>
+            <input id="projectionAporteMensalInput" type="number" min="0" step="0.01" value="0" style="max-width:150px;" />
+            <button id="btnRunProjection" class="btn-text" title="Calcular projeção">Projetar</button>
+          </div>
+        </div>
         <div id="finRebalanceContent" class="fin-card-body">
           <p class="fin-empty">Configure suas metas de alocação para ver sugestões.</p>
+        </div>
+        <div id="finProjectionContent" class="fin-card-body" style="padding-top:0;">
+          <p class="fin-empty">Defina meses e aporte mensal para calcular projeção.</p>
         </div>
       </section>
 

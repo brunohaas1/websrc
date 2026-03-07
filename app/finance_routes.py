@@ -1393,23 +1393,30 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         summary = repo.get_fin_summary()
         targets = repo.list_fin_allocation_targets()
         total_value = summary["current_value"]
+        aporte = max(0.0, float(request.args.get("aporte", 0) or 0))
+        total_after_aporte = total_value + aporte
 
         if not targets or total_value <= 0:
             return jsonify({
                 "suggestions": [],
                 "message": "Configure suas metas de alocação primeiro.",
+                "total_value": total_value,
+                "aporte": aporte,
+                "total_after_aporte": total_after_aporte,
             })
 
         target_map = {t["asset_type"]: t["target_pct"] for t in targets}
         current_alloc = summary.get("allocation", {})
-
         suggestions = []
+        positive_gaps: list[dict[str, float | str]] = []
         for asset_type, target_pct in target_map.items():
             current_val = current_alloc.get(asset_type, 0)
             current_pct = (current_val / total_value * 100) if total_value else 0
-            target_val = total_value * target_pct / 100
+            target_val = total_after_aporte * target_pct / 100
             diff_val = target_val - current_val
             diff_pct = target_pct - current_pct
+            if diff_val > 0:
+                positive_gaps.append({"asset_type": asset_type, "gap": diff_val})
             suggestions.append({
                 "asset_type": asset_type,
                 "target_pct": round(target_pct, 1),
@@ -1419,9 +1426,62 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "diff_value": round(diff_val, 2),
                 "diff_pct": round(diff_pct, 1),
                 "action": "comprar" if diff_val > 0 else "vender" if diff_val < 0 else "ok",
+                "aporte_sugerido": 0.0,
             })
 
-        return jsonify({"suggestions": suggestions, "total_value": total_value})
+        if aporte > 0 and positive_gaps:
+            total_gap = sum(float(g["gap"]) for g in positive_gaps) or 1.0
+            allocation_map: dict[str, float] = {}
+            for g in positive_gaps:
+                allocation_map[str(g["asset_type"])] = round(
+                    aporte * (float(g["gap"]) / total_gap),
+                    2,
+                )
+            for s in suggestions:
+                s["aporte_sugerido"] = allocation_map.get(s["asset_type"], 0.0)
+
+        return jsonify({
+            "suggestions": suggestions,
+            "total_value": total_value,
+            "aporte": aporte,
+            "total_after_aporte": total_after_aporte,
+        })
+
+    @app.get("/api/finance/projection")
+    @limiter.limit("20/minute")
+    def finance_projection():
+        """Simple patrimony projection with conservative/base/optimistic scenarios."""
+        summary = repo.get_fin_summary()
+        current_value = max(0.0, float(summary.get("current_value", 0) or 0))
+        months = min(600, max(1, int(request.args.get("months", 12) or 12)))
+        aporte_mensal = max(0.0, float(request.args.get("aporte_mensal", 0) or 0))
+
+        scenarios = {
+            "conservador": 0.06,
+            "base": 0.10,
+            "otimista": 0.14,
+        }
+
+        result: dict[str, dict] = {}
+        for name, annual_rate in scenarios.items():
+            monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
+            value = current_value
+            points: list[dict[str, float | int]] = [{"month": 0, "value": round(value, 2)}]
+            for month in range(1, months + 1):
+                value = value * (1 + monthly_rate) + aporte_mensal
+                points.append({"month": month, "value": round(value, 2)})
+            result[name] = {
+                "annual_rate": annual_rate,
+                "final_value": round(value, 2),
+                "points": points,
+            }
+
+        return jsonify({
+            "current_value": round(current_value, 2),
+            "months": months,
+            "aporte_mensal": aporte_mensal,
+            "scenarios": result,
+        })
 
     # ── IR Report ───────────────────────────────────────────
 
