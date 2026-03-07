@@ -159,12 +159,22 @@
       <section class="fin-card fin-wide" id="finHistoryCard">
         <h2>📈 Evolução Patrimonial
           <select id="historyAssetSelect" class="fin-inline-select">
-            <option value="">Selecione um ativo...</option>
+            <option value="">Selecione...</option>
           </select>
+          <select id="historyPeriodSelect" class="fin-inline-select" title="Período">
+            <option value="30">30d</option>
+            <option value="90">90d</option>
+            <option value="180" selected>6m</option>
+            <option value="365">1 ano</option>
+          </select>
+          <label style="font-size:0.78rem;margin-left:8px;display:inline-flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="historyCompareTotal" />
+            Comparar com total
+          </label>
         </h2>
         <div class="fin-card-body fin-chart-container">
           <canvas id="historyChart" height="300"></canvas>
-          <p id="historyEmpty" class="fin-empty">Selecione um ativo para ver o histórico de preços.</p>
+          <p id="historyEmpty" class="fin-empty">Selecione um ativo ou o total da carteira para ver a evolução.</p>
         </div>
       </section>
 

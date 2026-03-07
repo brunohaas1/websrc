@@ -103,6 +103,11 @@ class TestAssets:
         assert hist.status_code == 200
         assert isinstance(hist.get_json(), list)
 
+    def test_portfolio_history_empty(self, client):
+        resp = client.get("/api/finance/portfolio-history")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
 
 # ══════════════════════════════════════════════════════════
 #                 PORTFOLIO
@@ -611,6 +616,19 @@ class TestFinanceRepository:
         result = repo.get_fin_summary()
         assert "total_invested" in result
         assert "current_value" in result
+
+    def test_total_history_aggregates_by_day(self, repo):
+        a1 = repo.upsert_fin_asset({"symbol": "TH1", "name": "TH1", "asset_type": "stock", "currency": "BRL"})
+        a2 = repo.upsert_fin_asset({"symbol": "TH2", "name": "TH2", "asset_type": "stock", "currency": "BRL"})
+
+        repo.upsert_fin_portfolio(a1, quantity=10, avg_price=0, total_invested=0)
+        repo.upsert_fin_portfolio(a2, quantity=5, avg_price=0, total_invested=0)
+        repo.record_fin_asset_price(a1, price=20)
+        repo.record_fin_asset_price(a2, price=30)
+
+        rows = repo.get_fin_total_history(limit=30)
+        assert len(rows) >= 1
+        assert rows[0]["price"] == pytest.approx(350.0, rel=1e-2)
 
     def test_portfolio_recalc(self, repo):
         aid = repo.upsert_fin_asset({"symbol": "RC1", "name": "RC", "asset_type": "stock", "currency": "BRL"})

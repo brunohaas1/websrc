@@ -1138,8 +1138,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @app.get("/api/finance/asset-history/<int:asset_id>")
     @limiter.limit("30/minute")
     def finance_asset_history_alt(asset_id: int):
-        limit = request.args.get("limit", 90, type=int)
+        limit = min(365, max(1, int(request.args.get("limit", "90"))))
         return jsonify(repo.get_fin_asset_history(asset_id, limit))
+
+    @app.get("/api/finance/portfolio-history")
+    @limiter.limit("30/minute")
+    def finance_portfolio_history():
+        limit = min(365, max(1, int(request.args.get("limit", "90"))))
+        return jsonify(repo.get_fin_total_history(limit))
 
     # ── Export Data ─────────────────────────────────────────
 

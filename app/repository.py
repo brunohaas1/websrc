@@ -1878,6 +1878,31 @@ class Repository:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_fin_total_history(self, limit: int = 90) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("""
+                    SELECT
+                        DATE(h.captured_at) AS captured_at,
+                        SUM(h.price * p.quantity) AS price
+                    FROM fin_asset_history h
+                    JOIN fin_portfolio p ON p.asset_id = h.asset_id
+                    JOIN (
+                        SELECT asset_id, DATE(captured_at) AS d, MAX(captured_at) AS max_captured_at
+                        FROM fin_asset_history
+                        GROUP BY asset_id, DATE(captured_at)
+                    ) latest
+                      ON latest.asset_id = h.asset_id
+                     AND latest.max_captured_at = h.captured_at
+                    WHERE p.quantity > 0
+                    GROUP BY DATE(h.captured_at)
+                    ORDER BY DATE(h.captured_at) DESC
+                    LIMIT ?
+                """),
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     # ── Portfolio ───────────────────────────────────────────
 
     def get_fin_portfolio(self) -> list[dict[str, Any]]:

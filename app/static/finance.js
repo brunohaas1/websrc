@@ -158,6 +158,8 @@ async function loadAll() {
     renderDividends(FIN.dividends);
     renderRebalance();
     populateHistorySelect();
+    applyHistoryPrefs();
+    loadHistoryFromControls();
     populateIRYears();
     checkWatchlistAlerts();
   } catch (err) {
@@ -1861,13 +1863,93 @@ function populateHistorySelect() {
   const opts = FIN.assets.map((a) =>
     `<option value="${a.id}" ${String(a.id) === current ? "selected" : ""}>${escapeHtml(a.symbol)}</option>`
   ).join("");
-  sel.innerHTML = '<option value="">Selecione um ativo...</option>' + opts;
+  sel.innerHTML =
+    `<option value="">Selecione...</option>`
+    + `<option value="__total__" ${current === "__total__" ? "selected" : ""}>Total da carteira</option>`
+    + opts;
 }
 
-async function loadHistoryChart(assetId) {
+const HISTORY_PREFS_KEY = "fin-history-prefs";
+
+function readHistoryPrefs() {
+  try {
+    const raw = localStorage.getItem(HISTORY_PREFS_KEY);
+    if (!raw) return { assetId: "", period: "180", compareTotal: false };
+    const parsed = JSON.parse(raw);
+    return {
+      assetId: String(parsed.assetId || ""),
+      period: String(parsed.period || "180"),
+      compareTotal: Boolean(parsed.compareTotal),
+    };
+  } catch {
+    return { assetId: "", period: "180", compareTotal: false };
+  }
+}
+
+function saveHistoryPrefs() {
+  const sel = byId("historyAssetSelect");
+  const periodSel = byId("historyPeriodSelect");
+  const compareEl = byId("historyCompareTotal");
+  if (!sel || !periodSel || !compareEl) return;
+  localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
+    assetId: sel.value || "",
+    period: periodSel.value || "180",
+    compareTotal: compareEl.checked,
+  }));
+}
+
+function applyHistoryPrefs() {
+  const prefs = readHistoryPrefs();
+  const sel = byId("historyAssetSelect");
+  const periodSel = byId("historyPeriodSelect");
+  const compareEl = byId("historyCompareTotal");
+
+  if (periodSel) {
+    const allowed = ["30", "90", "180", "365"];
+    periodSel.value = allowed.includes(prefs.period) ? prefs.period : "180";
+  }
+  if (compareEl) compareEl.checked = !!prefs.compareTotal;
+
+  if (sel) {
+    const validValues = new Set(["", "__total__", ...FIN.assets.map((a) => String(a.id))]);
+    sel.value = validValues.has(prefs.assetId) ? prefs.assetId : "";
+  }
+}
+
+function _historySeriesMap(rows) {
+  const map = new Map();
+  for (const row of rows || []) {
+    const date = (row.captured_at || "").slice(0, 10);
+    if (!date) continue;
+    map.set(date, Number(row.price || 0));
+  }
+  return map;
+}
+
+function _historyRangeDays() {
+  const periodSel = byId("historyPeriodSelect");
+  return Number(periodSel?.value || 180);
+}
+
+async function loadHistoryFromControls() {
+  const sel = byId("historyAssetSelect");
+  const compareEl = byId("historyCompareTotal");
+  if (!sel) return;
+  saveHistoryPrefs();
+  await loadHistoryChart(sel.value, {
+    compareTotal: !!(compareEl && compareEl.checked),
+    rangeDays: _historyRangeDays(),
+  });
+}
+
+async function loadHistoryChart(assetId, options = {}) {
   const emptyEl = byId("historyEmpty");
   const canvas = byId("historyChart");
   if (!canvas) return;
+  const isTotal = assetId === "__total__";
+  const compareTotal = !!options.compareTotal;
+  const rangeDays = Number(options.rangeDays || 180);
+  const limit = Math.min(365, Math.max(1, rangeDays));
 
   if (!assetId) {
     if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
@@ -1877,12 +1959,27 @@ async function loadHistoryChart(assetId) {
   }
 
   try {
-    const resp = await finFetch(`/api/finance/asset-history/${assetId}?limit=180`);
-    const data = await resp.json();
+    const reqs = [];
+    reqs.push(
+      finFetch(isTotal
+        ? `/api/finance/portfolio-history?limit=${limit}`
+        : `/api/finance/asset-history/${assetId}?limit=${limit}`
+      ).then((r) => r.json())
+    );
+    if (!isTotal && compareTotal) {
+      reqs.push(finFetch(`/api/finance/portfolio-history?limit=${limit}`).then((r) => r.json()));
+    }
 
-    if (!data.length) {
+    const [primaryData, totalData] = await Promise.all(reqs);
+
+    if (!primaryData.length) {
       canvas.style.display = "none";
-      if (emptyEl) { emptyEl.style.display = ""; emptyEl.textContent = "Sem dados históricos para este ativo ainda."; }
+      if (emptyEl) {
+        emptyEl.style.display = "";
+        emptyEl.textContent = isTotal
+          ? "Sem dados históricos para o total da carteira ainda."
+          : "Sem dados históricos para este ativo ainda.";
+      }
       if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
       return;
     }
@@ -1890,9 +1987,53 @@ async function loadHistoryChart(assetId) {
     canvas.style.display = "";
     if (emptyEl) emptyEl.style.display = "none";
 
-    const sorted = data.reverse();
-    const labels = sorted.map((d) => (d.captured_at || "").slice(0, 10));
-    const prices = sorted.map((d) => d.price);
+    const primary = (primaryData || []).slice().reverse();
+    const hasCompare = !isTotal && compareTotal && Array.isArray(totalData) && totalData.length > 0;
+
+    const datasets = [];
+    let labels = primary.map((d) => (d.captured_at || "").slice(0, 10));
+
+    if (hasCompare) {
+      const total = totalData.slice().reverse();
+      const assetMap = _historySeriesMap(primary);
+      const totalMap = _historySeriesMap(total);
+      labels = [...new Set([...assetMap.keys(), ...totalMap.keys()])].sort();
+
+      datasets.push({
+        label: "Ativo (R$)",
+        data: labels.map((d) => assetMap.get(d) ?? null),
+        borderColor: "#6366f1",
+        backgroundColor: "rgba(99,102,241,0.08)",
+        fill: false,
+        tension: 0.3,
+        pointRadius: labels.length > 60 ? 0 : 2,
+        borderWidth: 2,
+        spanGaps: true,
+      });
+      datasets.push({
+        label: "Total da carteira (R$)",
+        data: labels.map((d) => totalMap.get(d) ?? null),
+        borderColor: "#22c55e",
+        backgroundColor: "rgba(34,197,94,0.08)",
+        fill: false,
+        tension: 0.3,
+        pointRadius: labels.length > 60 ? 0 : 2,
+        borderWidth: 2,
+        spanGaps: true,
+      });
+    } else {
+      const prices = primary.map((d) => Number(d.price || 0));
+      datasets.push({
+        label: isTotal ? "Total da carteira (R$)" : "Preço (R$)",
+        data: prices,
+        borderColor: "#6366f1",
+        backgroundColor: "rgba(99,102,241,0.1)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: prices.length > 60 ? 0 : 2,
+        borderWidth: 2,
+      });
+    }
 
     if (FIN.charts.history) FIN.charts.history.destroy();
 
@@ -1900,26 +2041,17 @@ async function loadHistoryChart(assetId) {
       type: "line",
       data: {
         labels,
-        datasets: [{
-          label: "Preço (R$)",
-          data: prices,
-          borderColor: "#6366f1",
-          backgroundColor: "rgba(99,102,241,0.1)",
-          fill: true,
-          tension: 0.3,
-          pointRadius: prices.length > 60 ? 0 : 2,
-          borderWidth: 2,
-        }],
+        datasets,
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { intersect: false, mode: "index" },
         plugins: {
-          legend: { display: false },
+          legend: { display: datasets.length > 1 },
           tooltip: {
             callbacks: {
-              label: (ctx) => ` ${formatBRL(ctx.raw)}`,
+              label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
             },
           },
         },
@@ -2531,9 +2663,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // History chart: asset select
   const histSel = byId("historyAssetSelect");
+  const histPeriodSel = byId("historyPeriodSelect");
+  const histCompare = byId("historyCompareTotal");
   if (histSel) {
-    histSel.addEventListener("change", () => loadHistoryChart(histSel.value));
+    histSel.addEventListener("change", loadHistoryFromControls);
   }
+  if (histPeriodSel) histPeriodSel.addEventListener("change", loadHistoryFromControls);
+  if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
 
   // IR report: year select
   const irSel = byId("irYearSelect");
