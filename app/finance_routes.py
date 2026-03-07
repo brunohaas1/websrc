@@ -1214,6 +1214,37 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             logger.warning("benchmark history fetch failed (%s): %s", benchmark, exc)
             return jsonify([])
 
+    @app.get("/api/finance/invested-history")
+    @limiter.limit("30/minute")
+    def finance_invested_history():
+        limit = min(365, max(1, int(request.args.get("limit", "180"))))
+        asset_id = request.args.get("asset_id", type=int)
+
+        txs = repo.list_fin_transactions(asset_id=asset_id, limit=5000)
+        if not txs:
+            return jsonify([])
+
+        daily_delta: dict[str, float] = {}
+        for tx in sorted(txs, key=lambda x: str(x.get("tx_date") or "")):
+            date_key = str(tx.get("tx_date") or "")[:10]
+            if not date_key:
+                continue
+            tx_type = str(tx.get("tx_type") or "buy").lower()
+            total = float(tx.get("total") or 0)
+            signal = 1.0 if tx_type == "buy" else -1.0
+            daily_delta[date_key] = float(daily_delta.get(date_key, 0.0)) + (signal * total)
+
+        if not daily_delta:
+            return jsonify([])
+
+        cumulative = 0.0
+        rows: list[dict] = []
+        for date_key in sorted(daily_delta.keys()):
+            cumulative += float(daily_delta[date_key])
+            rows.append({"captured_at": date_key, "price": round(cumulative, 2)})
+
+        return jsonify(rows[-limit:])
+
     # ── Export Data ─────────────────────────────────────────
 
     @app.get("/api/finance/export")

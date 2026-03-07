@@ -1874,16 +1874,21 @@ const HISTORY_PREFS_KEY = "fin-history-prefs";
 function readHistoryPrefs() {
   try {
     const raw = localStorage.getItem(HISTORY_PREFS_KEY);
-    if (!raw) return { assetId: "", period: "180", compareTotal: false, benchmark: "" };
+    if (!raw) return {
+      assetId: "", period: "180", compareTotal: false, benchmark: "", showInvested: true,
+    };
     const parsed = JSON.parse(raw);
     return {
       assetId: String(parsed.assetId || ""),
       period: String(parsed.period || "180"),
       compareTotal: Boolean(parsed.compareTotal),
       benchmark: String(parsed.benchmark || ""),
+      showInvested: parsed.showInvested !== false,
     };
   } catch {
-    return { assetId: "", period: "180", compareTotal: false, benchmark: "" };
+    return {
+      assetId: "", period: "180", compareTotal: false, benchmark: "", showInvested: true,
+    };
   }
 }
 
@@ -1892,12 +1897,14 @@ function saveHistoryPrefs() {
   const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
-  if (!sel || !periodSel || !compareEl || !benchmarkSel) return;
+  const investedEl = byId("historyShowInvested");
+  if (!sel || !periodSel || !compareEl || !benchmarkSel || !investedEl) return;
   localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
     assetId: sel.value || "",
     period: periodSel.value || "180",
     compareTotal: compareEl.checked,
     benchmark: benchmarkSel.value || "",
+    showInvested: investedEl.checked,
   }));
 }
 
@@ -1907,6 +1914,7 @@ function applyHistoryPrefs() {
   const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
+  const investedEl = byId("historyShowInvested");
 
   if (periodSel) {
     const allowed = ["30", "90", "180", "365"];
@@ -1917,6 +1925,7 @@ function applyHistoryPrefs() {
     const allowedB = ["", "ibov"];
     benchmarkSel.value = allowedB.includes(prefs.benchmark) ? prefs.benchmark : "";
   }
+  if (investedEl) investedEl.checked = prefs.showInvested !== false;
 
   if (sel) {
     const validValues = new Set(["", "__total__", ...FIN.assets.map((a) => String(a.id))]);
@@ -1943,12 +1952,14 @@ async function loadHistoryFromControls() {
   const sel = byId("historyAssetSelect");
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
+  const investedEl = byId("historyShowInvested");
   if (!sel) return;
   saveHistoryPrefs();
   await loadHistoryChart(sel.value, {
     compareTotal: !!(compareEl && compareEl.checked),
     rangeDays: _historyRangeDays(),
     benchmark: (benchmarkSel && benchmarkSel.value) || "",
+    showInvested: !(investedEl && investedEl.checked === false),
   });
 }
 
@@ -1960,6 +1971,7 @@ async function loadHistoryChart(assetId, options = {}) {
   const compareTotal = !!options.compareTotal;
   const rangeDays = Number(options.rangeDays || 180);
   const benchmark = String(options.benchmark || "").trim().toLowerCase();
+  const showInvested = options.showInvested !== false;
   const limit = Math.min(365, Math.max(1, rangeDays));
 
   if (!assetId) {
@@ -1980,11 +1992,17 @@ async function loadHistoryChart(assetId, options = {}) {
     if (!isTotal && compareTotal) {
       reqs.push(finFetch(`/api/finance/portfolio-history?limit=${limit}`).then((r) => r.json()));
     }
+    if (showInvested) {
+      const investedUrl = isTotal
+        ? `/api/finance/invested-history?limit=${limit}`
+        : `/api/finance/invested-history?asset_id=${encodeURIComponent(assetId)}&limit=${limit}`;
+      reqs.push(finFetch(investedUrl).then((r) => r.json()));
+    }
     if (benchmark) {
       reqs.push(finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(benchmark)}&limit=${limit}`).then((r) => r.json()));
     }
 
-    const [primaryData, totalData, benchmarkData] = await Promise.all(reqs);
+    const [primaryData, totalData, investedData, benchmarkData] = await Promise.all(reqs);
 
     if (!primaryData.length) {
       canvas.style.display = "none";
@@ -2079,6 +2097,42 @@ async function loadHistoryChart(assetId, options = {}) {
           fill: false,
           tension: 0.3,
           pointRadius: mergedLabels.length > 60 ? 0 : 2,
+          borderWidth: 2,
+          spanGaps: true,
+        });
+        labels = mergedLabels;
+      }
+    }
+
+    if (showInvested && Array.isArray(investedData) && investedData.length) {
+      const invMap = _historySeriesMap(investedData);
+      if (invMap.size) {
+        const mergedLabels = [...new Set([...labels, ...invMap.keys()])].sort();
+        datasets = datasets.map((ds) => {
+          const map = new Map(labels.map((d, i) => [d, ds.data[i] ?? null]));
+          return {
+            ...ds,
+            data: mergedLabels.map((d) => (map.has(d) ? map.get(d) : null)),
+            spanGaps: true,
+          };
+        });
+
+        let last = null;
+        const investedSeries = mergedLabels.map((d) => {
+          if (invMap.has(d)) last = invMap.get(d);
+          return last;
+        });
+
+        datasets.push({
+          label: "Aporte acumulado (R$)",
+          data: investedSeries,
+          yAxisID: "y",
+          borderColor: "#94a3b8",
+          backgroundColor: "rgba(148,163,184,0.08)",
+          borderDash: [6, 4],
+          fill: false,
+          tension: 0.2,
+          pointRadius: mergedLabels.length > 60 ? 0 : 1.5,
           borderWidth: 2,
           spanGaps: true,
         });
@@ -2728,12 +2782,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const histSel = byId("historyAssetSelect");
   const histPeriodSel = byId("historyPeriodSelect");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
+  const histInvested = byId("historyShowInvested");
   const histCompare = byId("historyCompareTotal");
   if (histSel) {
     histSel.addEventListener("change", loadHistoryFromControls);
   }
   if (histPeriodSel) histPeriodSel.addEventListener("change", loadHistoryFromControls);
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
+  if (histInvested) histInvested.addEventListener("change", loadHistoryFromControls);
   if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
 
   // IR report: year select

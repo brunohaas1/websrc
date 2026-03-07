@@ -112,6 +112,21 @@ class TestAssets:
         resp = client.get("/api/finance/benchmark-history?benchmark=foo")
         assert resp.status_code == 400
 
+    def test_invested_history_empty(self, client):
+        resp = client.get("/api/finance/invested-history")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+    def test_invested_history_with_transactions(self, client):
+        asset = _add_asset(client).get_json()
+        _add_tx(client, asset["id"], qty=2, price=10)
+        _add_tx(client, asset["id"], qty=1, price=20)
+        resp = client.get(f"/api/finance/invested-history?asset_id={asset['id']}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) >= 1
+        assert data[-1]["price"] == pytest.approx(40.0, rel=1e-2)
+
 
 # ══════════════════════════════════════════════════════════
 #                 PORTFOLIO
