@@ -7,12 +7,18 @@ document.addEventListener('DOMContentLoaded', function() {
   const form = document.getElementById('people-search-form');
   const loading = document.getElementById('people-search-loading');
   const exportBtn = document.getElementById('people-export-json');
+  const consent = document.getElementById('people-consent');
+  const searchBtn = document.getElementById('people-search-btn');
 
   let lastResults = null;
 
   btnTab.addEventListener('click', () => {
     peopleTab.style.display = 'block';
     financeMain.style.display = 'none';
+  });
+
+  consent.addEventListener('change', function() {
+    searchBtn.disabled = !consent.checked;
   });
 
   form.addEventListener('submit', async function(e) {

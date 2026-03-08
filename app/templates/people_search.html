@@ -3,7 +3,8 @@
   <h2>Busca de Pessoas</h2>
   <form id="people-search-form">
     <input type="text" id="person-name" placeholder="Digite o nome da pessoa" required>
-    <button type="submit">Buscar</button>
+    <label style="margin-left:8px"><input type="checkbox" id="people-consent"> Concordo que esta busca pode coletar informações públicas</label>
+    <button type="submit" id="people-search-btn" disabled>Buscar</button>
     <span id="people-search-loading" style="display:none">Buscando...</span>
   </form>
   <div id="people-search-results">
