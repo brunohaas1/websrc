@@ -232,6 +232,30 @@ class TestTransactions:
         resp = jput(client, "/api/finance/transactions/99999", {"quantity": 5})
         assert resp.status_code == 404
 
+    def test_batch_update_transactions(self, client):
+        asset = _add_asset(client).get_json()
+        tx1 = _add_tx(client, asset["id"], qty=2, price=10).get_json()
+        tx2 = _add_tx(client, asset["id"], qty=3, price=12).get_json()
+        resp = jput(
+            client,
+            "/api/finance/transactions/batch",
+            {
+                "tx_ids": [tx1["id"], tx2["id"]],
+                "updates": {"fees": 1.25, "tx_type": "buy"},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["updated"] == 2
+
+        txs = client.get("/api/finance/transactions").get_json()
+        changed = [t for t in txs if t["id"] in (tx1["id"], tx2["id"])]
+        assert len(changed) == 2
+        assert all(t["fees"] == pytest.approx(1.25) for t in changed)
+
+    def test_batch_update_transactions_invalid_payload(self, client):
+        resp = jput(client, "/api/finance/transactions/batch", {"tx_ids": [], "updates": {"fees": 1}})
+        assert resp.status_code == 400
+
 
 
 # ══════════════════════════════════════════════════════════
@@ -286,6 +310,23 @@ class TestWatchlist:
     def test_update_watchlist_not_found(self, client):
         resp = jput(client, "/api/finance/watchlist/99999", {"target_price": 10.0})
         assert resp.status_code == 404
+
+
+class TestFinanceAdvanced:
+    def test_performance_metrics(self, client):
+        asset = _add_asset(client).get_json()
+        _add_tx(client, asset["id"], qty=5, price=10)
+        resp = client.get("/api/finance/metrics/performance")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "simple_return_pct" in data
+        assert "current_value" in data
+
+    def test_finance_audit_logs(self, client):
+        _add_asset(client, symbol="BBAS3")
+        resp = client.get("/api/finance/audit")
+        assert resp.status_code == 200
+        assert isinstance(resp.get_json(), list)
 
 
 

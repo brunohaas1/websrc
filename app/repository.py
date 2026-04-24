@@ -2014,6 +2014,34 @@ class Repository:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def batch_update_fin_transactions(
+        self,
+        tx_ids: list[int],
+        data: dict[str, Any],
+    ) -> int:
+        if not tx_ids:
+            return 0
+        fields = []
+        values: list[Any] = []
+        allowed = {"tx_type", "quantity", "price", "total", "fees", "notes", "tx_date"}
+        for key, val in data.items():
+            if key in allowed:
+                fields.append(f"{key} = ?")
+                values.append(val)
+        if not fields:
+            return 0
+        placeholders = ",".join(["?"] * len(tx_ids))
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(
+                    f"UPDATE fin_transactions SET {', '.join(fields)} "
+                    f"WHERE id IN ({placeholders})"
+                ),
+                tuple(values + tx_ids),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def get_fin_transaction(self, tx_id: int) -> dict[str, Any] | None:
         with get_connection(self.database_target) as conn:
             row = conn.execute(
@@ -2320,6 +2348,53 @@ class Repository:
                 ORDER BY total DESC
             """).fetchall()
             return [dict(r) for r in rows]
+
+    def add_fin_audit_log(
+        self,
+        action: str,
+        target_type: str,
+        target_id: int | None,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_audit_logs (action, target_type, target_id, payload_json)
+                VALUES (?, ?, ?, ?)
+                """
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cur = conn.execute(
+                q,
+                (action, target_type, target_id, json_dumps(payload or {})),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cur.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cur.lastrowid or 0)
+
+    def list_fin_audit_logs(self, limit: int = 100) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 1000))
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, action, target_type, target_id, payload_json, created_at
+                    FROM fin_audit_logs
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """
+                ),
+                (safe_limit,),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                rec = dict(row)
+                rec["payload"] = json_loads(rec.get("payload_json") or "{}")
+                out.append(rec)
+            return out
 
     # ── Allocation Targets ──────────────────────────────────
 

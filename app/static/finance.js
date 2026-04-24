@@ -19,9 +19,12 @@ const FIN = {
   _autoRefreshInterval: null,
   // portfolio sort
   _portfolioSort: { col: null, dir: 1 },
+  _portfolioPage: 0,
   // transactions sort + filter
   _txSort: { col: null, dir: 1 },
-  _txFilter: { asset: "", type: "" },
+  _txFilter: { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" },
+  _txSelected: {},
+  performanceMetrics: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -161,7 +164,7 @@ function showKeyboardShortcutsHelp() {
 
 async function loadAll() {
   try {
-    const [summary, transactions, watchlist, goals, market, assets, dividends, allocTargets] = await Promise.all([
+    const [summary, transactions, watchlist, goals, market, assets, dividends, allocTargets, metrics, audit] = await Promise.all([
       finFetch("/api/finance/summary").then((r) => r.json()),
       finFetch("/api/finance/transactions").then((r) => r.json()),
       finFetch("/api/finance/watchlist").then((r) => r.json()),
@@ -170,6 +173,8 @@ async function loadAll() {
       finFetch("/api/finance/assets").then((r) => r.json()),
       finFetch("/api/finance/dividends").then((r) => r.json()),
       finFetch("/api/finance/allocation-targets").then((r) => r.json()),
+      finFetch("/api/finance/metrics/performance").then((r) => r.json()).catch(() => null),
+      finFetch("/api/finance/audit?limit=15").then((r) => r.json()).catch(() => []),
     ]);
 
     FIN.summary = summary;
@@ -186,6 +191,7 @@ async function loadAll() {
     }));
     FIN.dividends = dividends || [];
     FIN.allocationTargets = allocTargets || [];
+    FIN.performanceMetrics = metrics && !metrics.error ? metrics : null;
 
     renderSummary(summary);
     renderCurrency(summary.currency_rates || []);
@@ -197,6 +203,8 @@ async function loadAll() {
     renderAllocationChart(summary);
     renderPnLChart(FIN.portfolio);
     renderPerformanceChart(FIN.portfolio);
+    renderPerformanceMetrics(FIN.performanceMetrics);
+    renderAuditTrail(Array.isArray(audit) ? audit : []);
     renderDividends(FIN.dividends);
     renderRebalance();
     renderProjection();
@@ -205,6 +213,7 @@ async function loadAll() {
     loadHistoryFromControls();
     populateIRYears();
     checkWatchlistAlerts();
+    checkDividendAlerts();
     checkGoalsMilestones(goals);
     updateLastUpdated();
   } catch (err) {
@@ -245,6 +254,59 @@ function renderSummary(s) {
     const totalDiv = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
     dividends.querySelector(".fin-summary-value").textContent = formatBRL(totalDiv);
   }
+}
+
+function renderPerformanceMetrics(metrics) {
+  const el = byId("finPerformanceMetrics");
+  if (!el) return;
+  if (!metrics) {
+    el.innerHTML = "";
+    return;
+  }
+  const irr = metrics.irr_pct == null ? "—" : `${formatNumber(metrics.irr_pct, 2)}%`;
+  el.innerHTML = `
+    <div class="fin-mini-metric">
+      <span>Retorno simples</span>
+      <strong class="${changeClass(metrics.simple_return_pct)}">${formatNumber(metrics.simple_return_pct, 2)}%</strong>
+    </div>
+    <div class="fin-mini-metric">
+      <span>IRR (anualizada)</span>
+      <strong>${irr}</strong>
+    </div>
+    <div class="fin-mini-metric">
+      <span>Patrimônio</span>
+      <strong>${formatBRL(metrics.current_value)}</strong>
+    </div>
+  `;
+}
+
+function renderAuditTrail(entries) {
+  const el = byId("finAuditContent");
+  if (!el) return;
+  if (!entries || !entries.length) {
+    el.innerHTML = '<p class="fin-empty">Sem eventos recentes.</p>';
+    return;
+  }
+  el.innerHTML = entries.map((e) => {
+    const ts = String(e.created_at || "").replace("T", " ").slice(0, 19);
+    return `
+      <div class="fin-audit-item">
+        <span class="fin-audit-time">${escapeHtml(ts)}</span>
+        <span class="fin-audit-action">${escapeHtml(e.action || "")}</span>
+        <span class="fin-audit-target">${escapeHtml(e.target_type || "")} #${escapeHtml(String(e.target_id || "-"))}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function checkDividendAlerts() {
+  const total = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
+  const key = "fin_last_dividend_total";
+  const prev = Number(localStorage.getItem(key) || "0");
+  if (total > prev && prev > 0) {
+    showToast(`Novo provento detectado. Total acumulado: ${formatBRL(total)}`, "info");
+  }
+  localStorage.setItem(key, String(total));
 }
 
 function updateLastUpdated() {
@@ -334,7 +396,13 @@ function renderPortfolio(portfolio) {
     return `<span class="fin-sort-icon active">${FIN._portfolioSort.dir === 1 ? "↑" : "↓"}</span>`;
   };
 
-  const rows = sorted
+  const totalPages = Math.max(1, Math.ceil(sorted.length / _PORTFOLIO_PER_PAGE));
+  if (FIN._portfolioPage >= totalPages) FIN._portfolioPage = totalPages - 1;
+  if (FIN._portfolioPage < 0) FIN._portfolioPage = 0;
+  const start = FIN._portfolioPage * _PORTFOLIO_PER_PAGE;
+  const currentPageRows = sorted.slice(start, start + _PORTFOLIO_PER_PAGE);
+
+  const rows = currentPageRows
     .map((p) => {
       const currentVal = (p.current_price || 0) * p.quantity;
       const pnl = currentVal - p.total_invested;
@@ -412,6 +480,11 @@ function renderPortfolio(portfolio) {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${totalPages > 1 ? `<div class="fin-pagination">
+      <button class="fin-page-btn" data-action="portfolioPagePrev" ${FIN._portfolioPage === 0 ? "disabled" : ""}>◀</button>
+      <span class="fin-page-info">${FIN._portfolioPage + 1} / ${totalPages} (${sorted.length} ativos)</span>
+      <button class="fin-page-btn" data-action="portfolioPageNext" ${FIN._portfolioPage >= totalPages - 1 ? "disabled" : ""}>▶</button>
+    </div>` : ""}
   `;
 
   // Bind sort headers
@@ -425,6 +498,7 @@ function renderPortfolio(portfolio) {
         FIN._portfolioSort.col = col;
         FIN._portfolioSort.dir = 1;
       }
+      FIN._portfolioPage = 0;
       renderPortfolio(FIN.portfolio);
     });
   });
@@ -432,6 +506,7 @@ function renderPortfolio(portfolio) {
 
 let _txPage = 0;
 const _TX_PER_PAGE = 20;
+const _PORTFOLIO_PER_PAGE = 12;
 
 function renderTransactions(txns) {
   const el = byId("finTransactionsContent");
@@ -444,6 +519,18 @@ function renderTransactions(txns) {
   }
   if (FIN._txFilter.type) {
     filtered = filtered.filter((t) => t.tx_type === FIN._txFilter.type);
+  }
+  if (FIN._txFilter.dateFrom) {
+    filtered = filtered.filter((t) => String(t.tx_date || "").slice(0, 10) >= FIN._txFilter.dateFrom);
+  }
+  if (FIN._txFilter.dateTo) {
+    filtered = filtered.filter((t) => String(t.tx_date || "").slice(0, 10) <= FIN._txFilter.dateTo);
+  }
+  if (FIN._txFilter.minTotal !== "") {
+    filtered = filtered.filter((t) => Number(t.total || 0) >= Number(FIN._txFilter.minTotal));
+  }
+  if (FIN._txFilter.maxTotal !== "") {
+    filtered = filtered.filter((t) => Number(t.total || 0) <= Number(FIN._txFilter.maxTotal));
   }
 
   // Apply sort
@@ -466,6 +553,12 @@ function renderTransactions(txns) {
         <option value="buy" ${FIN._txFilter.type === "buy" ? "selected" : ""}>Compras</option>
         <option value="sell" ${FIN._txFilter.type === "sell" ? "selected" : ""}>Vendas</option>
       </select>
+      <input id="txFilterDateFrom" class="fin-inline-select" type="date" title="Data inicial" value="${escapeHtml(FIN._txFilter.dateFrom || "")}" />
+      <input id="txFilterDateTo" class="fin-inline-select" type="date" title="Data final" value="${escapeHtml(FIN._txFilter.dateTo || "")}" />
+      <input id="txFilterMinTotal" class="fin-inline-select" type="number" step="0.01" placeholder="Total min" value="${escapeHtml(FIN._txFilter.minTotal || "")}" />
+      <input id="txFilterMaxTotal" class="fin-inline-select" type="number" step="0.01" placeholder="Total max" value="${escapeHtml(FIN._txFilter.maxTotal || "")}" />
+      <button id="btnTxFilterClear" class="btn-text" type="button">Limpar</button>
+      <button id="btnBatchEditTx" class="btn-text" type="button">✏️ Lote</button>
       <span class="fin-tx-count">${filtered.length} de ${txns.length}</span>
     </div>
   `;
@@ -494,6 +587,7 @@ function renderTransactions(txns) {
       const date = (t.tx_date || t.created_at || "").slice(0, 10);
       return `
         <tr>
+          <td class="text-center"><input type="checkbox" class="fin-tx-select" data-tx-id="${t.id}" ${FIN._txSelected[t.id] ? "checked" : ""} /></td>
           <td>${escapeHtml(date)}</td>
           <td><span class="fin-badge ${typeCls}">${label}</span></td>
           <td><strong>${escapeHtml(t.symbol)}</strong></td>
@@ -525,6 +619,7 @@ function renderTransactions(txns) {
       <table class="fin-table fin-sortable-table">
         <thead>
           <tr>
+            <th class="text-center" style="width:34px"><input id="txSelectAll" type="checkbox" /></th>
             <th data-sort-col="tx_date" class="fin-th-sort">Data ${sortIcon("tx_date")}</th>
             <th data-sort-col="tx_type" class="fin-th-sort">Tipo ${sortIcon("tx_type")}</th>
             <th data-sort-col="symbol" class="fin-th-sort">Ativo ${sortIcon("symbol")}</th>
@@ -548,18 +643,91 @@ function renderTransactions(txns) {
 function _bindTxFilters() {
   const assetSel = byId("txFilterAsset");
   const typeSel = byId("txFilterType");
+  const fromSel = byId("txFilterDateFrom");
+  const toSel = byId("txFilterDateTo");
+  const minSel = byId("txFilterMinTotal");
+  const maxSel = byId("txFilterMaxTotal");
+  const clearBtn = byId("btnTxFilterClear");
+  const batchBtn = byId("btnBatchEditTx");
+
+  const saveFilters = () => {
+    localStorage.setItem("fin_tx_filter", JSON.stringify(FIN._txFilter));
+  };
+
+  const applyAndRender = () => {
+    _txPage = 0;
+    saveFilters();
+    renderTransactions(FIN.transactions);
+  };
+
   if (assetSel) {
     assetSel.addEventListener("change", () => {
       FIN._txFilter.asset = assetSel.value;
-      _txPage = 0;
-      renderTransactions(FIN.transactions);
+      applyAndRender();
     });
   }
   if (typeSel) {
     typeSel.addEventListener("change", () => {
       FIN._txFilter.type = typeSel.value;
+      applyAndRender();
+    });
+  }
+  if (fromSel) {
+    fromSel.addEventListener("change", () => {
+      FIN._txFilter.dateFrom = fromSel.value;
+      applyAndRender();
+    });
+  }
+  if (toSel) {
+    toSel.addEventListener("change", () => {
+      FIN._txFilter.dateTo = toSel.value;
+      applyAndRender();
+    });
+  }
+  if (minSel) {
+    minSel.addEventListener("change", () => {
+      FIN._txFilter.minTotal = minSel.value;
+      applyAndRender();
+    });
+  }
+  if (maxSel) {
+    maxSel.addEventListener("change", () => {
+      FIN._txFilter.maxTotal = maxSel.value;
+      applyAndRender();
+    });
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      FIN._txFilter = { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" };
+      localStorage.setItem("fin_tx_filter", JSON.stringify(FIN._txFilter));
       _txPage = 0;
       renderTransactions(FIN.transactions);
+    });
+  }
+  if (batchBtn) {
+    batchBtn.addEventListener("click", openBatchEditTransactionsModal);
+  }
+
+  _bindTxSelection();
+}
+
+function _bindTxSelection() {
+  const allSel = byId("txSelectAll");
+  const checks = Array.from(document.querySelectorAll(".fin-tx-select"));
+  checks.forEach((ck) => {
+    ck.addEventListener("change", () => {
+      const id = Number(ck.dataset.txId);
+      FIN._txSelected[id] = ck.checked;
+      localStorage.setItem("fin_tx_selected", JSON.stringify(FIN._txSelected));
+    });
+  });
+  if (allSel) {
+    allSel.addEventListener("change", () => {
+      checks.forEach((ck) => {
+        ck.checked = allSel.checked;
+        FIN._txSelected[Number(ck.dataset.txId)] = allSel.checked;
+      });
+      localStorage.setItem("fin_tx_selected", JSON.stringify(FIN._txSelected));
     });
   }
 }
@@ -1705,6 +1873,95 @@ async function submitEditTransaction(e) {
       const data = await resp.json();
       showToast(data.error || "Erro ao atualizar transação");
     }
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+function openBatchEditTransactionsModal() {
+  const selectedIds = Object.entries(FIN._txSelected)
+    .filter(([_, v]) => !!v)
+    .map(([k]) => Number(k));
+  if (!selectedIds.length) {
+    showToast("Selecione ao menos uma transação.");
+    return;
+  }
+  openFinModal("Editar Transações em Lote", `
+    <form data-form-action="submitBatchEditTransactions">
+      <p>${selectedIds.length} transação(ões) selecionada(s).</p>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo (opcional)</label>
+          <select id="fmBatchTxType">
+            <option value="">Não alterar</option>
+            <option value="buy">Compra</option>
+            <option value="sell">Venda</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Taxas (opcional)</label>
+          <input id="fmBatchTxFees" type="number" step="0.01" min="0" placeholder="Não alterar" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Notas</label>
+          <input id="fmBatchTxNotes" placeholder="Opcional" />
+        </div>
+        <div class="fin-form-group">
+          <label>Modo notas</label>
+          <select id="fmBatchTxNotesMode">
+            <option value="append">Acrescentar</option>
+            <option value="replace">Substituir</option>
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Aplicar em Lote</button>
+    </form>
+  `);
+}
+
+async function submitBatchEditTransactions(e) {
+  e.preventDefault();
+  const selectedIds = Object.entries(FIN._txSelected)
+    .filter(([_, v]) => !!v)
+    .map(([k]) => Number(k));
+  if (!selectedIds.length) {
+    showToast("Nenhuma transação selecionada");
+    return;
+  }
+  const updates = {};
+  const txType = byId("fmBatchTxType")?.value || "";
+  const feesRaw = byId("fmBatchTxFees")?.value || "";
+  const notes = byId("fmBatchTxNotes")?.value?.trim() || "";
+  const notesMode = byId("fmBatchTxNotesMode")?.value || "append";
+  if (txType) updates.tx_type = txType;
+  if (feesRaw !== "") updates.fees = Number(feesRaw);
+  if (notes) {
+    updates.notes = notes;
+    updates.notes_mode = notesMode;
+  }
+  if (!Object.keys(updates).length) {
+    showToast("Informe ao menos um campo para alterar.");
+    return;
+  }
+
+  try {
+    const resp = await finFetch("/api/finance/transactions/batch", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tx_ids: selectedIds, updates }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao atualizar em lote");
+      return;
+    }
+    FIN._txSelected = {};
+    localStorage.removeItem("fin_tx_selected");
+    closeFinModal();
+    showToast(`${data.updated || 0} transação(ões) atualizada(s)!`, "success");
+    loadAll();
   } catch {
     showToast("Erro de rede");
   }
@@ -3319,6 +3576,20 @@ function renderMarkdown(text) {
 // ══════════════════════════════════════════════════════════
 
 document.addEventListener("DOMContentLoaded", () => {
+  try {
+    FIN._txFilter = {
+      ...FIN._txFilter,
+      ...(JSON.parse(localStorage.getItem("fin_tx_filter") || "{}") || {}),
+    };
+  } catch {
+    // ignore malformed storage
+  }
+  try {
+    FIN._txSelected = JSON.parse(localStorage.getItem("fin_tx_selected") || "{}") || {};
+  } catch {
+    FIN._txSelected = {};
+  }
+
   initTheme();
   initFinanceKeyboardShortcuts();
   loadAll();
@@ -3412,6 +3683,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // Pagination actions
     if (action === "txPagePrev") { _txPage = Math.max(0, _txPage - 1); renderTransactions(FIN.transactions); return; }
     if (action === "txPageNext") { _txPage++; renderTransactions(FIN.transactions); return; }
+    if (action === "portfolioPagePrev") { FIN._portfolioPage = Math.max(0, FIN._portfolioPage - 1); renderPortfolio(FIN.portfolio); return; }
+    if (action === "portfolioPageNext") { FIN._portfolioPage++; renderPortfolio(FIN.portfolio); return; }
 
     const fn = actionMap[action];
     if (fn) fn(Number(btn.dataset.id));
@@ -3421,6 +3694,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const formMap = {
     submitEditTransaction,
     submitEditWatchlist,
+    submitBatchEditTransactions,
   };
   document.addEventListener("submit", (e) => {
     const fa = e.target.dataset.formAction;

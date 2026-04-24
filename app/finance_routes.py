@@ -4,9 +4,10 @@ import csv
 import io
 import json
 import logging
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request
@@ -113,6 +114,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return True, raw, ""
 
         return True, raw, ""
+
+    def _is_finite_number(value: object) -> bool:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(n)
+
+    def _audit(action: str, target_type: str, target_id: int | None, payload: dict | None = None) -> None:
+        try:
+            repo.add_fin_audit_log(action, target_type, target_id, payload or {})
+        except Exception as exc:
+            logger.warning("finance audit failed: %s", exc)
 
     @app.get("/api/finance/settings")
     @limiter.limit("20/minute")
@@ -263,6 +277,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             fees = float(body.get("fees", 0))
         except (TypeError, ValueError):
             return jsonify({"error": "Valores numéricos inválidos"}), 400
+        if not all(_is_finite_number(v) for v in (qty, price, fees)):
+            return jsonify({"error": "Valores numéricos inválidos"}), 400
+        if qty <= 0 or price < 0 or fees < 0:
+            return jsonify({"error": "quantity > 0, price >= 0 e fees >= 0"}), 400
         tx_type = str(body.get("tx_type", "buy")).strip().lower()
         if tx_type not in ("buy", "sell"):
             return jsonify({"error": "tx_type: buy ou sell"}), 400
@@ -281,6 +299,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
         # Update portfolio automatically
         _recalc_portfolio(repo, data["asset_id"])
+        _audit("add", "transaction", tx_id, {"asset_id": data["asset_id"], "tx_type": tx_type})
 
         cache.delete("finance:summary")
         return jsonify({"ok": True, "id": tx_id}), 201
@@ -295,6 +314,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         repo.delete_fin_transaction(tx_id)
         if asset_id:
             _recalc_portfolio(repo, asset_id)
+        _audit("delete", "transaction", tx_id, {"asset_id": asset_id})
         cache.delete("finance:summary")
         return jsonify({"ok": True})
 
@@ -323,6 +343,15 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 data["fees"] = float(body["fees"])
         except (TypeError, ValueError):
             return jsonify({"error": "Valores numéricos inválidos"}), 400
+        for key in ("quantity", "price", "fees"):
+            if key in data and not _is_finite_number(data[key]):
+                return jsonify({"error": "Valores numéricos inválidos"}), 400
+        if "quantity" in data and data["quantity"] <= 0:
+            return jsonify({"error": "quantity deve ser > 0"}), 400
+        if "price" in data and data["price"] < 0:
+            return jsonify({"error": "price deve ser >= 0"}), 400
+        if "fees" in data and data["fees"] < 0:
+            return jsonify({"error": "fees deve ser >= 0"}), 400
         if "notes" in body:
             data["notes"] = sanitize_text(str(body["notes"]), 500)
         if "tx_date" in body:
@@ -334,8 +363,95 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         data["total"] = qty * price + fees
         repo.update_fin_transaction(tx_id, data)
         _recalc_portfolio(repo, tx["asset_id"])
+        _audit("update", "transaction", tx_id, {"fields": sorted(list(data.keys()))})
         cache.delete("finance:summary")
         return jsonify({"ok": True})
+
+    @app.put("/api/finance/transactions/batch")
+    @limiter.limit("10/minute")
+    @require_finance_key
+    def finance_batch_update_transactions():
+        body = request.get_json(silent=True) or {}
+        tx_ids_raw = body.get("tx_ids") or []
+        if not isinstance(tx_ids_raw, list) or not tx_ids_raw:
+            return jsonify({"error": "tx_ids obrigatório"}), 400
+        try:
+            tx_ids = sorted({int(x) for x in tx_ids_raw if int(x) > 0})
+        except (TypeError, ValueError):
+            return jsonify({"error": "tx_ids inválido"}), 400
+        updates = body.get("updates") or {}
+        if not isinstance(updates, dict) or not updates:
+            return jsonify({"error": "updates obrigatório"}), 400
+
+        data: dict = {}
+        if "tx_type" in updates:
+            tx_type = str(updates["tx_type"]).strip().lower()
+            if tx_type not in ("buy", "sell"):
+                return jsonify({"error": "tx_type: buy ou sell"}), 400
+            data["tx_type"] = tx_type
+        try:
+            if "fees" in updates:
+                data["fees"] = float(updates["fees"])
+            if "quantity" in updates:
+                data["quantity"] = float(updates["quantity"])
+            if "price" in updates:
+                data["price"] = float(updates["price"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Valores numéricos inválidos"}), 400
+        for key in ("quantity", "price", "fees"):
+            if key in data and not _is_finite_number(data[key]):
+                return jsonify({"error": "Valores numéricos inválidos"}), 400
+        if "quantity" in data and data["quantity"] <= 0:
+            return jsonify({"error": "quantity deve ser > 0"}), 400
+        if "price" in data and data["price"] < 0:
+            return jsonify({"error": "price deve ser >= 0"}), 400
+        if "fees" in data and data["fees"] < 0:
+            return jsonify({"error": "fees deve ser >= 0"}), 400
+        if "notes" in updates:
+            mode = str(updates.get("notes_mode", "replace")).strip().lower()
+            notes = sanitize_text(str(updates.get("notes", "")), 500)
+            if mode == "append":
+                txs = repo.list_fin_transactions(limit=5000)
+                by_id = {int(t["id"]): t for t in txs}
+                updated = 0
+                for tx_id in tx_ids:
+                    tx = by_id.get(tx_id)
+                    if not tx:
+                        continue
+                    cur_notes = str(tx.get("notes") or "").strip()
+                    merged = (f"{cur_notes} | {notes}" if cur_notes and notes else (notes or cur_notes)).strip()
+                    ok = repo.update_fin_transaction(tx_id, {"notes": merged})
+                    if ok:
+                        updated += 1
+                        _recalc_portfolio(repo, int(tx["asset_id"]))
+                cache.delete("finance:summary")
+                _audit("batch_update", "transaction", None, {"count": updated, "tx_ids": tx_ids, "fields": ["notes"]})
+                return jsonify({"ok": True, "updated": updated})
+            data["notes"] = notes
+
+        updated = 0
+        touched_assets: set[int] = set()
+        txs = repo.list_fin_transactions(limit=5000)
+        by_id = {int(t["id"]): t for t in txs}
+        for tx_id in tx_ids:
+            tx = by_id.get(tx_id)
+            if not tx:
+                continue
+            update_payload = dict(data)
+            if "quantity" in update_payload or "price" in update_payload or "fees" in update_payload:
+                qty = update_payload.get("quantity", tx.get("quantity", 0))
+                price = update_payload.get("price", tx.get("price", 0))
+                fees = update_payload.get("fees", tx.get("fees", 0))
+                update_payload["total"] = float(qty) * float(price) + float(fees)
+            ok = repo.update_fin_transaction(tx_id, update_payload)
+            if ok:
+                updated += 1
+                touched_assets.add(int(tx["asset_id"]))
+        for asset_id in touched_assets:
+            _recalc_portfolio(repo, asset_id)
+        cache.delete("finance:summary")
+        _audit("batch_update", "transaction", None, {"count": updated, "tx_ids": tx_ids, "fields": sorted(list(data.keys()))})
+        return jsonify({"ok": True, "updated": updated})
 
     # ── Watchlist ───────────────────────────────────────────
 
@@ -361,7 +477,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "alert_above": bool(body.get("alert_above")),
             "notes": sanitize_text(str(body.get("notes", "")), 500),
         }
+        if data["target_price"] is not None:
+            if not _is_finite_number(data["target_price"]) or data["target_price"] < 0:
+                return jsonify({"error": "target_price inválido"}), 400
         wl_id = repo.add_fin_watchlist(data)
+        _audit("add", "watchlist", wl_id, {"symbol": data["symbol"]})
         return jsonify({"ok": True, "id": wl_id}), 201
 
     @app.delete("/api/finance/watchlist/<int:wl_id>")
@@ -369,6 +489,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @require_finance_key
     def finance_delete_watchlist(wl_id: int):
         repo.delete_fin_watchlist(wl_id)
+        _audit("delete", "watchlist", wl_id, None)
         return jsonify({"ok": True})
 
     @app.put("/api/finance/watchlist/<int:wl_id>")
@@ -385,12 +506,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             data["asset_type"] = sanitize_text(str(body["asset_type"]), 20)
         if "target_price" in body:
             data["target_price"] = float(body["target_price"]) if body["target_price"] else None
+            if data["target_price"] is not None:
+                if not _is_finite_number(data["target_price"]) or data["target_price"] < 0:
+                    return jsonify({"error": "target_price inválido"}), 400
         if "alert_above" in body:
             data["alert_above"] = bool(body["alert_above"])
         if "notes" in body:
             data["notes"] = sanitize_text(str(body["notes"]), 500)
         if not repo.update_fin_watchlist(wl_id, data):
             return jsonify({"error": "Item não encontrado"}), 404
+        _audit("update", "watchlist", wl_id, {"fields": sorted(list(data.keys()))})
         return jsonify({"ok": True})
 
     # ── Goals ───────────────────────────────────────────────
@@ -1305,6 +1430,67 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             rows.append({"captured_at": date_key, "price": round(cumulative, 2)})
 
         return jsonify(rows[-limit:])
+
+    @app.get("/api/finance/metrics/performance")
+    @limiter.limit("20/minute")
+    def finance_performance_metrics():
+        txs = repo.list_fin_transactions(limit=5000)
+        portfolio = repo.get_fin_portfolio()
+        current_value = sum((p.get("current_price") or 0) * p.get("quantity", 0) for p in portfolio)
+        invested = sum(p.get("total_invested", 0) for p in portfolio)
+        simple_return = ((current_value / invested) - 1) * 100 if invested > 0 else 0.0
+
+        cashflows: dict[str, float] = {}
+        for t in txs:
+            date_key = str(t.get("tx_date") or "")[:10]
+            if not date_key:
+                continue
+            signal = -1.0 if str(t.get("tx_type") or "buy").lower() == "buy" else 1.0
+            cashflows[date_key] = float(cashflows.get(date_key, 0.0)) + signal * float(t.get("total") or 0)
+        today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cashflows[today_key] = float(cashflows.get(today_key, 0.0)) + float(current_value)
+
+        flows = [(k, v) for k, v in sorted(cashflows.items()) if abs(v) > 1e-9]
+        irr = None
+        if len(flows) >= 2:
+            base = datetime.strptime(flows[0][0], "%Y-%m-%d")
+            timed = [((datetime.strptime(d, "%Y-%m-%d") - base).days / 365.0, v) for d, v in flows]
+            r = 0.1
+            for _ in range(50):
+                f = 0.0
+                df = 0.0
+                for years, cf in timed:
+                    den = (1 + r) ** years
+                    f += cf / den
+                    df += -years * cf / ((1 + r) ** (years + 1))
+                if abs(df) < 1e-12:
+                    break
+                nr = r - (f / df)
+                if not math.isfinite(nr):
+                    break
+                if abs(nr - r) < 1e-9:
+                    r = nr
+                    break
+                r = nr
+            if math.isfinite(r) and r > -0.999:
+                irr = r * 100
+
+        return jsonify(
+            {
+                "current_value": round(float(current_value), 2),
+                "invested": round(float(invested), 2),
+                "simple_return_pct": round(float(simple_return), 2),
+                "irr_pct": round(float(irr), 2) if irr is not None else None,
+                "cashflow_points": len(flows),
+            }
+        )
+
+    @app.get("/api/finance/audit")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_audit_logs():
+        limit = min(300, max(1, int(request.args.get("limit", "100"))))
+        return jsonify(repo.list_fin_audit_logs(limit))
 
     # ── Export Data ─────────────────────────────────────────
 

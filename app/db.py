@@ -311,6 +311,17 @@ CREATE TABLE IF NOT EXISTS fin_allocation_targets (
     target_pct REAL NOT NULL DEFAULT 0,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fin_audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    payload_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_audit_logs_created
+ON fin_audit_logs(created_at DESC);
 """
 
 POSTGRES_SCHEMA = """
@@ -591,6 +602,17 @@ CREATE TABLE IF NOT EXISTS fin_allocation_targets (
     target_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fin_audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id BIGINT,
+    payload_json TEXT DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_audit_logs_created
+ON fin_audit_logs(created_at DESC);
 """
 
 

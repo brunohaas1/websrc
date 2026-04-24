@@ -1432,6 +1432,63 @@ body.light .fin-alloc-total {
   color: var(--text-s, #94a3b8);
 }
 
+.fin-performance-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 0 10px 8px;
+}
+
+.fin-mini-metric {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.82rem;
+}
+
+.fin-mini-metric strong {
+  font-size: 0.9rem;
+}
+
+.fin-tx-filter-bar {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .fin-performance-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fin-audit-item {
+  display: grid;
+  grid-template-columns: 140px 110px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.18);
+  font-size: 0.8rem;
+}
+
+.fin-audit-item:last-child {
+  border-bottom: 0;
+}
+
+.fin-audit-time {
+  color: var(--text-s, #94a3b8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.fin-audit-action {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* ══════════════════════════════════════════════════════════
    Watchlist Alerts Banner
    ══════════════════════════════════════════════════════════ */
