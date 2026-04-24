@@ -56,7 +56,15 @@
         <span class="fin-summary-label">Ativos</span>
         <strong class="fin-summary-value">—</strong>
       </div>
+      <div class="fin-summary-card" id="summaryDividends">
+        <span class="fin-summary-label">Dividendos</span>
+        <strong class="fin-summary-value">—</strong>
+      </div>
+      <div class="fin-summary-updated" id="finLastUpdated" aria-live="polite"></div>
     </section>
+
+    <!-- ── Watchlist Alerts Banner ─────────────────────── -->
+    <div id="finAlertsBanner" class="fin-alerts-banner" style="display:none" role="alert" aria-live="assertive"></div>
 
     <main class="fin-grid" id="financeMain">
 
@@ -234,6 +242,8 @@
           <button class="fin-ai-btn" data-type="risk">⚠️ Risco</button>
           <button class="fin-ai-btn" data-type="allocation">🍩 Alocação</button>
           <button class="fin-ai-btn" data-type="performance">📈 Performance</button>
+          <button class="fin-ai-btn" data-type="dividends">💸 Dividendos</button>
+          <button class="fin-ai-btn" data-type="goals">🎯 Metas</button>
         </div>
         <div id="finAIContent" class="fin-card-body fin-ai-content">
           <p class="fin-ai-placeholder">Clique em um tipo de análise acima para a IA avaliar seu portfólio.</p>

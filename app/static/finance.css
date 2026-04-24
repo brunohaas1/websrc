@@ -6,9 +6,23 @@
 .fin-summary-bar {
   display: flex;
   gap: 12px;
-  padding: 16px 20px 0;
+  padding: 16px 20px 8px;
   overflow-x: auto;
   scrollbar-width: thin;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg, #050a15);
+}
+
+/* ── Summary Last Updated ─────────────────────────────── */
+.fin-summary-updated {
+  font-size: 0.72rem;
+  opacity: 0.5;
+  align-self: flex-end;
+  white-space: nowrap;
+  padding-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .fin-summary-card {
@@ -1416,4 +1430,109 @@ body.light .fin-alloc-total {
 .fin-page-info {
   font-size: 0.8rem;
   color: var(--text-s, #94a3b8);
+}
+
+/* ══════════════════════════════════════════════════════════
+   Watchlist Alerts Banner
+   ══════════════════════════════════════════════════════════ */
+
+.fin-alerts-banner {
+  padding: 0 16px 8px;
+}
+
+.fin-alerts-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fin-alert-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+  animation: fin-slide-in 0.2s ease;
+}
+
+@keyframes fin-slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fin-alert-icon { font-size: 1rem; flex-shrink: 0; }
+
+.fin-alert-text {
+  flex: 1;
+  min-width: 200px;
+  line-height: 1.4;
+}
+
+.fin-alert-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-s, #94a3b8);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.fin-alert-dismiss:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* ══════════════════════════════════════════════════════════
+   Keyboard Shortcuts Modal
+   ══════════════════════════════════════════════════════════ */
+
+.fin-shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.fin-shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.fin-shortcut-row kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  min-width: 84px;
+  text-align: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.fin-shortcut-row span {
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+/* ── Light theme overrides ──────────────────────────── */
+body.light .fin-summary-bar {
+  background: var(--bg, #f8fafc);
+}
+
+body.light .fin-alert-item {
+  background: rgba(234, 179, 8, 0.07);
+}
+
+body.light .fin-shortcut-row kbd {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #1e293b;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.12);
 }

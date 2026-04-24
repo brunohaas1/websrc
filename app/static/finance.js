@@ -116,6 +116,38 @@ function initTheme() {
   }
 }
 
+// ── Keyboard Shortcuts ───────────────────────────────────
+
+function initFinanceKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    // Ignore when typing in an input/textarea/select or modal is open
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    const overlay = byId("finModalOverlay");
+    if (overlay && overlay.style.display !== "none") return;
+
+    const ctrl = e.ctrlKey || e.metaKey;
+
+    if (ctrl && e.key === "r") { e.preventDefault(); loadAll(); showToast("Atualizando dados...", "info"); return; }
+    if (ctrl && e.key === "i") { e.preventDefault(); openImportModal(); return; }
+    if (ctrl && e.key === "e") { e.preventDefault(); openExportModal(); return; }
+    if (e.key === "?") { showKeyboardShortcutsHelp(); return; }
+    if (e.key === "Escape") { closeFinModal(); return; }
+  });
+}
+
+function showKeyboardShortcutsHelp() {
+  openFinModal("Atalhos de Teclado", `
+    <div class="fin-shortcuts-list">
+      <div class="fin-shortcut-row"><kbd>Ctrl+R</kbd><span>Atualizar dados</span></div>
+      <div class="fin-shortcut-row"><kbd>Ctrl+I</kbd><span>Importar Excel/CSV</span></div>
+      <div class="fin-shortcut-row"><kbd>Ctrl+E</kbd><span>Exportar dados</span></div>
+      <div class="fin-shortcut-row"><kbd>?</kbd><span>Mostrar atalhos</span></div>
+      <div class="fin-shortcut-row"><kbd>Esc</kbd><span>Fechar modal</span></div>
+    </div>
+  `);
+}
+
 // ══════════════════════════════════════════════════════════
 // Data Loading
 // ══════════════════════════════════════════════════════════
@@ -166,6 +198,8 @@ async function loadAll() {
     loadHistoryFromControls();
     populateIRYears();
     checkWatchlistAlerts();
+    checkGoalsMilestones(goals);
+    updateLastUpdated();
   } catch (err) {
     console.error("Finance load error:", err);
   }
@@ -181,6 +215,7 @@ function renderSummary(s) {
   const pnl = byId("summaryPnL");
   const pnlPct = byId("summaryPnLPct");
   const assets = byId("summaryAssets");
+  const dividends = byId("summaryDividends");
 
   if (invested) invested.querySelector(".fin-summary-value").textContent = formatBRL(s.total_invested);
   if (current) current.querySelector(".fin-summary-value").textContent = formatBRL(s.current_value);
@@ -198,6 +233,19 @@ function renderSummary(s) {
   }
 
   if (assets) assets.querySelector(".fin-summary-value").textContent = s.asset_count || 0;
+
+  if (dividends) {
+    const totalDiv = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
+    dividends.querySelector(".fin-summary-value").textContent = formatBRL(totalDiv);
+  }
+}
+
+function updateLastUpdated() {
+  const el = byId("finLastUpdated");
+  if (!el) return;
+  const now = new Date();
+  el.textContent = `Atualizado: ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  el.title = now.toLocaleString("pt-BR");
 }
 
 function renderCurrency(rates) {
@@ -262,6 +310,8 @@ function renderPortfolio(portfolio) {
     return;
   }
 
+  const totalValue = portfolio.reduce((sum, p) => sum + (p.current_price || 0) * p.quantity, 0);
+
   const rows = portfolio
     .map((p) => {
       const currentVal = (p.current_price || 0) * p.quantity;
@@ -269,6 +319,7 @@ function renderPortfolio(portfolio) {
       const pnlPct = p.total_invested ? (pnl / p.total_invested * 100) : 0;
       const pnlCls = changeClass(pnl);
       const typeCls = badgeClass(p.asset_type);
+      const weightPct = totalValue > 0 ? (currentVal / totalValue * 100) : 0;
 
       // Renda fixa extra info
       let rfInfo = "";
@@ -298,7 +349,9 @@ function renderPortfolio(portfolio) {
           <td class="text-right mono">${formatBRL(currentVal)}</td>
           <td class="text-right mono ${pnlCls}">${formatBRL(pnl)}</td>
           <td class="text-right mono ${pnlCls}">${formatPct(pnlPct)}</td>
+          <td class="text-right mono">${weightPct.toFixed(1)}%</td>
           <td class="text-center">
+            <button class="fin-del-btn" data-action="addTxForAsset" data-id="${p.asset_id}" title="Nova transação">➕</button>
             <button class="fin-del-btn" data-action="deleteAsset" data-id="${p.asset_id}" title="Remover">🗑️</button>
           </td>
         </tr>
@@ -320,6 +373,7 @@ function renderPortfolio(portfolio) {
             <th class="text-right">Valor</th>
             <th class="text-right">P&L</th>
             <th class="text-right">P&L %</th>
+            <th class="text-right">Peso</th>
             <th></th>
           </tr>
         </thead>
@@ -2539,6 +2593,102 @@ function openExportModal() {
 // Push Notifications
 // ══════════════════════════════════════════════════════════
 
+function renderWatchlistAlertsBanner(triggeredItems) {
+  const banner = byId("finAlertsBanner");
+  if (!banner) return;
+  if (!triggeredItems || !triggeredItems.length) {
+    banner.style.display = "none";
+    banner.innerHTML = "";
+    return;
+  }
+
+  const dismissed = JSON.parse(localStorage.getItem("fin_dismissed_banners") || "[]");
+  const visible = triggeredItems.filter((w) => {
+    const key = `${w.symbol}_${w.target_price}_${w.alert_above}`;
+    return !dismissed.includes(key);
+  });
+
+  if (!visible.length) {
+    banner.style.display = "none";
+    banner.innerHTML = "";
+    return;
+  }
+
+  const items = visible.map((w) => {
+    const key = `${w.symbol}_${w.target_price}_${w.alert_above}`;
+    const dir = w.alert_above ? "subiu acima de" : "caiu abaixo de";
+    return `
+      <div class="fin-alert-item" data-alert-key="${escapeHtml(key)}">
+        <span class="fin-alert-icon">🔔</span>
+        <span class="fin-alert-text">
+          <strong>${escapeHtml(w.symbol)}</strong> ${dir}
+          <strong>${formatBRL(w.target_price)}</strong> — Atual: ${formatBRL(w.current_price)}
+        </span>
+        <button class="fin-alert-dismiss" data-alert-key="${escapeHtml(key)}" aria-label="Dispensar alerta de ${escapeHtml(w.symbol)}">✕</button>
+      </div>
+    `;
+  }).join("");
+
+  banner.innerHTML = `
+    <div class="fin-alerts-inner">
+      ${items}
+    </div>
+  `;
+  banner.style.display = "block";
+
+  // Bind dismiss buttons
+  banner.querySelectorAll(".fin-alert-dismiss").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.alertKey;
+      const saved = JSON.parse(localStorage.getItem("fin_dismissed_banners") || "[]");
+      if (!saved.includes(key)) saved.push(key);
+      // Keep only last 50 dismissals
+      if (saved.length > 50) saved.splice(0, saved.length - 50);
+      localStorage.setItem("fin_dismissed_banners", JSON.stringify(saved));
+      const item = banner.querySelector(`[data-alert-key="${CSS.escape(key)}"]`);
+      if (item) item.remove();
+      if (!banner.querySelectorAll(".fin-alert-item").length) {
+        banner.style.display = "none";
+      }
+    });
+  });
+}
+
+// ── Goals Milestones ─────────────────────────────────────
+
+function checkGoalsMilestones(goals) {
+  if (!goals || !goals.length) return;
+  const MILESTONES = [25, 50, 75, 100];
+  const stored = JSON.parse(localStorage.getItem("fin_goal_milestones") || "{}");
+  let changed = false;
+
+  goals.forEach((g) => {
+    if (!g.target_amount || g.target_amount <= 0) return;
+    const pct = Math.min(100, (g.current_amount / g.target_amount) * 100);
+    const key = String(g.id);
+    const prevMilestone = stored[key] || 0;
+
+    const reached = MILESTONES.filter((m) => pct >= m && m > prevMilestone);
+    if (reached.length) {
+      const highest = Math.max(...reached);
+      stored[key] = highest;
+      changed = true;
+      const icon = highest >= 100 ? "🎉" : "🎯";
+      const label = highest >= 100 ? "Meta concluída!" : `${highest}% atingido!`;
+      showToast(`${icon} "${escapeHtml(g.name)}" — ${label}`, "success");
+
+      if (Notification.permission === "granted") {
+        new Notification(`${icon} Meta: ${g.name}`, {
+          body: `${label} Atual: ${formatBRL(g.current_amount)} / ${formatBRL(g.target_amount)}`,
+          icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>",
+        });
+      }
+    }
+  });
+
+  if (changed) localStorage.setItem("fin_goal_milestones", JSON.stringify(stored));
+}
+
 function setupNotifications() {
   if (!("Notification" in window)) {
     showToast("Seu navegador não suporta notificações.");
@@ -2557,6 +2707,15 @@ function setupNotifications() {
 }
 
 function checkWatchlistAlerts() {
+  // Always render visual banner regardless of notification permission
+  const triggered = FIN.watchlist.filter((w) => {
+    if (w.current_price == null || !w.target_price) return false;
+    return w.alert_above
+      ? w.current_price >= w.target_price
+      : w.current_price <= w.target_price;
+  });
+  renderWatchlistAlertsBanner(triggered);
+
   if (Notification.permission !== "granted") return;
   const notified = JSON.parse(localStorage.getItem("fin_notified_alerts") || "{}");
   const now = Date.now();
@@ -2564,12 +2723,7 @@ function checkWatchlistAlerts() {
   Object.keys(notified).forEach((k) => {
     if (now - notified[k] > 3600000) delete notified[k];
   });
-  FIN.watchlist.forEach((w) => {
-    if (w.current_price == null || !w.target_price) return;
-    const triggered = w.alert_above
-      ? w.current_price >= w.target_price
-      : w.current_price <= w.target_price;
-    if (triggered) {
+  triggered.forEach((w) => {
       const key = `${w.symbol}_${w.target_price}_${w.alert_above}`;
       if (notified[key]) return; // Already notified recently
       notified[key] = now;
@@ -2578,7 +2732,6 @@ function checkWatchlistAlerts() {
         body: `${w.symbol} ${dir} de ${formatBRL(w.target_price)} — Atual: ${formatBRL(w.current_price)}`,
         icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>",
       });
-    }
   });
   localStorage.setItem("fin_notified_alerts", JSON.stringify(notified));
 }
@@ -2810,6 +2963,7 @@ function renderMarkdown(text) {
 
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
+  initFinanceKeyboardShortcuts();
   loadAll();
 
   const refreshBtn = byId("finRefreshBtn");
