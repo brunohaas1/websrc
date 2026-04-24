@@ -18,11 +18,12 @@ if config.config_file_name is not None:
 # Allow DATABASE_URL env var to override alembic.ini
 database_url = os.getenv("DATABASE_URL", "").strip()
 if database_url:
-    # Normalise driver prefix: strip "+psycopg" so alembic uses plain psycopg
+    # Normalise driver prefix: ensure psycopg3 is used (postgresql+psycopg://)
     dsn = database_url
-    if dsn.startswith("postgresql+"):
-        scheme, rest = dsn.split("://", 1)
-        dsn = f"postgresql://{rest}"
+    if dsn.startswith("postgresql://"):
+        dsn = dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    elif dsn.startswith("postgresql+psycopg2://"):
+        dsn = dsn.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     config.set_main_option("sqlalchemy.url", dsn)
 
 
