@@ -2289,25 +2289,45 @@ function renderDividends(divs) {
   if (!divs.length) {
     el.innerHTML = '<p class="fin-empty">Nenhum dividendo registrado. Registre proventos recebidos!</p>';
     if (summaryEl) summaryEl.innerHTML = "";
+    _destroyDividendCharts();
     return;
   }
 
   // Summary totals by type
   const totals = {};
+  const assetTotals = {};
+  const monthTotals = {};
   let grandTotal = 0;
   divs.forEach((d) => {
     const t = d.div_type || "dividend";
+    const symbol = d.symbol || "—";
+    const monthKey = (d.pay_date || d.ex_date || d.created_at || "").slice(0, 7);
     totals[t] = (totals[t] || 0) + (d.total_amount || 0);
+    assetTotals[symbol] = (assetTotals[symbol] || 0) + (d.total_amount || 0);
+    if (monthKey) monthTotals[monthKey] = (monthTotals[monthKey] || 0) + (d.total_amount || 0);
     grandTotal += d.total_amount || 0;
   });
+
+  const monthEntries = Object.entries(monthTotals).sort(([a], [b]) => a.localeCompare(b));
+  const last12 = monthEntries.slice(-12);
+  const last12Total = last12.reduce((sum, [, value]) => sum + value, 0);
+  const averageMonth = monthEntries.length ? grandTotal / monthEntries.length : 0;
+  const bestMonth = last12.length ? [...last12].sort((a, b) => b[1] - a[1])[0] : null;
+  const bestAsset = Object.entries(assetTotals).sort((a, b) => b[1] - a[1])[0] || null;
+  const totalCount = divs.length;
+
   const typeLabels = { dividend: "Dividendos", jcp: "JCP", rendimento: "Rendimentos", bonus: "Bonificação" };
   if (summaryEl) {
     summaryEl.innerHTML = `
       <div class="fin-div-totals">
+        <div class="fin-div-total-item fin-div-grand"><span>Total Geral</span><strong>${formatBRL(grandTotal)}</strong><em>${totalCount} lançamento(s)</em></div>
+        <div class="fin-div-total-item"><span>Média Mensal</span><strong>${formatBRL(averageMonth)}</strong><em>${monthEntries.length || 0} mês(es)</em></div>
+        <div class="fin-div-total-item"><span>Últimos 12 Meses</span><strong>${formatBRL(last12Total)}</strong><em>${last12.length || 0} competência(s)</em></div>
+        <div class="fin-div-total-item"><span>Melhor Mês</span><strong>${bestMonth ? formatBRL(bestMonth[1]) : "—"}</strong><em>${bestMonth ? escapeHtml(bestMonth[0]) : "sem dados"}</em></div>
+        <div class="fin-div-total-item"><span>Maior Pagador</span><strong>${bestAsset ? formatBRL(bestAsset[1]) : "—"}</strong><em>${bestAsset ? escapeHtml(bestAsset[0]) : "sem dados"}</em></div>
         ${Object.entries(totals).map(([k, v]) =>
           `<div class="fin-div-total-item"><span>${typeLabels[k] || k}</span><strong>${formatBRL(v)}</strong></div>`
         ).join("")}
-        <div class="fin-div-total-item fin-div-grand"><span>Total</span><strong>${formatBRL(grandTotal)}</strong></div>
       </div>
     `;
   }
@@ -2333,6 +2353,10 @@ function renderDividends(divs) {
   }).join("");
 
   el.innerHTML = `
+    <div class="fin-div-table-toolbar">
+      <div class="fin-div-table-caption">Lista recente de proventos, com foco em consulta rápida dos últimos registros.</div>
+      <button type="button" id="btnBrowseDividendsInline" class="btn-text">Ver todos e filtrar</button>
+    </div>
     <div class="fin-table-wrap">
       <table class="fin-table">
         <thead>
@@ -2352,8 +2376,21 @@ function renderDividends(divs) {
     </div>
   `;
 
-  // Render monthly bar chart
+  const browseBtn = byId("btnBrowseDividendsInline");
+  if (browseBtn) browseBtn.addEventListener("click", () => openCadastroBrowserModal("dividends"));
+
   renderDividendsChart(divs);
+  renderDividendsTypeChart(totals, typeLabels);
+  renderDividendsAssetChart(assetTotals);
+}
+
+function _destroyDividendCharts() {
+  ["dividends", "dividendsType", "dividendsAsset"].forEach((key) => {
+    if (FIN.charts[key]) {
+      FIN.charts[key].destroy();
+      delete FIN.charts[key];
+    }
+  });
 }
 
 function renderDividendsChart(divs) {
@@ -2372,10 +2409,7 @@ function renderDividendsChart(divs) {
   const labels = Object.keys(monthly).sort();
   const data = labels.map((k) => monthly[k]);
 
-  if (FIN.charts.dividends) {
-    FIN.charts.dividends.destroy();
-    delete FIN.charts.dividends;
-  }
+  if (FIN.charts.dividends) FIN.charts.dividends.destroy();
 
   FIN.charts.dividends = new Chart(canvas, {
     type: "bar",
@@ -2383,7 +2417,7 @@ function renderDividendsChart(divs) {
       labels,
       datasets: [
         {
-          label: "Dividendos (R$)",
+          label: "Dividendos por mês (R$)",
           data,
           backgroundColor: "rgba(16, 185, 129, 0.7)",
           borderColor: "rgba(16, 185, 129, 1)",
@@ -2397,6 +2431,13 @@ function renderDividendsChart(divs) {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
+        title: {
+          display: true,
+          text: "Fluxo mensal de dividendos",
+          color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
+          padding: { bottom: 14 },
+          font: { size: 15, weight: "700" },
+        },
         tooltip: {
           callbacks: {
             label: (ctx) => ` ${formatBRL(ctx.parsed.y)}`,
@@ -2413,6 +2454,182 @@ function renderDividendsChart(divs) {
       },
     },
   });
+}
+
+function renderDividendsTypeChart(totals, typeLabels) {
+  const canvas = byId("dividendsTypeChart");
+  if (!canvas || !window.Chart) return;
+  const labels = Object.keys(totals);
+  const values = labels.map((key) => totals[key]);
+  if (FIN.charts.dividendsType) FIN.charts.dividendsType.destroy();
+  if (!labels.length) return;
+
+  FIN.charts.dividendsType = new Chart(canvas, {
+    type: "doughnut",
+    data: {
+      labels: labels.map((key) => typeLabels[key] || key),
+      datasets: [{
+        data: values,
+        backgroundColor: ["#10b981", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444"],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: { color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0" },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.label}: ${formatBRL(ctx.raw)}`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderDividendsAssetChart(assetTotals) {
+  const canvas = byId("dividendsAssetChart");
+  if (!canvas || !window.Chart) return;
+  const topAssets = Object.entries(assetTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  if (FIN.charts.dividendsAsset) FIN.charts.dividendsAsset.destroy();
+  if (!topAssets.length) return;
+
+  FIN.charts.dividendsAsset = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: topAssets.map(([symbol]) => symbol),
+      datasets: [{
+        label: "Total recebido",
+        data: topAssets.map(([, value]) => value),
+        backgroundColor: "rgba(59, 130, 246, 0.78)",
+        borderRadius: 8,
+      }],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${formatBRL(ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            callback: (v) => `R$ ${Number(v).toLocaleString("pt-BR")}`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function getCadastroCollections() {
+  return {
+    assets: FIN.assets.map((a) => ({
+      title: `${a.symbol} — ${a.name || a.symbol}`,
+      subtitle: a.asset_type || "ativo",
+      meta: [
+        `ID ${a.id}`,
+        a.asset_type || "sem tipo",
+      ],
+      search: `${a.symbol} ${a.name || ""} ${a.asset_type || ""}`.toLowerCase(),
+    })),
+    watchlist: FIN.watchlist.map((w) => ({
+      title: `${w.symbol} — ${w.name || w.symbol}`,
+      subtitle: "watchlist",
+      meta: [
+        w.asset_type || "sem tipo",
+        w.target_price ? `Alvo ${formatBRL(w.target_price)}` : "sem alvo",
+        w.alert_above ? "alerta acima" : "alerta abaixo",
+      ],
+      search: `${w.symbol} ${w.name || ""} ${w.asset_type || ""} ${w.notes || ""}`.toLowerCase(),
+    })),
+    goals: FIN.goals.map((g) => ({
+      title: g.name,
+      subtitle: "meta",
+      meta: [
+        `Atual ${formatBRL(g.current_amount)}`,
+        `Meta ${formatBRL(g.target_amount)}`,
+        g.category || "sem categoria",
+      ],
+      search: `${g.name} ${g.category || ""} ${g.notes || ""}`.toLowerCase(),
+    })),
+    dividends: FIN.dividends.map((d) => ({
+      title: `${d.symbol || "—"} — ${formatBRL(d.total_amount)}`,
+      subtitle: d.div_type || "provento",
+      meta: [
+        (d.pay_date || d.ex_date || d.created_at || "").slice(0, 10),
+        `Qtd ${formatNumber(d.quantity, 0)}`,
+        `$/ação ${formatBRL(d.amount_per_share)}`,
+      ],
+      search: `${d.symbol || ""} ${d.div_type || ""} ${d.notes || ""}`.toLowerCase(),
+    })),
+  };
+}
+
+function renderCadastroBrowserResults() {
+  const typeEl = byId("fmCadastroType");
+  const searchEl = byId("fmCadastroSearch");
+  const resultsEl = byId("finCadastroResults");
+  const countEl = byId("finCadastroCount");
+  if (!typeEl || !searchEl || !resultsEl || !countEl) return;
+
+  const collections = getCadastroCollections();
+  const type = typeEl.value;
+  const term = searchEl.value.trim().toLowerCase();
+  const items = (collections[type] || []).filter((item) => !term || item.search.includes(term));
+  countEl.textContent = `${items.length} registro(s)`;
+
+  if (!items.length) {
+    resultsEl.innerHTML = '<div class="fin-cadastro-empty">Nenhum cadastro encontrado com esse filtro.</div>';
+    return;
+  }
+
+  resultsEl.innerHTML = items.map((item) => `
+    <div class="fin-cadastro-card">
+      <div class="fin-cadastro-title">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span class="fin-badge fin-badge-stock">${escapeHtml(item.subtitle)}</span>
+      </div>
+      <div class="fin-cadastro-meta">
+        ${item.meta.map((meta) => `<span>${escapeHtml(meta)}</span>`).join("")}
+      </div>
+    </div>
+  `).join("");
+}
+
+function openCadastroBrowserModal(initialType = "assets") {
+  openFinModal("Consultar Cadastros", `
+    <div class="fin-cadastro-toolbar">
+      <select id="fmCadastroType" class="fin-inline-select">
+        <option value="assets" ${initialType === "assets" ? "selected" : ""}>Ativos</option>
+        <option value="watchlist" ${initialType === "watchlist" ? "selected" : ""}>Watchlist</option>
+        <option value="goals" ${initialType === "goals" ? "selected" : ""}>Metas</option>
+        <option value="dividends" ${initialType === "dividends" ? "selected" : ""}>Dividendos</option>
+      </select>
+      <input id="fmCadastroSearch" class="fin-cadastro-search" placeholder="Filtrar por nome, símbolo, nota, categoria..." />
+      <span id="finCadastroCount" class="fin-div-table-caption">0 registro(s)</span>
+    </div>
+    <div id="finCadastroResults" class="fin-cadastro-results"></div>
+  `);
+
+  const typeEl = byId("fmCadastroType");
+  const searchEl = byId("fmCadastroSearch");
+  typeEl?.addEventListener("change", renderCadastroBrowserResults);
+  searchEl?.addEventListener("input", renderCadastroBrowserResults);
+  renderCadastroBrowserResults();
 }
 
 function openAddDividendModal() {
@@ -3614,6 +3831,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddWatchlist", openAddWatchlistModal);
   bind("btnAddGoal", openAddGoalModal);
   bind("btnAddDividend", openAddDividendModal);
+  bind("btnBrowseRecords", () => openCadastroBrowserModal("assets"));
+  bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
   bind("btnEditAllocation", openAllocationModal);
   bind("btnExportData", openExportModal);
   bind("btnFinanceSettings", openFinanceSettingsModal);

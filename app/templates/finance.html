@@ -25,6 +25,7 @@
         <div class="topbar-tools">
           <a href="/" class="btn-icon" title="Voltar ao Dashboard" aria-label="Voltar ao Dashboard">🏠</a>
           <button id="btnFinanceSettings" class="btn-icon" title="Configurações Financeiras" aria-label="Configurações Financeiras">⚙️</button>
+          <button id="btnBrowseRecords" class="btn-icon" title="Consultar cadastros" aria-label="Consultar cadastros">🔎</button>
           <button id="btnExportData" class="btn-icon" title="Exportar dados" aria-label="Exportar dados">📤</button>
           <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV" aria-label="Importar Excel ou CSV">📥</button>
           <button id="btnNotifications" class="btn-icon" title="Ativar notificações" aria-label="Ativar notificações">🔔</button>
@@ -193,17 +194,36 @@
         <h2>
           💸 Dividendos &amp; Proventos
           <button id="btnAddDividend" class="btn-text" title="Registrar dividendo">➕ Novo</button>
+          <button id="btnBrowseDividends" class="btn-text" title="Consultar dividendos">🔎 Consultar</button>
         </h2>
         <div id="finDividendSummary" class="fin-dividend-summary"></div>
+        <div class="fin-dividends-analytics">
+          <div class="fin-dividends-main-chart">
+            <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--hero">
+              <canvas id="dividendsChart" height="220" aria-label="Gráfico de dividendos por mês" role="img"></canvas>
+            </div>
+          </div>
+          <div class="fin-dividends-side-charts">
+            <div class="fin-mini-chart-card">
+              <h3>Por Tipo</h3>
+              <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--small">
+                <canvas id="dividendsTypeChart" height="170" aria-label="Distribuição de dividendos por tipo" role="img"></canvas>
+              </div>
+            </div>
+            <div class="fin-mini-chart-card">
+              <h3>Top Ativos</h3>
+              <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--small">
+                <canvas id="dividendsAssetChart" height="170" aria-label="Top ativos por dividendos" role="img"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="finDividendsContent" class="fin-card-body">
           <div class="fin-skeleton-table">
             <div class="skeleton fin-skel-row"></div>
             <div class="skeleton fin-skel-row"></div>
             <div class="skeleton fin-skel-row"></div>
           </div>
-        </div>
-        <div class="fin-dividends-chart-wrap">
-          <canvas id="dividendsChart" height="180" aria-label="Gráfico de dividendos por mês" role="img"></canvas>
         </div>
       </section>
 
