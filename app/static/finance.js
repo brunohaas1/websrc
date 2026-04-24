@@ -2891,7 +2891,12 @@ async function loadHistoryChart(assetId, options = {}) {
       reqs.push(finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(benchmark)}&limit=${limit}`).then((r) => r.json()));
     }
 
-    const [primaryData, totalData, investedData, benchmarkData] = await Promise.all(reqs);
+    const results = await Promise.all(reqs);
+    let resultIdx = 0;
+    const primaryData = results[resultIdx++] || [];
+    const totalData = (!isTotal && compareTotal) ? (results[resultIdx++] || []) : [];
+    const investedData = showInvested ? (results[resultIdx++] || []) : [];
+    const benchmarkData = benchmark ? (results[resultIdx++] || []) : [];
 
     if (!primaryData.length) {
       canvas.style.display = "none";
