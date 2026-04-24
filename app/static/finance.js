@@ -26,6 +26,9 @@ function showToast(message, type = "error") {
     container = document.createElement("div");
     container.id = "finToastContainer";
     container.className = "fin-toast-container";
+    container.setAttribute("aria-live", "polite");
+    container.setAttribute("aria-atomic", "false");
+    container.setAttribute("role", "status");
     document.body.appendChild(container);
   }
   const toast = document.createElement("div");

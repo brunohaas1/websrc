@@ -714,6 +714,16 @@ body.light .fin-ai-chat input {
 
 /* ── Responsive ───────────────────────────────────────── */
 @media (max-width: 768px) {
+  .topbar-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topbar-tools {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
   .fin-summary-bar {
     padding: 12px 12px 0;
     gap: 8px;
@@ -732,6 +742,10 @@ body.light .fin-ai-chat input {
     grid-template-columns: 1fr;
     padding: 12px 12px 30px;
     gap: 12px;
+  }
+
+  .fin-card {
+    padding: 14px 14px;
   }
 
   .fin-card.fin-wide {
@@ -753,6 +767,40 @@ body.light .fin-ai-chat input {
 
   .fin-chat-msg.user { margin-left: 10px; }
   .fin-chat-msg.ai { margin-right: 10px; }
+
+  .fin-form-group input,
+  .fin-form-group select,
+  .fin-form-group textarea,
+  .fin-form-submit,
+  .inline-form input,
+  .inline-form select,
+  .inline-form button {
+    min-height: 42px;
+    font-size: 0.95rem;
+  }
+}
+
+.fin-card button:focus-visible,
+.fin-card input:focus-visible,
+.fin-card select:focus-visible,
+.fin-card textarea:focus-visible,
+.fin-card a:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fin-card,
+  .fin-card:hover,
+  .fin-toast,
+  .fin-modal,
+  .fin-form-submit,
+  .btn-icon,
+  .btn-text {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
 }
 
 /* ── Import Modal ─────────────────────────────────────── */

@@ -13,6 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#dashboardGrid">Pular para conteúdo principal</a>
     <noscript>
       <p style="padding:2rem;text-align:center;color:#fff;background:#1a1a2e">
         Este dashboard requer JavaScript para funcionar.
@@ -30,12 +31,12 @@
             <option value="pt-BR">🇧🇷 PT</option>
             <option value="en">🇺🇸 EN</option>
           </select>
-          <input type="color" id="accentColorPicker" value="#6366f1" title="Cor de destaque" class="accent-picker" />
-          <button id="themeToggle" class="btn-icon" title="Alternar tema (T)">☀️</button>
-          <button id="notifBellBtn" class="btn-icon notif-bell" title="Notificações">🔔 <span id="notifBadge" class="notif-badge" style="display:none">0</span></button>
-          <a href="/finance" class="btn-icon" title="Dashboard Financeiro">💰</a>
-          <button id="shareDashBtn" class="btn-icon" title="Compartilhar dashboard">🔗</button>
-          <button id="settingsBtn" class="btn-icon" title="Configurações">⚙️</button>
+          <input type="color" id="accentColorPicker" value="#6366f1" title="Cor de destaque" aria-label="Cor de destaque" class="accent-picker" />
+          <button id="themeToggle" class="btn-icon" title="Alternar tema (T)" aria-label="Alternar tema">☀️</button>
+          <button id="notifBellBtn" class="btn-icon notif-bell" title="Notificações" aria-label="Notificações">🔔 <span id="notifBadge" class="notif-badge" style="display:none">0</span></button>
+          <a href="/finance" class="btn-icon" title="Dashboard Financeiro" aria-label="Ir para Dashboard Financeiro">💰</a>
+          <button id="shareDashBtn" class="btn-icon" title="Compartilhar dashboard" aria-label="Compartilhar dashboard">🔗</button>
+          <button id="settingsBtn" class="btn-icon" title="Configurações" aria-label="Configurações">⚙️</button>
         </div>
       </div>
       <div class="topbar-bottom" role="search">
@@ -101,8 +102,17 @@
       </section>
 
       <section class="card" draggable="true" data-card-id="alerts">
-        <h2>🔔 Alertas de preço <button class="btn-text" onclick="runSmartAnalysis()" title="Análise IA" style="margin-left:8px">🧠 Analisar</button></h2>
-        <div id="smartAlertsBanner"></div>
+        <h2>🔔 Alertas de preço</h2>
+        <div class="smart-alert-controls" role="group" aria-label="Controles de alertas inteligentes">
+          <button id="btnRunSmartAlerts" class="btn-text" type="button" title="Executar análise inteligente agora">🧠 Analisar</button>
+          <label class="smart-alert-control-item" for="smartAlertAuto">
+            <input id="smartAlertAuto" type="checkbox" /> Auto
+          </label>
+          <label class="smart-alert-control-item" for="smartAlertDesktop">
+            <input id="smartAlertDesktop" type="checkbox" /> Notificação desktop
+          </label>
+        </div>
+        <div id="smartAlertsBanner" aria-live="polite" aria-atomic="true"></div>
         <div id="alertsList" class="list"><div class="skeleton" style="height:48px"></div></div>
       </section>
 

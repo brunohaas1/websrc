@@ -85,6 +85,23 @@ body {
   overflow-x: hidden;
 }
 
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: -40px;
+  z-index: 12000;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  transition: top var(--duration-fast) var(--ease-out);
+}
+
+.skip-link:focus-visible {
+  top: 10px;
+}
+
 /* Animated background mesh */
 body::before {
   content: "";
@@ -1927,6 +1944,28 @@ select:focus:not(:focus-visible) { outline: none; }
 
 /* ── Smart Alert Banner ────────────────────────────────── */
 
+.smart-alert-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.smart-alert-control-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.smart-alert-control-item input {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+
 .smart-alert {
   display: flex;
   align-items: flex-start;
@@ -1981,6 +2020,27 @@ select:focus:not(:focus-visible) { outline: none; }
 .smart-alert-time {
   font-size: 0.68rem;
   color: var(--text-faint);
+}
+
+@media (max-width: 900px) {
+  .smart-alert-controls .btn-text {
+    margin-right: 2px;
+  }
+
+  .smart-alert-control-item {
+    font-size: 0.74rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ── Animations ────────────────────────────────────────── */

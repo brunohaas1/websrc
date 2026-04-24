@@ -14,6 +14,7 @@
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#financeMain">Pular para conteúdo principal</a>
 
     <header class="topbar">
       <div class="topbar-top">
@@ -22,13 +23,13 @@
           <h1>💰 Dashboard Financeiro</h1>
         </div>
         <div class="topbar-tools">
-          <a href="/" class="btn-icon" title="Voltar ao Dashboard">🏠</a>
-          <button id="btnFinanceSettings" class="btn-icon" title="Configurações Financeiras">⚙️</button>
-          <button id="btnExportData" class="btn-icon" title="Exportar dados">📤</button>
-          <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV">📥</button>
-          <button id="btnNotifications" class="btn-icon" title="Ativar notificações">🔔</button>
-          <button id="themeToggle" class="btn-icon" title="Alternar tema">☀️</button>
-          <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados">⟳</button>
+          <a href="/" class="btn-icon" title="Voltar ao Dashboard" aria-label="Voltar ao Dashboard">🏠</a>
+          <button id="btnFinanceSettings" class="btn-icon" title="Configurações Financeiras" aria-label="Configurações Financeiras">⚙️</button>
+          <button id="btnExportData" class="btn-icon" title="Exportar dados" aria-label="Exportar dados">📤</button>
+          <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV" aria-label="Importar Excel ou CSV">📥</button>
+          <button id="btnNotifications" class="btn-icon" title="Ativar notificações" aria-label="Ativar notificações">🔔</button>
+          <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema">☀️</button>
+          <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados" aria-label="Atualizar dados">⟳</button>
         </div>
       </div>
     </header>
@@ -57,7 +58,7 @@
       </div>
     </section>
 
-    <main class="fin-grid">
+    <main class="fin-grid" id="financeMain">
 
       <!-- ── Currency ─────────────────────────────────── -->
       <section class="fin-card" id="finCurrencyCard">

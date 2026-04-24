@@ -10,10 +10,20 @@ const state = {
   favoriteIds: new Set(),
   savedFilters: [],
   offlineQueue: JSON.parse(localStorage.getItem("offline-queue") || "[]"),
+  smartAlertSettings: null,
 };
 
 const CARD_ORDER_KEY = "dashboard-card-order-v2";
 const COLLAPSED_KEY = "dashboard-collapsed-cards-v1";
+const SMART_ALERT_SETTINGS_KEY = "ws_smart_alert_settings_v1";
+const SMART_ALERT_LAST_RUN_KEY = "ws_smart_alert_last_run_v1";
+const SMART_ALERT_NOTIFIED_KEY = "ws_smart_alert_notified_v1";
+const SMART_ALERT_DEFAULTS = {
+  auto: true,
+  desktop: false,
+  minLevel: "info",
+  cooldownMinutes: 20,
+};
 
 /* ── Toast notification system ────────────────────────── */
 
@@ -23,9 +33,113 @@ function getOrCreateToastContainer() {
     container = document.createElement("div");
     container.id = "toastContainer";
     container.className = "toast-container";
+    container.setAttribute("aria-live", "polite");
+    container.setAttribute("aria-atomic", "false");
+    container.setAttribute("role", "status");
     document.body.appendChild(container);
   }
   return container;
+}
+
+function loadSmartAlertSettings() {
+  if (state.smartAlertSettings) return state.smartAlertSettings;
+  try {
+    const raw = JSON.parse(localStorage.getItem(SMART_ALERT_SETTINGS_KEY) || "{}");
+    state.smartAlertSettings = { ...SMART_ALERT_DEFAULTS, ...raw };
+  } catch {
+    state.smartAlertSettings = { ...SMART_ALERT_DEFAULTS };
+  }
+  return state.smartAlertSettings;
+}
+
+function saveSmartAlertSettings(next) {
+  const current = loadSmartAlertSettings();
+  state.smartAlertSettings = { ...current, ...next };
+  localStorage.setItem(SMART_ALERT_SETTINGS_KEY, JSON.stringify(state.smartAlertSettings));
+}
+
+function smartAlertLevelValue(level) {
+  const map = { info: 0, success: 1, warning: 2, danger: 3 };
+  return map[level] ?? 0;
+}
+
+function filterSmartAlertsByLevel(alerts) {
+  const settings = loadSmartAlertSettings();
+  const threshold = smartAlertLevelValue(settings.minLevel);
+  return (alerts || []).filter((alert) => smartAlertLevelValue(alert?.type) >= threshold);
+}
+
+function notifySmartAlertsDesktop(alerts) {
+  const settings = loadSmartAlertSettings();
+  if (!settings.desktop || !alerts.length || !("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const now = Date.now();
+  const cooldownMs = Math.max(5, Number(settings.cooldownMinutes) || 20) * 60_000;
+  const notified = JSON.parse(localStorage.getItem(SMART_ALERT_NOTIFIED_KEY) || "{}");
+
+  Object.keys(notified).forEach((key) => {
+    if (now - notified[key] > cooldownMs) delete notified[key];
+  });
+
+  alerts.forEach((alert) => {
+    const key = `${alert.type || "info"}:${alert.title || ""}:${alert.message || ""}`.slice(0, 240);
+    if (notified[key]) return;
+    notified[key] = now;
+    new Notification(`🧠 ${alert.title || "Smart Alert"}`, {
+      body: alert.message || "Novo alerta inteligente disponível.",
+      icon: "/static/icon-192.png",
+    });
+  });
+
+  localStorage.setItem(SMART_ALERT_NOTIFIED_KEY, JSON.stringify(notified));
+}
+
+function maybeAutoSmartAnalysis() {
+  const settings = loadSmartAlertSettings();
+  if (!settings.auto) return;
+  const now = Date.now();
+  const cooldownMs = Math.max(5, Number(settings.cooldownMinutes) || 20) * 60_000;
+  const lastRun = Number(localStorage.getItem(SMART_ALERT_LAST_RUN_KEY) || "0");
+  if (now - lastRun < cooldownMs) return;
+  localStorage.setItem(SMART_ALERT_LAST_RUN_KEY, String(now));
+  runSmartAnalysis("auto");
+}
+
+function initSmartAlertControls() {
+  const settings = loadSmartAlertSettings();
+  const autoEl = byId("smartAlertAuto");
+  const desktopEl = byId("smartAlertDesktop");
+  const runBtn = byId("btnRunSmartAlerts");
+
+  if (autoEl) {
+    autoEl.checked = !!settings.auto;
+    autoEl.addEventListener("change", (event) => {
+      saveSmartAlertSettings({ auto: !!event.target.checked });
+      showToast(event.target.checked ? "Smart Alerts automáticos ativados" : "Smart Alerts automáticos desativados", "info");
+    });
+  }
+
+  if (desktopEl) {
+    desktopEl.checked = !!settings.desktop;
+    desktopEl.addEventListener("change", async (event) => {
+      const enabled = !!event.target.checked;
+      if (enabled && "Notification" in window && Notification.permission !== "granted") {
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") {
+          desktopEl.checked = false;
+          saveSmartAlertSettings({ desktop: false });
+          showToast("Permissão de notificação não concedida", "warning");
+          return;
+        }
+      }
+      saveSmartAlertSettings({ desktop: enabled });
+    });
+  }
+
+  if (runBtn) {
+    runBtn.addEventListener("click", () => runSmartAnalysis("manual"));
+  }
 }
 
 function showToast(message, type = "info", durationMs = 3500) {
@@ -335,6 +449,7 @@ async function fetchDashboard() {
     }
     state.snapshot = await response.json();
     render();
+    maybeAutoSmartAnalysis();
   } catch (err) {
     console.error("Dashboard fetch error:", err);
   } finally {
@@ -2579,9 +2694,11 @@ function scheduleLLMPolling() {
 let _sseSource = null;
 /* ── Smart Alerts (AI) ─────────────────────────────────── */
 
-async function runSmartAnalysis() { // eslint-disable-line no-unused-vars -- called via onclick
+async function runSmartAnalysis(source = "manual") {
   const banner = byId("smartAlertsBanner");
-  if (banner) banner.innerHTML = `<small style="color:var(--text-dim)">🧠 Analisando dados...</small>`;
+  if (banner) {
+    banner.innerHTML = `<small style="color:var(--text-dim)">${source === "auto" ? "🤖 Verificando alertas automaticamente..." : "🧠 Analisando dados..."}</small>`;
+  }
 
   try {
     const res = await fetch("/api/smart-alerts/analyze", { method: "POST" });
@@ -2590,8 +2707,13 @@ async function runSmartAnalysis() { // eslint-disable-line no-unused-vars -- cal
       if (banner) banner.innerHTML = `<small style="color:var(--rose)">Erro: ${escapeHtml(data.error || "Falha")}</small>`;
       return;
     }
-    renderSmartAlerts(data.alerts || []);
-    showToast(`🧠 ${data.count || 0} alertas inteligentes gerados`, "info");
+    const filtered = filterSmartAlertsByLevel(data.alerts || []);
+    renderSmartAlerts(filtered);
+    notifySmartAlertsDesktop(filtered);
+    if (source === "manual") {
+      localStorage.setItem(SMART_ALERT_LAST_RUN_KEY, String(Date.now()));
+      showToast(`🧠 ${filtered.length || 0} alertas inteligentes exibidos`, "info");
+    }
   } catch { // network error
     if (banner) banner.innerHTML = `<small style="color:var(--rose)">Erro de rede</small>`;
   }
@@ -2649,8 +2771,10 @@ function connectSSE() {
       }
       if (data.type === "smart_alert") {
         showToast("🧠 Novos alertas inteligentes", "info", 6000);
-        renderSmartAlerts(data.alerts || []);
-        addLocalNotif("Smart Alert", `${(data.alerts || []).length} alertas gerados`, "info");
+        const filtered = filterSmartAlertsByLevel(data.alerts || []);
+        renderSmartAlerts(filtered);
+        notifySmartAlertsDesktop(filtered);
+        addLocalNotif("Smart Alert", `${filtered.length} alertas gerados`, "info");
         fetchDashboard();
       }
     } catch { /* ignore parse errors */ }
@@ -3608,6 +3732,7 @@ flushOfflineQueue();
 setupPiPDrag();
 pollNotifCount();
 loadAndApplyVisibility();
+initSmartAlertControls();
 fetchDashboard();
 scheduleDashboardPolling();
 document.addEventListener("visibilitychange", () => {

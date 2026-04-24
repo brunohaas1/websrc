@@ -24,6 +24,8 @@ class Config:
 
     API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "120/minute")
     API_RATE_LIMIT_RUN_NOW = os.getenv("API_RATE_LIMIT_RUN_NOW", "6/minute")
+    RATE_LIMIT_STORAGE_URI = os.getenv("RATE_LIMIT_STORAGE_URI", "").strip()
+    RATE_LIMIT_USE_REDIS = os.getenv("RATE_LIMIT_USE_REDIS", "1") == "1"
 
     SCRAPE_INTERVAL_MINUTES = max(
         1,

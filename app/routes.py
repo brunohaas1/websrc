@@ -53,15 +53,36 @@ def register_routes(app: Flask) -> None:
     buf_handler.setFormatter(logging.Formatter("%(message)s"))
     logging.getLogger().addHandler(buf_handler)
 
+    def _rate_limit_key() -> str:
+        for header in ("X-Admin-Key", "X-Finance-Key", "X-API-Key"):
+            token = (request.headers.get(header) or "").strip()
+            if token:
+                return f"key:{token[:80]}"
+        forwarded = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        client = forwarded or get_remote_address()
+        return f"ip:{client or 'unknown'}"
+
+    storage_uri = app.config.get("RATE_LIMIT_STORAGE_URI") or ""
+    if not storage_uri and app.config.get("RATE_LIMIT_USE_REDIS") and app.config.get("REDIS_URL"):
+        storage_uri = app.config["REDIS_URL"]
+    if not storage_uri:
+        storage_uri = "memory://"
+
+    # Fallback to in-memory limiter when Redis is unreachable during startup.
+    if storage_uri.startswith("redis://") or storage_uri.startswith("rediss://"):
+        try:
+            import redis as _redis
+
+            _redis.from_url(storage_uri, socket_connect_timeout=1.5).ping()
+        except Exception as exc:
+            logger.warning("Rate limit Redis unavailable (%s); falling back to memory://", exc)
+            storage_uri = "memory://"
+
     limiter = Limiter(
-        key_func=get_remote_address,
+        key_func=_rate_limit_key,
         app=app,
         default_limits=[app.config["API_RATE_LIMIT_DEFAULT"]],
-        storage_uri=(
-            app.config["REDIS_URL"]
-            if app.config["QUEUE_ENABLED"]
-            else "memory://"
-        ),
+        storage_uri=storage_uri,
     )
     app.extensions["limiter"] = limiter
 
