@@ -1803,56 +1803,6 @@ select:focus:not(:focus-visible) { outline: none; }
 }
 
 /* ── Focus Mode ────────────────────────────────────────── */
-
-.card-focus-toggle {
-  position: absolute;
-  top: 8px;
-  right: 36px;
-  z-index: 6;
-  background: none;
-  border: none;
-  color: var(--text-faint);
-  font-size: 0.85rem;
-  padding: 2px 6px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--duration), color var(--duration);
-}
-
-.card:hover .card-focus-toggle { opacity: 0.6; }
-.card-focus-toggle:hover { opacity: 1 !important; color: var(--accent-light); }
-
-.card.focus-hidden {
-  opacity: 0.25;
-  filter: grayscale(0.8);
-  transform: scale(0.97);
-  pointer-events: none;
-  transition: all var(--duration) var(--ease-out);
-}
-
-#focusModeBtn {
-  background: var(--glass);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 12px;
-  color: var(--text-dim);
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: all var(--duration);
-}
-
-#focusModeBtn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-  background: var(--accent-glow);
-}
-
-#focusModeBtn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
 /* ── Accent Color Picker ───────────────────────────────── */
 
 .accent-picker-wrap {

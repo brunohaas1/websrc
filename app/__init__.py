@@ -26,9 +26,6 @@ def create_app(start_scheduler: bool = True) -> Flask:
     init_db(app.config["DATABASE_TARGET"])
     register_routes(app)
     register_finance_routes(app, app.extensions["limiter"])
-    from .people_search_routes import people_search_bp
-    app.register_blueprint(people_search_bp)
-
     # ── Cache-bust helper for static assets ──────────────
     _static_hashes: dict[str, str] = {}
 

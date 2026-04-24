@@ -1769,8 +1769,6 @@ function setupEvents() {
   byId("priceForm").addEventListener("submit", addPriceWatch);
   byId("refreshBtn").addEventListener("click", runNow);
   byId("themeToggle")?.addEventListener("click", toggleTheme);
-  byId("focusModeBtn")?.addEventListener("click", toggleFocusMode);
-
   byId("jobFilters").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-term]");
     if (!button) return;
@@ -2475,75 +2473,7 @@ function setupCardDragAndDrop() {
 }
 
 /* ── Keyboard shortcuts ───────────────────────────────── */
-
-const FOCUS_KEY = "ws_hidden_cards";
 const ACCENT_KEY = "ws_accent_color";
-let focusMode = false;
-
-function getHiddenCards() {
-  try { return new Set(JSON.parse(localStorage.getItem(FOCUS_KEY) || "[]")); }
-  catch { return new Set(); }
-}
-function saveHiddenCards(set) {
-  localStorage.setItem(FOCUS_KEY, JSON.stringify([...set]));
-}
-
-function toggleFocusMode() {
-  focusMode = !focusMode;
-  const grid = byId("dashboardGrid");
-  if (!grid) return;
-  const hidden = getHiddenCards();
-  const btn = byId("focusModeBtn");
-
-  grid.querySelectorAll(".card[data-card-id]").forEach((card) => {
-    const cid = card.dataset.cardId;
-    if (focusMode && hidden.has(cid)) {
-      card.style.display = "none";
-    } else {
-      card.style.display = "";
-    }
-    // Show/hide eye icon on cards
-    const eye = card.querySelector(".card-focus-toggle");
-    if (eye) eye.style.display = focusMode ? "inline-block" : "none";
-  });
-
-  if (btn) btn.textContent = focusMode ? "👁️ Sair Focus" : "🎯 Focus";
-  showToast(focusMode ? "Modo Focus ativado" : "Modo Focus desativado", "info");
-}
-
-function toggleCardVisibility(cardId) {
-  const hidden = getHiddenCards();
-  if (hidden.has(cardId)) hidden.delete(cardId);
-  else hidden.add(cardId);
-  saveHiddenCards(hidden);
-
-  const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
-  if (card && focusMode) {
-    card.style.display = hidden.has(cardId) ? "none" : "";
-  }
-  const eye = card?.querySelector(".card-focus-toggle");
-  if (eye) eye.textContent = hidden.has(cardId) ? "👁️‍🗨️" : "👁️";
-}
-
-function injectFocusToggles() {
-  const grid = byId("dashboardGrid");
-  if (!grid) return;
-  const hidden = getHiddenCards();
-  grid.querySelectorAll(".card[data-card-id]").forEach((card) => {
-    if (card.querySelector(".card-focus-toggle")) return;
-    const cid = card.dataset.cardId;
-    const btn = document.createElement("button");
-    btn.className = "card-focus-toggle btn-small";
-    btn.style.display = "none";
-    btn.title = "Ocultar/mostrar este card no Focus mode";
-    btn.textContent = hidden.has(cid) ? "👁️‍🗨️" : "👁️";
-    btn.onclick = (e) => { e.stopPropagation(); toggleCardVisibility(cid); };
-    const h2 = card.querySelector("h2");
-    if (h2) h2.appendChild(btn);
-  });
-}
-
-/* ── Accent Color ─────────────────────────────────────── */
 
 function applyAccentColor(color) {
   if (!color) return;
@@ -2603,14 +2533,8 @@ function setupKeyboardShortcuts() {
 
     if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      showToast("Ctrl+K = paleta · R = atualizar · T = tema · F = focus · N = notif · ? = atalhos", "info", 5000);
+        showToast("Ctrl+K = paleta · R = atualizar · T = tema · N = notif · ? = atalhos", "info", 5000);
     }
-
-    if (e.key === "f" || e.key === "F") {
-      e.preventDefault();
-      toggleFocusMode();
-    }
-
     if (e.key === "n" || e.key === "N") {
       e.preventDefault();
       toggleNotifPanel();
@@ -2818,7 +2742,6 @@ let _cmdPaletteOpen = false;
 const CMD_REGISTRY = [
   { id: "refresh", label: "🔄 Atualizar dados", keywords: "refresh atualizar", action: () => runNow() },
   { id: "theme", label: "🎨 Alternar tema", keywords: "theme tema dark light", action: () => toggleTheme() },
-  { id: "focus", label: "🎯 Modo Focus", keywords: "focus foco hide", action: () => toggleFocusMode() },
   { id: "notif", label: "🔔 Notificações", keywords: "notificações bell sino", action: () => toggleNotifPanel() },
   { id: "share", label: "🔗 Compartilhar dashboard", keywords: "share compartilhar link", action: () => createShareLink() },
   { id: "search", label: "🔍 Buscar", keywords: "search buscar pesquisar", action: () => { byId("searchInput")?.focus(); } },
@@ -3671,7 +3594,6 @@ applySavedCardHeights();
 applySavedCardSpans();
 applySavedCollapseState();
 injectCardControls();
-injectFocusToggles();
 setupCardResize();
 setupCardDragAndDrop();
 setupKeyboardShortcuts();
