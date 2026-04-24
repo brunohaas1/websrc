@@ -1535,4 +1535,114 @@ body.light .fin-shortcut-row kbd {
   border-color: rgba(0, 0, 0, 0.15);
   color: #1e293b;
   box-shadow: 0 2px 0 rgba(0, 0, 0, 0.12);
+
+/* ── Auto-refresh select ─────────────────────────────── */
+#autoRefreshSelect.fin-inline-select {
+  font-size: 0.78rem;
+  padding: 3px 6px;
+  height: auto;
+  cursor: pointer;
+}
+
+/* ── Sortable table headers ──────────────────────────── */
+.fin-th-sort {
+  user-select: none;
+  white-space: nowrap;
+}
+.fin-th-sort:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.fin-sort-icon {
+  display: inline-block;
+  font-size: 0.7rem;
+  opacity: 0.4;
+  margin-left: 3px;
+  vertical-align: middle;
+}
+.fin-sort-icon.active {
+  opacity: 1;
+  color: var(--accent, #10b981);
+}
+
+/* ── Transaction filter bar ──────────────────────────── */
+.fin-tx-filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0 12px 0;
+  flex-wrap: wrap;
+}
+.fin-tx-filter-bar .fin-inline-select {
+  font-size: 0.82rem;
+}
+.fin-tx-count {
+  font-size: 0.78rem;
+  opacity: 0.55;
+  margin-left: auto;
+}
+
+/* ── Dividend Yield column ───────────────────────────── */
+.fin-dy {
+  color: #10b981;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* ── Dividends monthly chart ─────────────────────────── */
+.fin-dividends-chart-wrap {
+  position: relative;
+  height: 180px;
+  margin: 12px 0 0 0;
+  padding: 0 4px;
+}
+.fin-dividends-chart-wrap canvas {
+  width: 100% !important;
+  max-height: 180px;
+}
+
+/* ── Granular skeleton rows ──────────────────────────── */
+.fin-skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 0;
+}
+.fin-skel-header {
+  height: 22px;
+  border-radius: 4px;
+  width: 100%;
+}
+.fin-skel-row {
+  height: 36px;
+  border-radius: 6px;
+  width: 100%;
+}
+.fin-skel-row--short {
+  width: 70%;
+}
+.fin-skel-sm {
+  height: 24px;
+}
+.fin-skel-progress {
+  height: 14px;
+  border-radius: 99px;
+  width: 85%;
+}
+
+/* ── Watchlist action group ──────────────────────────── */
+.fin-wl-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* ── Light theme overrides for new elements ──────────── */
+body.light .fin-tx-filter-bar .fin-inline-select {
+  background: #f1f5f9;
+  color: #1e293b;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+body.light .fin-th-sort:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
 }

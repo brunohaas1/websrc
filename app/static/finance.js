@@ -15,6 +15,13 @@ const FIN = {
   dividends: [],
   allocationTargets: [],
   charts: {},
+  // auto-refresh
+  _autoRefreshInterval: null,
+  // portfolio sort
+  _portfolioSort: { col: null, dir: 1 },
+  // transactions sort + filter
+  _txSort: { col: null, dir: 1 },
+  _txFilter: { asset: "", type: "" },
 };
 
 const byId = (id) => document.getElementById(id);
@@ -310,9 +317,24 @@ function renderPortfolio(portfolio) {
     return;
   }
 
+  // Apply sort
+  let sorted = [...portfolio];
+  if (FIN._portfolioSort.col) {
+    sorted.sort((a, b) => {
+      const av = a[FIN._portfolioSort.col] ?? 0;
+      const bv = b[FIN._portfolioSort.col] ?? 0;
+      return (av < bv ? -1 : av > bv ? 1 : 0) * FIN._portfolioSort.dir;
+    });
+  }
+
   const totalValue = portfolio.reduce((sum, p) => sum + (p.current_price || 0) * p.quantity, 0);
 
-  const rows = portfolio
+  const sortIcon = (col) => {
+    if (FIN._portfolioSort.col !== col) return '<span class="fin-sort-icon">⇅</span>';
+    return `<span class="fin-sort-icon active">${FIN._portfolioSort.dir === 1 ? "↑" : "↓"}</span>`;
+  };
+
+  const rows = sorted
     .map((p) => {
       const currentVal = (p.current_price || 0) * p.quantity;
       const pnl = currentVal - p.total_invested;
@@ -320,6 +342,14 @@ function renderPortfolio(portfolio) {
       const pnlCls = changeClass(pnl);
       const typeCls = badgeClass(p.asset_type);
       const weightPct = totalValue > 0 ? (currentVal / totalValue * 100) : 0;
+
+      // Dividend yield for this asset
+      const assetDivs = (FIN.dividends || []).filter((d) => d.symbol === p.symbol);
+      const totalDiv = assetDivs.reduce((s, d) => s + (d.total_amount || 0), 0);
+      const dy = p.total_invested > 0 ? (totalDiv / p.total_invested * 100) : 0;
+      const dyHtml = totalDiv > 0
+        ? `<span class="fin-dy" title="Dividend Yield: dividendos / custo">${dy.toFixed(1)}%</span>`
+        : "—";
 
       // Renda fixa extra info
       let rfInfo = "";
@@ -350,6 +380,7 @@ function renderPortfolio(portfolio) {
           <td class="text-right mono ${pnlCls}">${formatBRL(pnl)}</td>
           <td class="text-right mono ${pnlCls}">${formatPct(pnlPct)}</td>
           <td class="text-right mono">${weightPct.toFixed(1)}%</td>
+          <td class="text-right mono">${dyHtml}</td>
           <td class="text-center">
             <button class="fin-del-btn" data-action="addTxForAsset" data-id="${p.asset_id}" title="Nova transação">➕</button>
             <button class="fin-del-btn" data-action="deleteAsset" data-id="${p.asset_id}" title="Remover">🗑️</button>
@@ -361,19 +392,20 @@ function renderPortfolio(portfolio) {
 
   el.innerHTML = `
     <div class="fin-table-wrap">
-      <table class="fin-table">
+      <table class="fin-table fin-sortable-table" id="portfolioTable">
         <thead>
           <tr>
-            <th>Ativo</th>
+            <th data-sort-col="symbol" class="fin-th-sort">Ativo ${sortIcon("symbol")}</th>
             <th>Nome</th>
-            <th class="text-right">Qtd</th>
-            <th class="text-right">PM</th>
-            <th class="text-right">Atual</th>
-            <th class="text-right">Investido</th>
+            <th class="text-right fin-th-sort" data-sort-col="quantity">Qtd ${sortIcon("quantity")}</th>
+            <th class="text-right fin-th-sort" data-sort-col="avg_price">PM ${sortIcon("avg_price")}</th>
+            <th class="text-right fin-th-sort" data-sort-col="current_price">Atual ${sortIcon("current_price")}</th>
+            <th class="text-right fin-th-sort" data-sort-col="total_invested">Investido ${sortIcon("total_invested")}</th>
             <th class="text-right">Valor</th>
-            <th class="text-right">P&L</th>
-            <th class="text-right">P&L %</th>
+            <th class="text-right fin-th-sort" data-sort-col="unrealized_pnl">P&amp;L ${sortIcon("unrealized_pnl")}</th>
+            <th class="text-right">P&amp;L %</th>
             <th class="text-right">Peso</th>
+            <th class="text-right" title="Dividend Yield: total dividendos ÷ custo">DY</th>
             <th></th>
           </tr>
         </thead>
@@ -381,6 +413,21 @@ function renderPortfolio(portfolio) {
       </table>
     </div>
   `;
+
+  // Bind sort headers
+  el.querySelectorAll(".fin-th-sort[data-sort-col]").forEach((th) => {
+    th.style.cursor = "pointer";
+    th.addEventListener("click", () => {
+      const col = th.dataset.sortCol;
+      if (FIN._portfolioSort.col === col) {
+        FIN._portfolioSort.dir *= -1;
+      } else {
+        FIN._portfolioSort.col = col;
+        FIN._portfolioSort.dir = 1;
+      }
+      renderPortfolio(FIN.portfolio);
+    });
+  });
 }
 
 let _txPage = 0;
@@ -389,16 +436,56 @@ const _TX_PER_PAGE = 20;
 function renderTransactions(txns) {
   const el = byId("finTransactionsContent");
   if (!el) return;
-  if (!txns.length) {
-    el.innerHTML = '<p class="fin-empty">Nenhuma transação registrada.</p>';
+
+  // Apply filter
+  let filtered = txns;
+  if (FIN._txFilter.asset) {
+    filtered = filtered.filter((t) => t.asset_id === Number(FIN._txFilter.asset));
+  }
+  if (FIN._txFilter.type) {
+    filtered = filtered.filter((t) => t.tx_type === FIN._txFilter.type);
+  }
+
+  // Apply sort
+  if (FIN._txSort.col) {
+    filtered = [...filtered].sort((a, b) => {
+      const av = a[FIN._txSort.col] ?? "";
+      const bv = b[FIN._txSort.col] ?? "";
+      return (av < bv ? -1 : av > bv ? 1 : 0) * FIN._txSort.dir;
+    });
+  }
+
+  const filterBar = `
+    <div class="fin-tx-filter-bar">
+      <select id="txFilterAsset" class="fin-inline-select" title="Filtrar por ativo">
+        <option value="">Todos os ativos</option>
+        ${FIN.assets.map((a) => `<option value="${a.id}" ${FIN._txFilter.asset === String(a.id) ? "selected" : ""}>${escapeHtml(a.symbol)}</option>`).join("")}
+      </select>
+      <select id="txFilterType" class="fin-inline-select" title="Filtrar por tipo">
+        <option value="" ${!FIN._txFilter.type ? "selected" : ""}>Compra e Venda</option>
+        <option value="buy" ${FIN._txFilter.type === "buy" ? "selected" : ""}>Compras</option>
+        <option value="sell" ${FIN._txFilter.type === "sell" ? "selected" : ""}>Vendas</option>
+      </select>
+      <span class="fin-tx-count">${filtered.length} de ${txns.length}</span>
+    </div>
+  `;
+
+  if (!filtered.length) {
+    el.innerHTML = filterBar + '<p class="fin-empty">Nenhuma transação encontrada.</p>';
+    _bindTxFilters();
     return;
   }
 
-  const totalPages = Math.ceil(txns.length / _TX_PER_PAGE);
+  const totalPages = Math.ceil(filtered.length / _TX_PER_PAGE);
   if (_txPage >= totalPages) _txPage = totalPages - 1;
   if (_txPage < 0) _txPage = 0;
   const start = _txPage * _TX_PER_PAGE;
-  const page = txns.slice(start, start + _TX_PER_PAGE);
+  const page = filtered.slice(start, start + _TX_PER_PAGE);
+
+  const sortIcon = (col) => {
+    if (FIN._txSort.col !== col) return '<span class="fin-sort-icon">⇅</span>';
+    return `<span class="fin-sort-icon active">${FIN._txSort.dir === 1 ? "↑" : "↓"}</span>`;
+  };
 
   const rows = page
     .map((t) => {
@@ -416,6 +503,7 @@ function renderTransactions(txns) {
           <td class="text-right mono">${formatBRL(t.fees)}</td>
           <td>${escapeHtml(t.notes || "")}</td>
           <td class="text-center">
+            <button class="fin-del-btn" data-action="openEditTransactionModal" data-id="${t.id}" title="Editar">✏️</button>
             <button class="fin-del-btn" data-action="deleteTransaction" data-id="${t.id}" title="Excluir">🗑️</button>
           </td>
         </tr>
@@ -427,23 +515,23 @@ function renderTransactions(txns) {
   if (totalPages > 1) {
     paginationHtml = `<div class="fin-pagination">
       <button class="fin-page-btn" data-action="txPagePrev" ${_txPage === 0 ? "disabled" : ""}>◀</button>
-      <span class="fin-page-info">${_txPage + 1} / ${totalPages} (${txns.length} itens)</span>
+      <span class="fin-page-info">${_txPage + 1} / ${totalPages} (${filtered.length} itens)</span>
       <button class="fin-page-btn" data-action="txPageNext" ${_txPage >= totalPages - 1 ? "disabled" : ""}>▶</button>
     </div>`;
   }
 
-  el.innerHTML = `
+  el.innerHTML = filterBar + `
     <div class="fin-table-wrap">
-      <table class="fin-table">
+      <table class="fin-table fin-sortable-table">
         <thead>
           <tr>
-            <th>Data</th>
-            <th>Tipo</th>
-            <th>Ativo</th>
-            <th class="text-right">Qtd</th>
-            <th class="text-right">Preço</th>
-            <th class="text-right">Total</th>
-            <th class="text-right">Taxas</th>
+            <th data-sort-col="tx_date" class="fin-th-sort">Data ${sortIcon("tx_date")}</th>
+            <th data-sort-col="tx_type" class="fin-th-sort">Tipo ${sortIcon("tx_type")}</th>
+            <th data-sort-col="symbol" class="fin-th-sort">Ativo ${sortIcon("symbol")}</th>
+            <th class="text-right" data-sort-col="quantity" class="fin-th-sort">Qtd ${sortIcon("quantity")}</th>
+            <th class="text-right" data-sort-col="price" class="fin-th-sort">Preço ${sortIcon("price")}</th>
+            <th class="text-right" data-sort-col="total" class="fin-th-sort">Total ${sortIcon("total")}</th>
+            <th class="text-right" data-sort-col="fees" class="fin-th-sort">Taxas ${sortIcon("fees")}</th>
             <th>Notas</th>
             <th></th>
           </tr>
@@ -453,6 +541,44 @@ function renderTransactions(txns) {
     </div>
     ${paginationHtml}
   `;
+  _bindTxFilters();
+  _bindTxSortHeaders(el);
+}
+
+function _bindTxFilters() {
+  const assetSel = byId("txFilterAsset");
+  const typeSel = byId("txFilterType");
+  if (assetSel) {
+    assetSel.addEventListener("change", () => {
+      FIN._txFilter.asset = assetSel.value;
+      _txPage = 0;
+      renderTransactions(FIN.transactions);
+    });
+  }
+  if (typeSel) {
+    typeSel.addEventListener("change", () => {
+      FIN._txFilter.type = typeSel.value;
+      _txPage = 0;
+      renderTransactions(FIN.transactions);
+    });
+  }
+}
+
+function _bindTxSortHeaders(container) {
+  container.querySelectorAll(".fin-th-sort[data-sort-col]").forEach((th) => {
+    th.style.cursor = "pointer";
+    th.addEventListener("click", () => {
+      const col = th.dataset.sortCol;
+      if (FIN._txSort.col === col) {
+        FIN._txSort.dir *= -1;
+      } else {
+        FIN._txSort.col = col;
+        FIN._txSort.dir = 1;
+      }
+      _txPage = 0;
+      renderTransactions(FIN.transactions);
+    });
+  });
 }
 
 function renderWatchlist(watchlist) {
@@ -505,7 +631,10 @@ function renderWatchlist(watchlist) {
             <span class="fin-wl-target">${targetStr} ${dir}</span>
             ${alertHtml}
           </div>
-          <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">🗑️</button>
+          <div class="fin-wl-actions">
+            <button class="fin-del-btn" data-action="openEditWatchlistModal" data-id="${w.id}" title="Editar">✏️</button>
+            <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">🗑️</button>
+          </div>
         </div>
       `;
     })
@@ -1320,6 +1449,15 @@ async function deleteAsset(assetId) {
 
 // ── Add Transaction ──────────────────────────────────────
 
+function addTxForAsset(assetId) {
+  openAddTransactionModal();
+  // After modal renders, pre-select the asset
+  requestAnimationFrame(() => {
+    const sel = byId("fmTxAsset");
+    if (sel) sel.value = String(assetId);
+  });
+}
+
 function openAddTransactionModal() {
   const assetOptions = FIN.assets.length
     ? FIN.assets.map((a) => `<option value="${a.id}">${escapeHtml(a.symbol)} — ${escapeHtml(a.name)}</option>`).join("")
@@ -1492,6 +1630,86 @@ async function deleteTransaction(txId) {
   }
 }
 
+async function openEditTransactionModal(txId) {
+  // Find transaction in loaded data
+  const tx = FIN.transactions.find((t) => t.id === txId);
+  if (!tx) { showToast("Transação não encontrada"); return; }
+
+  openFinModal("Editar Transação", `
+    <form data-form-action="submitEditTransaction" data-tx-id="${txId}">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Ativo</label>
+          <input value="${escapeHtml(tx.symbol || "")}" disabled />
+        </div>
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmEditTxType">
+            <option value="buy" ${tx.tx_type === "buy" ? "selected" : ""}>Compra</option>
+            <option value="sell" ${tx.tx_type === "sell" ? "selected" : ""}>Venda</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Data</label>
+          <input id="fmEditTxDate" type="date" value="${(tx.tx_date || "").slice(0, 10)}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Quantidade</label>
+          <input id="fmEditTxQty" type="number" step="0.01" min="0.01" value="${tx.quantity}" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Preço unitário (R$)</label>
+          <input id="fmEditTxPrice" type="number" step="0.01" min="0.01" value="${tx.price}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Taxas (R$)</label>
+          <input id="fmEditTxFees" type="number" step="0.01" value="${tx.fees || 0}" />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Notas</label>
+        <input id="fmEditTxNotes" value="${escapeHtml(tx.notes || "")}" placeholder="Opcional" />
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar Alterações</button>
+    </form>
+  `);
+}
+
+async function submitEditTransaction(e) {
+  e.preventDefault();
+  const form = e.target;
+  const txId = Number(form.dataset.txId);
+  const body = {
+    tx_type: byId("fmEditTxType").value,
+    quantity: Number(byId("fmEditTxQty").value),
+    price: Number(byId("fmEditTxPrice").value),
+    fees: Number(byId("fmEditTxFees").value || 0),
+    notes: byId("fmEditTxNotes").value.trim(),
+    tx_date: byId("fmEditTxDate").value,
+  };
+  try {
+    const resp = await finFetch(`/api/finance/transactions/${txId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      closeFinModal();
+      loadAll();
+      showToast("Transação atualizada!", "success");
+    } else {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao atualizar transação");
+    }
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
 // ── Watchlist ────────────────────────────────────────────
 
 function openAddWatchlistModal() {
@@ -1568,6 +1786,83 @@ async function deleteWatchlistItem(wlId) {
     loadAll();
   } catch {
     showToast("Erro ao remover item");
+  }
+}
+
+async function openEditWatchlistModal(wlId) {
+  const item = FIN.watchlist.find((w) => w.id === wlId);
+  if (!item) { showToast("Item não encontrado"); return; }
+
+  openFinModal("Editar Watchlist", `
+    <form data-form-action="submitEditWatchlist" data-wl-id="${wlId}">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Símbolo</label>
+          <input value="${escapeHtml(item.symbol)}" disabled />
+        </div>
+        <div class="fin-form-group">
+          <label>Nome</label>
+          <input id="fmEditWlName" value="${escapeHtml(item.name || "")}" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmEditWlType">
+            <option value="stock" ${item.asset_type === "stock" ? "selected" : ""}>Ação</option>
+            <option value="fii" ${item.asset_type === "fii" ? "selected" : ""}>FII</option>
+            <option value="etf" ${item.asset_type === "etf" ? "selected" : ""}>ETF</option>
+            <option value="crypto" ${item.asset_type === "crypto" ? "selected" : ""}>Crypto</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Preço alvo (R$)</label>
+          <input id="fmEditWlTarget" type="number" step="0.01" value="${item.target_price || ""}" />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Alertar quando</label>
+        <select id="fmEditWlAlertAbove">
+          <option value="0" ${!item.alert_above ? "selected" : ""}>Preço cair abaixo do alvo</option>
+          <option value="1" ${item.alert_above ? "selected" : ""}>Preço subir acima do alvo</option>
+        </select>
+      </div>
+      <div class="fin-form-group">
+        <label>Notas</label>
+        <input id="fmEditWlNotes" value="${escapeHtml(item.notes || "")}" placeholder="Opcional" />
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar Alterações</button>
+    </form>
+  `);
+}
+
+async function submitEditWatchlist(e) {
+  e.preventDefault();
+  const form = e.target;
+  const wlId = Number(form.dataset.wlId);
+  const body = {
+    name: byId("fmEditWlName").value.trim(),
+    asset_type: byId("fmEditWlType").value,
+    target_price: byId("fmEditWlTarget").value ? Number(byId("fmEditWlTarget").value) : null,
+    alert_above: byId("fmEditWlAlertAbove").value === "1",
+    notes: byId("fmEditWlNotes").value.trim(),
+  };
+  try {
+    const resp = await finFetch(`/api/finance/watchlist/${wlId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      closeFinModal();
+      loadAll();
+      showToast("Watchlist atualizada!", "success");
+    } else {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao atualizar watchlist");
+    }
+  } catch {
+    showToast("Erro de rede");
   }
 }
 
@@ -1799,6 +2094,68 @@ function renderDividends(divs) {
       </table>
     </div>
   `;
+
+  // Render monthly bar chart
+  renderDividendsChart(divs);
+}
+
+function renderDividendsChart(divs) {
+  const canvas = byId("dividendsChart");
+  if (!canvas || !window.Chart) return;
+
+  // Group by YYYY-MM
+  const monthly = {};
+  divs.forEach((d) => {
+    const raw = d.pay_date || d.ex_date || d.created_at || "";
+    const key = raw.slice(0, 7); // "YYYY-MM"
+    if (!key) return;
+    monthly[key] = (monthly[key] || 0) + (d.total_amount || 0);
+  });
+
+  const labels = Object.keys(monthly).sort();
+  const data = labels.map((k) => monthly[k]);
+
+  if (FIN.charts.dividends) {
+    FIN.charts.dividends.destroy();
+    delete FIN.charts.dividends;
+  }
+
+  FIN.charts.dividends = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Dividendos (R$)",
+          data,
+          backgroundColor: "rgba(16, 185, 129, 0.7)",
+          borderColor: "rgba(16, 185, 129, 1)",
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${formatBRL(ctx.parsed.y)}`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            callback: (v) => `R$ ${Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`,
+          },
+        },
+      },
+    },
+  });
 }
 
 function openAddDividendModal() {
@@ -3036,7 +3393,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── Event delegation for dynamic buttons (CSP-safe) ──
-  const actionMap = { deleteAsset, deleteTransaction, deleteWatchlistItem, deleteGoal, openEditGoalModal, deleteDividend };
+  const actionMap = {
+    deleteAsset,
+    deleteTransaction,
+    deleteWatchlistItem,
+    deleteGoal,
+    openEditGoalModal,
+    deleteDividend,
+    openEditTransactionModal,
+    openEditWatchlistModal,
+    addTxForAsset,
+  };
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
@@ -3049,4 +3416,39 @@ document.addEventListener("DOMContentLoaded", () => {
     const fn = actionMap[action];
     if (fn) fn(Number(btn.dataset.id));
   });
+
+  // ── Form delegation (data-form-action) ──────────────
+  const formMap = {
+    submitEditTransaction,
+    submitEditWatchlist,
+  };
+  document.addEventListener("submit", (e) => {
+    const fa = e.target.dataset.formAction;
+    if (!fa) return;
+    const fn = formMap[fa];
+    if (fn) fn(e);
+  });
+
+  initAutoRefresh();
 });
+
+// ── Auto-refresh ──────────────────────────────────────
+function initAutoRefresh() {
+  const sel = byId("autoRefreshSelect");
+  if (!sel) return;
+  const saved = localStorage.getItem("fin_auto_refresh") ?? "300";
+  sel.value = saved;
+  _startAutoRefresh(Number(saved));
+  sel.addEventListener("change", () => {
+    localStorage.setItem("fin_auto_refresh", sel.value);
+    _startAutoRefresh(Number(sel.value));
+  });
+}
+
+function _startAutoRefresh(seconds) {
+  if (FIN._autoRefreshInterval) clearInterval(FIN._autoRefreshInterval);
+  FIN._autoRefreshInterval = null;
+  if (seconds > 0) {
+    FIN._autoRefreshInterval = setInterval(loadAll, seconds * 1000);
+  }
+}

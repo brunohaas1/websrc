@@ -2022,6 +2022,25 @@ class Repository:
             ).fetchone()
             return dict(row) if row else None
 
+    def update_fin_transaction(self, tx_id: int, data: dict[str, Any]) -> bool:
+        fields = []
+        values: list = []
+        allowed = {"tx_type", "quantity", "price", "total", "fees", "notes", "tx_date"}
+        for k, v in data.items():
+            if k in allowed:
+                fields.append(f"{k} = ?")
+                values.append(v)
+        if not fields:
+            return False
+        values.append(tx_id)
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(f"UPDATE fin_transactions SET {', '.join(fields)} WHERE id = ?"),
+                values,
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def delete_fin_transaction(self, tx_id: int) -> bool:
         with get_connection(self.database_target) as conn:
             conn.execute(
@@ -2103,6 +2122,25 @@ class Repository:
             )
             conn.commit()
             return True
+
+    def update_fin_watchlist(self, wl_id: int, data: dict[str, Any]) -> bool:
+        fields = []
+        values: list = []
+        allowed = {"symbol", "name", "asset_type", "target_price", "alert_above", "notes"}
+        for k, v in data.items():
+            if k in allowed:
+                fields.append(f"{k} = ?")
+                values.append(v)
+        if not fields:
+            return False
+        values.append(wl_id)
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(f"UPDATE fin_watchlist SET {', '.join(fields)} WHERE id = ?"),
+                values,
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     # ── Financial Goals ─────────────────────────────────────
 

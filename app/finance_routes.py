@@ -298,6 +298,45 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         cache.delete("finance:summary")
         return jsonify({"ok": True})
 
+    @app.put("/api/finance/transactions/<int:tx_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_update_transaction(tx_id: int):
+        body = request.get_json(silent=True)
+        if not body:
+            return jsonify({"error": "JSON inválido"}), 400
+        tx = repo.get_fin_transaction(tx_id)
+        if not tx:
+            return jsonify({"error": "Transação não encontrada"}), 404
+        data: dict = {}
+        if "tx_type" in body:
+            tx_type = str(body["tx_type"]).strip().lower()
+            if tx_type not in ("buy", "sell"):
+                return jsonify({"error": "tx_type: buy ou sell"}), 400
+            data["tx_type"] = tx_type
+        try:
+            if "quantity" in body:
+                data["quantity"] = float(body["quantity"])
+            if "price" in body:
+                data["price"] = float(body["price"])
+            if "fees" in body:
+                data["fees"] = float(body["fees"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Valores numéricos inválidos"}), 400
+        if "notes" in body:
+            data["notes"] = sanitize_text(str(body["notes"]), 500)
+        if "tx_date" in body:
+            data["tx_date"] = str(body["tx_date"])
+        # Recompute total if qty or price changed
+        qty = data.get("quantity", tx.get("quantity", 0))
+        price = data.get("price", tx.get("price", 0))
+        fees = data.get("fees", tx.get("fees", 0))
+        data["total"] = qty * price + fees
+        repo.update_fin_transaction(tx_id, data)
+        _recalc_portfolio(repo, tx["asset_id"])
+        cache.delete("finance:summary")
+        return jsonify({"ok": True})
+
     # ── Watchlist ───────────────────────────────────────────
 
     @app.get("/api/finance/watchlist")
@@ -330,6 +369,28 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @require_finance_key
     def finance_delete_watchlist(wl_id: int):
         repo.delete_fin_watchlist(wl_id)
+        return jsonify({"ok": True})
+
+    @app.put("/api/finance/watchlist/<int:wl_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_update_watchlist(wl_id: int):
+        body = request.get_json(silent=True)
+        if not body:
+            return jsonify({"error": "JSON inválido"}), 400
+        data: dict = {}
+        if "name" in body:
+            data["name"] = sanitize_text(str(body["name"]), 100)
+        if "asset_type" in body:
+            data["asset_type"] = sanitize_text(str(body["asset_type"]), 20)
+        if "target_price" in body:
+            data["target_price"] = float(body["target_price"]) if body["target_price"] else None
+        if "alert_above" in body:
+            data["alert_above"] = bool(body["alert_above"])
+        if "notes" in body:
+            data["notes"] = sanitize_text(str(body["notes"]), 500)
+        if not repo.update_fin_watchlist(wl_id, data):
+            return jsonify({"error": "Item não encontrado"}), 404
         return jsonify({"ok": True})
 
     # ── Goals ───────────────────────────────────────────────

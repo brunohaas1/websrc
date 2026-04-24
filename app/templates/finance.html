@@ -30,6 +30,13 @@
           <button id="btnNotifications" class="btn-icon" title="Ativar notificações" aria-label="Ativar notificações">🔔</button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema">☀️</button>
           <button id="finRefreshBtn" class="btn-icon" title="Atualizar dados" aria-label="Atualizar dados">⟳</button>
+          <select id="autoRefreshSelect" class="fin-inline-select" title="Auto-atualizar" aria-label="Intervalo de atualização automática">
+            <option value="0">Manual</option>
+            <option value="60">1 min</option>
+            <option value="300" selected>5 min</option>
+            <option value="600">10 min</option>
+            <option value="1800">30 min</option>
+          </select>
         </div>
       </div>
     </header>
@@ -72,7 +79,11 @@
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>
         <div id="finCurrencyContent" class="fin-card-body">
-          <div class="skeleton" style="height:80px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+          </div>
         </div>
       </section>
 
@@ -80,7 +91,11 @@
       <section class="fin-card" id="finIndicesCard">
         <h2>📊 Índices de Mercado</h2>
         <div id="finIndicesContent" class="fin-card-body">
-          <div class="skeleton" style="height:80px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+            <div class="skeleton fin-skel-row fin-skel-sm"></div>
+          </div>
         </div>
       </section>
 
@@ -108,7 +123,13 @@
           <button id="btnImportPortfolio" class="btn-text" title="Importar Excel/CSV">📥 Importar</button>
         </h2>
         <div id="finPortfolioContent" class="fin-card-body">
-          <div class="skeleton" style="height:120px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-header"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+          </div>
         </div>
       </section>
 
@@ -119,7 +140,12 @@
           <button id="btnAddTransaction" class="btn-text" title="Nova transação">➕ Nova</button>
         </h2>
         <div id="finTransactionsContent" class="fin-card-body">
-          <div class="skeleton" style="height:100px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-header"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+          </div>
         </div>
       </section>
 
@@ -130,7 +156,11 @@
           <button id="btnAddWatchlist" class="btn-text" title="Adicionar à watchlist">➕ Adicionar</button>
         </h2>
         <div id="finWatchlistContent" class="fin-card-body">
-          <div class="skeleton" style="height:100px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+            <div class="skeleton fin-skel-row"></div>
+          </div>
         </div>
       </section>
 
@@ -141,7 +171,12 @@
           <button id="btnAddGoal" class="btn-text" title="Nova meta">➕ Nova</button>
         </h2>
         <div id="finGoalsContent" class="fin-card-body">
-          <div class="skeleton" style="height:100px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+            <div class="skeleton fin-skel-progress"></div>
+            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+            <div class="skeleton fin-skel-progress"></div>
+          </div>
         </div>
       </section>
 
@@ -160,7 +195,14 @@
         </h2>
         <div id="finDividendSummary" class="fin-dividend-summary"></div>
         <div id="finDividendsContent" class="fin-card-body">
-          <div class="skeleton" style="height:100px"></div>
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+          </div>
+        </div>
+        <div class="fin-dividends-chart-wrap">
+          <canvas id="dividendsChart" height="180" aria-label="Gráfico de dividendos por mês" role="img"></canvas>
         </div>
       </section>
 
