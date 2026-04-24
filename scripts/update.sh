@@ -1,35 +1,44 @@
 #!/usr/bin/env bash
+# update.sh — pull, rebuild and restart app services on Docker Compose
+# Usage: ./scripts/update.sh [--no-build] [--skip-pull]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "Pulling latest code..."
-git pull
+SKIP_PULL=0
+SKIP_BUILD=0
+for arg in "$@"; do
+  case $arg in
+    --skip-pull)  SKIP_PULL=1 ;;
+    --no-build)   SKIP_BUILD=1 ;;
+    *) echo "Unknown flag: $arg"; exit 1 ;;
+  esac
+done
 
-if [ -f ".venv/bin/activate" ]; then
-  . .venv/bin/activate
+# App-level services (rebuilt from source)
+APP_SERVICES="api worker scheduler"
+
+# 1. Pull latest code
+if [ "$SKIP_PULL" -eq 0 ]; then
+  echo "==> Pulling latest code from git..."
+  git pull
 fi
 
-if [ -f requirements.txt ]; then
-  pip install -r requirements.txt || true
+# 2. Build images for app services
+if [ "$SKIP_BUILD" -eq 0 ]; then
+  echo "==> Building Docker images for: $APP_SERVICES"
+  docker compose build $APP_SERVICES
 fi
 
-echo "Running tests..."
-pytest -q
+# 3. Restart only app services (postgres, redis, caddy stay up)
+echo "==> Restarting app services..."
+docker compose up -d --no-deps $APP_SERVICES
 
-PID_FILE="run.pid"
-if [ -f "$PID_FILE" ]; then
-  PID=$(cat "$PID_FILE")
-  if kill -0 "$PID" 2>/dev/null; then
-    echo "Stopping process $PID"
-    kill -TERM "$PID"
-    sleep 1
-  fi
-  rm -f "$PID_FILE"
-fi
+# 4. Show running containers
+echo ""
+echo "==> Current service status:"
+docker compose ps
 
-echo "Starting app in background..."
-nohup .venv/bin/python run.py >/dev/null 2>&1 &
-echo $! > "$PID_FILE"
-echo "Started with PID $(cat $PID_FILE)"
+echo ""
+echo "Update complete."
