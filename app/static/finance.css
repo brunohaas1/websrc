@@ -193,6 +193,35 @@
   background: rgba(239, 68, 68, 0.12);
 }
 
+.fin-market-health {
+  margin-left: auto;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.fin-market-health--ok {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+.fin-market-health--stale {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.fin-market-health--expired {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.12);
+  border-color: rgba(249, 115, 22, 0.28);
+}
+
 /* ── Portfolio Table ──────────────────────────────────── */
 .fin-table-wrap {
   overflow-x: auto;
@@ -803,9 +832,22 @@ body.light .fin-ai-chat input {
   outline-offset: 2px;
 }
 
+.topbar-tools .btn-icon:focus-visible,
+.topbar-tools .fin-inline-select:focus-visible,
+.skip-link:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.fin-card.fin-quick-focus {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.9), 0 8px 28px rgba(99, 102, 241, 0.25);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fin-card,
   .fin-card:hover,
+  .fin-card.fin-quick-focus,
   .fin-toast,
   .fin-modal,
   .fin-form-submit,

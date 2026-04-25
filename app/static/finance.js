@@ -25,6 +25,35 @@ const FIN = {
   _txFilter: { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" },
   _txSelected: {},
   performanceMetrics: null,
+  _rebalanceLoaded: false,
+  _secondaryCache: { ts: 0, payload: null },
+  _marketStaleNotified: false,
+  _perf: { seq: 0, lastRunId: 0, runs: {}, last: null, history: [] },
+  flags: {},
+};
+
+const SECONDARY_CACHE_TTL_MS = 25000;
+const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
+const MARKET_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FIN_FLAGS_STORAGE_KEY = "fin_feature_flags";
+const FIN_FLAGS_DEFAULT = {
+  a11yEnhancements: true,
+  keyboardShortcuts: true,
+  sectionQuickNav: true,
+  featureFlagsUI: true,
+  perfTelemetry: true,
+  lazyRebalanceLoad: true,
+  secondaryPanelCache: true,
+};
+
+const FIN_FLAG_LABELS = {
+  a11yEnhancements: "Melhorias de acessibilidade",
+  keyboardShortcuts: "Atalhos globais de teclado",
+  sectionQuickNav: "Navegação por seções (Alt+1..9)",
+  featureFlagsUI: "Painel de feature flags",
+  perfTelemetry: "Métricas de performance no carregamento",
+  lazyRebalanceLoad: "Lazy load de rebalanceamento/projeção",
+  secondaryPanelCache: "Cache dos painéis secundários no auto-refresh",
 };
 
 const byId = (id) => document.getElementById(id);
@@ -109,6 +138,43 @@ function badgeClass(type) {
   return map[type] || "fin-badge-stock";
 }
 
+function _readFinFlagsFromMeta() {
+  const meta = document.querySelector('meta[name="finance-flags"]');
+  const raw = meta ? String(meta.getAttribute("content") || "").trim() : "";
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function _readFinFlagsFromStorage() {
+  try {
+    const raw = localStorage.getItem(FIN_FLAGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveFinanceFlags() {
+  const metaFlags = _readFinFlagsFromMeta();
+  const storedFlags = _readFinFlagsFromStorage();
+  const merged = { ...FIN_FLAGS_DEFAULT, ...metaFlags, ...storedFlags };
+  return Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, Boolean(v)]));
+}
+
+function isFinFlagOn(flagName) {
+  if (!flagName) return false;
+  if (!FIN.flags || typeof FIN.flags !== "object") return Boolean(FIN_FLAGS_DEFAULT[flagName]);
+  if (Object.prototype.hasOwnProperty.call(FIN.flags, flagName)) return Boolean(FIN.flags[flagName]);
+  return Boolean(FIN_FLAGS_DEFAULT[flagName]);
+}
+
 // ── Theme Toggle ─────────────────────────────────────────
 
 function initTheme() {
@@ -129,6 +195,7 @@ function initTheme() {
 // ── Keyboard Shortcuts ───────────────────────────────────
 
 function initFinanceKeyboardShortcuts() {
+  if (!isFinFlagOn("keyboardShortcuts")) return;
   document.addEventListener("keydown", (e) => {
     // Ignore when typing in an input/textarea/select or modal is open
     const tag = document.activeElement && document.activeElement.tagName;
@@ -146,43 +213,154 @@ function initFinanceKeyboardShortcuts() {
   });
 }
 
+function initSectionQuickNav() {
+  if (!isFinFlagOn("sectionQuickNav")) return;
+  const sectionMap = {
+    "1": "finPortfolioCard",
+    "2": "finTransactionsCard",
+    "3": "finDividendsCard",
+    "4": "finHistoryCard",
+    "5": "finRebalanceCard",
+    "6": "finPerformanceCard",
+    "7": "finWatchlistCard",
+    "8": "finGoalsCard",
+    "9": "finAICard",
+  };
+
+  document.addEventListener("keydown", (e) => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const targetId = sectionMap[e.key];
+    if (!targetId) return;
+
+    const target = byId(targetId);
+    if (!target) return;
+    e.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+    target.classList.add("fin-quick-focus");
+    setTimeout(() => target.classList.remove("fin-quick-focus"), 1200);
+  });
+}
+
+function initA11yEnhancements() {
+  if (!isFinFlagOn("a11yEnhancements")) return;
+
+  document.querySelectorAll(".fin-card[id]").forEach((card) => {
+    if (!card.hasAttribute("tabindex")) card.setAttribute("tabindex", "-1");
+    const title = card.querySelector("h2");
+    if (title && !card.getAttribute("aria-label")) {
+      card.setAttribute("aria-label", title.textContent.trim().replace(/\s+/g, " "));
+    }
+  });
+
+  const updated = byId("finLastUpdated");
+  if (updated) {
+    updated.setAttribute("role", "status");
+    updated.setAttribute("aria-live", "polite");
+    updated.setAttribute("aria-atomic", "true");
+  }
+}
+
 function showKeyboardShortcutsHelp() {
   openFinModal("Atalhos de Teclado", `
     <div class="fin-shortcuts-list">
       <div class="fin-shortcut-row"><kbd>Ctrl+R</kbd><span>Atualizar dados</span></div>
       <div class="fin-shortcut-row"><kbd>Ctrl+I</kbd><span>Importar Excel/CSV</span></div>
       <div class="fin-shortcut-row"><kbd>Ctrl+E</kbd><span>Exportar dados</span></div>
+      <div class="fin-shortcut-row"><kbd>Alt+1..9</kbd><span>Navegar para cards principais</span></div>
       <div class="fin-shortcut-row"><kbd>?</kbd><span>Mostrar atalhos</span></div>
       <div class="fin-shortcut-row"><kbd>Esc</kbd><span>Fechar modal</span></div>
     </div>
   `);
 }
 
+function openFeatureFlagsModal() {
+  const rows = Object.keys(FIN_FLAGS_DEFAULT).map((key) => `
+    <label class="fin-shortcut-row" style="justify-content:space-between;gap:14px;align-items:center;">
+      <span>${escapeHtml(FIN_FLAG_LABELS[key] || key)}</span>
+      <input type="checkbox" class="fin-flag-check" data-flag="${key}" ${isFinFlagOn(key) ? "checked" : ""} />
+    </label>
+  `).join("");
+
+  openFinModal("Feature Flags", `
+    <form id="finFeatureFlagsForm">
+      <p class="fin-empty" style="text-align:left;margin-bottom:10px;">Controle de recursos por ambiente. Alterações são salvas no navegador atual.</p>
+      <div class="fin-shortcuts-list">${rows}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button type="button" id="finFlagsReset" class="btn-text">Restaurar padrão</button>
+        <button type="submit" class="fin-form-submit">Salvar e aplicar</button>
+      </div>
+    </form>
+  `);
+
+  const form = byId("finFeatureFlagsForm");
+  const resetBtn = byId("finFlagsReset");
+
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      localStorage.removeItem(FIN_FLAGS_STORAGE_KEY);
+      closeFinModal();
+      showToast("Feature flags restauradas para o padrão.", "success");
+      window.location.reload();
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const nextFlags = { ...FIN_FLAGS_DEFAULT };
+      form.querySelectorAll(".fin-flag-check[data-flag]").forEach((el) => {
+        nextFlags[el.dataset.flag] = el.checked;
+      });
+      localStorage.setItem(FIN_FLAGS_STORAGE_KEY, JSON.stringify(nextFlags));
+      closeFinModal();
+      showToast("Feature flags atualizadas. Recarregando...", "info");
+      window.location.reload();
+    });
+  }
+}
+
 // ══════════════════════════════════════════════════════════
 // Data Loading
 // ══════════════════════════════════════════════════════════
 
-async function loadAll() {
+async function loadAll(options = {}) {
+  const useSecondaryCache = options.useSecondaryCache === true;
+  const perfEnabled = isFinFlagOn("perfTelemetry");
+  const perfRunId = perfEnabled ? ++FIN._perf.seq : 0;
+  if (perfEnabled) {
+    FIN._perf.lastRunId = perfRunId;
+    FIN._perf.runs[perfRunId] = {
+    runId: perfRunId,
+    source: useSecondaryCache ? "auto" : "manual",
+    startedAt: performance.now(),
+    criticalFetchMs: null,
+    criticalRenderMs: null,
+    deferredChartsMs: null,
+    secondaryMs: null,
+    secondaryCacheHit: false,
+  };
+  }
   try {
-    const [summary, transactions, watchlist, goals, market, assets, dividends, allocTargets, metrics, audit] = await Promise.all([
+    const criticalFetchStart = perfEnabled ? performance.now() : 0;
+    const [summary, transactions, watchlist, goals, assets, dividends, allocTargets] = await Promise.all([
       finFetch("/api/finance/summary").then((r) => r.json()),
       finFetch("/api/finance/transactions").then((r) => r.json()),
       finFetch("/api/finance/watchlist").then((r) => r.json()),
       finFetch("/api/finance/goals").then((r) => r.json()),
-      finFetch("/api/finance/market-data").then((r) => r.json()),
       finFetch("/api/finance/assets").then((r) => r.json()),
       finFetch("/api/finance/dividends").then((r) => r.json()),
       finFetch("/api/finance/allocation-targets").then((r) => r.json()),
-      finFetch("/api/finance/metrics/performance").then((r) => r.json()).catch(() => null),
-      finFetch("/api/finance/audit?limit=15").then((r) => r.json()).catch(() => []),
     ]);
+    if (perfEnabled) _setPerfRunPatch(perfRunId, { criticalFetchMs: _ms(performance.now() - criticalFetchStart) });
 
     FIN.summary = summary;
     FIN.portfolio = summary.portfolio || [];
     FIN.transactions = transactions;
     FIN.watchlist = watchlist;
     FIN.goals = goals;
-    FIN.marketData = market;
     FIN.assets = (assets || []).map((a) => ({
       id: a.id,
       symbol: a.symbol,
@@ -191,23 +369,19 @@ async function loadAll() {
     }));
     FIN.dividends = dividends || [];
     FIN.allocationTargets = allocTargets || [];
-    FIN.performanceMetrics = metrics && !metrics.error ? metrics : null;
 
+    const criticalRenderStart = perfEnabled ? performance.now() : 0;
     renderSummary(summary);
     renderCurrency(summary.currency_rates || []);
-    renderIndices(market.indices || {});
     renderPortfolio(FIN.portfolio);
     renderTransactions(transactions);
     renderWatchlist(watchlist);
     renderGoals(goals);
-    renderAllocationChart(summary);
-    renderPnLChart(FIN.portfolio);
-    renderPerformanceChart(FIN.portfolio);
-    renderPerformanceMetrics(FIN.performanceMetrics);
-    renderAuditTrail(Array.isArray(audit) ? audit : []);
     renderDividends(FIN.dividends);
-    renderRebalance();
-    renderProjection();
+    if (FIN._rebalanceLoaded) {
+      renderRebalance();
+      renderProjection();
+    }
     populateHistorySelect();
     applyHistoryPrefs();
     loadHistoryFromControls();
@@ -215,10 +389,358 @@ async function loadAll() {
     checkWatchlistAlerts();
     checkDividendAlerts();
     checkGoalsMilestones(goals);
+    if (perfEnabled) {
+      _setPerfRunPatch(perfRunId, { criticalRenderMs: _ms(performance.now() - criticalRenderStart) });
+      _commitPerf(perfRunId);
+    }
     updateLastUpdated();
+
+    // Defer chart creation to keep first paint responsive.
+    _scheduleDeferred(() => {
+      const deferredChartsStart = perfEnabled ? performance.now() : 0;
+      renderAllocationChart(summary);
+      renderPnLChart(FIN.portfolio);
+      renderPerformanceChart(FIN.portfolio);
+      if (perfEnabled) {
+        _setPerfRunPatch(perfRunId, { deferredChartsMs: _ms(performance.now() - deferredChartsStart) });
+        _commitPerf(perfRunId);
+      }
+    });
+
+    // Fetch non-critical widgets in background.
+    _loadSecondaryPanels({ useCache: useSecondaryCache }).then((meta) => {
+      if (perfEnabled) {
+        _setPerfRunPatch(perfRunId, {
+          secondaryMs: meta?.durationMs ?? null,
+          secondaryCacheHit: meta?.cacheHit === true,
+        });
+        _commitPerf(perfRunId);
+      }
+      updateLastUpdated();
+    });
   } catch (err) {
     console.error("Finance load error:", err);
+    if (perfEnabled) {
+      _setPerfRunPatch(perfRunId, { error: true });
+      _commitPerf(perfRunId);
+    }
   }
+}
+
+function _ms(v) {
+  return Number(v.toFixed(1));
+}
+
+function _setPerfRunPatch(runId, patch) {
+  const run = FIN._perf.runs[runId];
+  if (!run) return;
+  Object.assign(run, patch || {});
+}
+
+function _commitPerf(runId) {
+  const run = FIN._perf.runs[runId];
+  if (!run) return;
+  if (runId !== FIN._perf.lastRunId) {
+    delete FIN._perf.runs[runId];
+    return;
+  }
+
+  const committed = {
+    runId,
+    source: run.source,
+    totalMs: _ms(performance.now() - run.startedAt),
+    criticalFetchMs: run.criticalFetchMs,
+    criticalRenderMs: run.criticalRenderMs,
+    deferredChartsMs: run.deferredChartsMs,
+    secondaryMs: run.secondaryMs,
+    secondaryCacheHit: !!run.secondaryCacheHit,
+    error: !!run.error,
+    at: new Date().toISOString(),
+  };
+  FIN._perf.last = committed;
+  FIN._perf.history.push(committed);
+  if (FIN._perf.history.length > 30) FIN._perf.history.splice(0, FIN._perf.history.length - 30);
+
+  // Keep an observable trace for before/after comparison in DevTools.
+  console.info("[finance-perf]", committed);
+}
+
+function _scheduleDeferred(fn) {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(fn, { timeout: 1200 });
+    return;
+  }
+  setTimeout(fn, 0);
+}
+
+function _readMarketSnapshot() {
+  try {
+    const raw = localStorage.getItem(MARKET_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      market: parsed.market || {},
+      ts: Number(parsed.ts || 0) || 0,
+      ageMs: Math.max(0, Date.now() - (Number(parsed.ts || 0) || 0)),
+      isExpired: (Date.now() - (Number(parsed.ts || 0) || 0)) > MARKET_SNAPSHOT_MAX_AGE_MS,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function _saveMarketSnapshot(market) {
+  if (!market || typeof market !== "object") return;
+  const hasIndices = Object.keys(market.indices || {}).length > 0;
+  if (!hasIndices) return;
+  try {
+    localStorage.setItem(MARKET_SNAPSHOT_KEY, JSON.stringify({ market, ts: Date.now() }));
+  } catch {
+    // ignore storage issues
+  }
+}
+
+function renderMarketDataHealth(meta = {}) {
+  const card = byId("finIndicesCard");
+  if (!card) return;
+  const title = card.querySelector("h2");
+  if (!title) return;
+  let chip = byId("finMarketDataHealth");
+  if (!chip) {
+    chip = document.createElement("span");
+    chip.id = "finMarketDataHealth";
+    chip.className = "fin-market-health fin-market-health--ok";
+    title.appendChild(chip);
+  }
+
+  const stale = !!meta.stale;
+  if (!stale) {
+    chip.className = "fin-market-health fin-market-health--ok";
+    chip.textContent = "ao vivo";
+    chip.title = "Dados de mercado em tempo real";
+    FIN._marketStaleNotified = false;
+    return;
+  }
+
+  const expired = !!meta.snapshotExpired;
+  chip.className = `fin-market-health ${expired ? "fin-market-health--expired" : "fin-market-health--stale"}`;
+  chip.textContent = expired ? "snapshot antigo" : "dados defasados";
+  chip.title = meta.snapshotAt
+    ? `Usando snapshot local de ${new Date(meta.snapshotAt).toLocaleString("pt-BR")}`
+    : "Sem snapshot local disponível";
+
+  if (meta.snapshotAt && expired) {
+    const ageHours = Math.floor((Number(meta.snapshotAgeMs || 0) || 0) / 3600000);
+    chip.title += ` (idade aproximada: ${ageHours}h)`;
+  }
+
+  if (meta.snapshotAt && !FIN._marketStaleNotified) {
+    FIN._marketStaleNotified = true;
+    showToast(
+      expired
+        ? "Mercado indisponível. Snapshot antigo (>24h), valide os dados quando o feed voltar."
+        : "Mercado indisponível no momento. Exibindo último snapshot salvo.",
+      expired ? "error" : "info",
+    );
+  }
+}
+
+async function refreshPortfolioPanels() {
+  const [summary, transactions, assets, allocTargets] = await Promise.all([
+    finFetch("/api/finance/summary").then((r) => r.json()),
+    finFetch("/api/finance/transactions").then((r) => r.json()),
+    finFetch("/api/finance/assets").then((r) => r.json()),
+    finFetch("/api/finance/allocation-targets").then((r) => r.json()),
+  ]);
+
+  FIN.summary = summary;
+  FIN.portfolio = summary.portfolio || [];
+  FIN.transactions = transactions || [];
+  FIN.assets = (assets || []).map((a) => ({
+    id: a.id,
+    symbol: a.symbol,
+    name: a.name || a.symbol,
+    asset_type: a.asset_type,
+  }));
+  FIN.allocationTargets = allocTargets || [];
+
+  renderSummary(summary);
+  renderCurrency(summary.currency_rates || []);
+  renderPortfolio(FIN.portfolio);
+  renderTransactions(FIN.transactions);
+  populateHistorySelect();
+  applyHistoryPrefs();
+  await loadHistoryFromControls();
+
+  _scheduleDeferred(() => {
+    renderAllocationChart(summary);
+    renderPnLChart(FIN.portfolio);
+    renderPerformanceChart(FIN.portfolio);
+  });
+
+  if (FIN._rebalanceLoaded) {
+    renderRebalance();
+    renderProjection();
+  }
+  updateLastUpdated();
+}
+
+async function refreshWatchlistPanel() {
+  FIN.watchlist = await finFetch("/api/finance/watchlist").then((r) => r.json());
+  renderWatchlist(FIN.watchlist);
+  checkWatchlistAlerts();
+  updateLastUpdated();
+}
+
+async function refreshGoalsPanel() {
+  FIN.goals = await finFetch("/api/finance/goals").then((r) => r.json());
+  renderGoals(FIN.goals);
+  checkGoalsMilestones(FIN.goals);
+  updateLastUpdated();
+}
+
+async function refreshDividendsPanels() {
+  const [summary, dividends] = await Promise.all([
+    finFetch("/api/finance/summary").then((r) => r.json()),
+    finFetch("/api/finance/dividends").then((r) => r.json()),
+  ]);
+  FIN.summary = summary;
+  FIN.dividends = dividends || [];
+  renderSummary(summary);
+  renderDividends(FIN.dividends);
+  checkDividendAlerts();
+  updateLastUpdated();
+}
+
+async function refreshImportPanels() {
+  const [summary, transactions, assets, allocTargets, dividends] = await Promise.all([
+    finFetch("/api/finance/summary").then((r) => r.json()),
+    finFetch("/api/finance/transactions").then((r) => r.json()),
+    finFetch("/api/finance/assets").then((r) => r.json()),
+    finFetch("/api/finance/allocation-targets").then((r) => r.json()),
+    finFetch("/api/finance/dividends").then((r) => r.json()),
+  ]);
+
+  FIN.summary = summary;
+  FIN.portfolio = summary.portfolio || [];
+  FIN.transactions = transactions || [];
+  FIN.assets = (assets || []).map((a) => ({
+    id: a.id,
+    symbol: a.symbol,
+    name: a.name || a.symbol,
+    asset_type: a.asset_type,
+  }));
+  FIN.allocationTargets = allocTargets || [];
+  FIN.dividends = dividends || [];
+
+  renderSummary(summary);
+  renderCurrency(summary.currency_rates || []);
+  renderPortfolio(FIN.portfolio);
+  renderTransactions(FIN.transactions);
+  renderDividends(FIN.dividends);
+  checkDividendAlerts();
+
+  populateHistorySelect();
+  applyHistoryPrefs();
+  await loadHistoryFromControls();
+
+  _scheduleDeferred(() => {
+    renderAllocationChart(summary);
+    renderPnLChart(FIN.portfolio);
+    renderPerformanceChart(FIN.portfolio);
+  });
+
+  if (FIN._rebalanceLoaded) {
+    renderRebalance();
+    renderProjection();
+  }
+  updateLastUpdated();
+}
+
+async function _loadSecondaryPanels(options = {}) {
+  const started = performance.now();
+  const useCache = options.useCache === true && isFinFlagOn("secondaryPanelCache");
+  const now = Date.now();
+  if (
+    useCache
+    && FIN._secondaryCache
+    && FIN._secondaryCache.payload
+    && (now - Number(FIN._secondaryCache.ts || 0) <= SECONDARY_CACHE_TTL_MS)
+  ) {
+    const cached = FIN._secondaryCache.payload;
+    FIN.marketData = cached.market || {};
+    FIN.performanceMetrics = cached.metrics && !cached.metrics.error ? cached.metrics : null;
+    renderIndices((FIN.marketData && FIN.marketData.indices) || {});
+    renderMarketDataHealth({
+      stale: !!cached.marketStale,
+      snapshotAt: cached.marketSnapshotAt || null,
+      snapshotAgeMs: cached.marketSnapshotAgeMs || 0,
+      snapshotExpired: !!cached.marketSnapshotExpired,
+    });
+    renderPerformanceMetrics(FIN.performanceMetrics);
+    renderAuditTrail(Array.isArray(cached.audit) ? cached.audit : []);
+    return { cacheHit: true, durationMs: _ms(performance.now() - started) };
+  }
+
+  const [marketMeta, metrics, audit] = await Promise.all([
+    (async () => {
+      try {
+        const resp = await finFetch("/api/finance/market-data");
+        if (!resp.ok) throw new Error(`market status ${resp.status}`);
+        const live = await resp.json();
+        _saveMarketSnapshot(live);
+        return {
+          market: live || {},
+          stale: false,
+          snapshotAt: null,
+          snapshotAgeMs: 0,
+          snapshotExpired: false,
+        };
+      } catch {
+        const snap = _readMarketSnapshot();
+        if (snap && snap.market) {
+          return {
+            market: snap.market,
+            stale: true,
+            snapshotAt: snap.ts || null,
+            snapshotAgeMs: snap.ageMs || 0,
+            snapshotExpired: !!snap.isExpired,
+          };
+        }
+        return {
+          market: {},
+          stale: true,
+          snapshotAt: null,
+          snapshotAgeMs: 0,
+          snapshotExpired: true,
+        };
+      }
+    })(),
+    finFetch("/api/finance/metrics/performance").then((r) => r.json()).catch(() => null),
+    finFetch("/api/finance/audit?limit=15").then((r) => r.json()).catch(() => []),
+  ]);
+
+  FIN.marketData = marketMeta.market || {};
+  FIN.performanceMetrics = metrics && !metrics.error ? metrics : null;
+  FIN._secondaryCache = {
+    ts: Date.now(),
+    payload: {
+      market: FIN.marketData,
+      marketStale: !!marketMeta.stale,
+      marketSnapshotAt: marketMeta.snapshotAt || null,
+      marketSnapshotAgeMs: marketMeta.snapshotAgeMs || 0,
+      marketSnapshotExpired: !!marketMeta.snapshotExpired,
+      metrics,
+      audit,
+    },
+  };
+
+  renderIndices((FIN.marketData && FIN.marketData.indices) || {});
+  renderMarketDataHealth(marketMeta);
+  renderPerformanceMetrics(FIN.performanceMetrics);
+  renderAuditTrail(Array.isArray(audit) ? audit : []);
+  return { cacheHit: false, durationMs: _ms(performance.now() - started) };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -313,8 +835,21 @@ function updateLastUpdated() {
   const el = byId("finLastUpdated");
   if (!el) return;
   const now = new Date();
-  el.textContent = `Atualizado: ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
-  el.title = now.toLocaleString("pt-BR");
+  const perf = FIN._perf.last;
+  const perfLabel = perf ? ` • ${perf.totalMs.toFixed(0)}ms` : "";
+  el.textContent = `Atualizado: ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}${perfLabel}`;
+  if (!perf) {
+    el.title = now.toLocaleString("pt-BR");
+    return;
+  }
+  const sourceLabel = perf.source === "auto" ? "auto-refresh" : "manual";
+  const cacheLabel = perf.secondaryCacheHit ? "cache" : "rede";
+  el.title = `${now.toLocaleString("pt-BR")}\n` +
+    `Total: ${perf.totalMs}ms (${sourceLabel})\n` +
+    `Fetch crítico: ${perf.criticalFetchMs ?? "—"}ms\n` +
+    `Render crítico: ${perf.criticalRenderMs ?? "—"}ms\n` +
+    `Gráficos deferidos: ${perf.deferredChartsMs ?? "—"}ms\n` +
+    `Secundário: ${perf.secondaryMs ?? "—"}ms (${cacheLabel})`;
 }
 
 function renderCurrency(rates) {
@@ -389,6 +924,13 @@ function renderPortfolio(portfolio) {
     });
   }
 
+  const dividendTotalsBySymbol = (FIN.dividends || []).reduce((acc, d) => {
+    const key = d.symbol || "";
+    if (!key) return acc;
+    acc[key] = (acc[key] || 0) + (d.total_amount || 0);
+    return acc;
+  }, {});
+
   const totalValue = portfolio.reduce((sum, p) => sum + (p.current_price || 0) * p.quantity, 0);
 
   const sortIcon = (col) => {
@@ -412,8 +954,7 @@ function renderPortfolio(portfolio) {
       const weightPct = totalValue > 0 ? (currentVal / totalValue * 100) : 0;
 
       // Dividend yield for this asset
-      const assetDivs = (FIN.dividends || []).filter((d) => d.symbol === p.symbol);
-      const totalDiv = assetDivs.reduce((s, d) => s + (d.total_amount || 0), 0);
+      const totalDiv = dividendTotalsBySymbol[p.symbol] || 0;
       const dy = p.total_invested > 0 ? (totalDiv / p.total_invested * 100) : 0;
       const dyHtml = totalDiv > 0
         ? `<span class="fin-dy" title="Dividend Yield: dividendos / custo">${dy.toFixed(1)}%</span>`
@@ -1379,7 +1920,7 @@ async function submitImport() {
         msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
       }
       status.textContent = msg;
-      loadAll();
+      await refreshImportPanels();
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar"}`;
@@ -1425,7 +1966,7 @@ async function submitNotaImport() {
         msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
       }
       status.textContent = msg;
-      loadAll();
+      await refreshImportPanels();
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar nota"}`;
@@ -1476,7 +2017,7 @@ async function submitB3Import() {
       }
       status.textContent = msg;
       status.style.whiteSpace = "pre-line";
-      loadAll();
+      await refreshImportPanels();
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar"}`;
@@ -1595,7 +2136,7 @@ async function submitAddAsset(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshPortfolioPanels();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao adicionar ativo");
@@ -1609,7 +2150,7 @@ async function deleteAsset(assetId) {
   if (!confirm("Remover este ativo e todas as transações associadas?")) return;
   try {
     await finFetch(`/api/finance/assets/${assetId}`, { method: "DELETE" });
-    loadAll();
+    await refreshPortfolioPanels();
   } catch {
     showToast("Erro ao remover ativo");
   }
@@ -1778,7 +2319,7 @@ async function submitAddTransaction(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshPortfolioPanels();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao registrar transação");
@@ -1792,7 +2333,7 @@ async function deleteTransaction(txId) {
   if (!confirm("Excluir esta transação?")) return;
   try {
     await finFetch(`/api/finance/transactions/${txId}`, { method: "DELETE" });
-    loadAll();
+    await refreshPortfolioPanels();
   } catch {
     showToast("Erro ao excluir transação");
   }
@@ -1867,7 +2408,7 @@ async function submitEditTransaction(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshPortfolioPanels();
       showToast("Transação atualizada!", "success");
     } else {
       const data = await resp.json();
@@ -1961,7 +2502,7 @@ async function submitBatchEditTransactions(e) {
     localStorage.removeItem("fin_tx_selected");
     closeFinModal();
     showToast(`${data.updated || 0} transação(ões) atualizada(s)!`, "success");
-    loadAll();
+    await refreshPortfolioPanels();
   } catch {
     showToast("Erro de rede");
   }
@@ -2026,7 +2567,7 @@ async function submitAddWatchlist(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshWatchlistPanel();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao adicionar à watchlist");
@@ -2040,7 +2581,7 @@ async function deleteWatchlistItem(wlId) {
   if (!confirm("Remover da watchlist?")) return;
   try {
     await finFetch(`/api/finance/watchlist/${wlId}`, { method: "DELETE" });
-    loadAll();
+    await refreshWatchlistPanel();
   } catch {
     showToast("Erro ao remover item");
   }
@@ -2112,7 +2653,7 @@ async function submitEditWatchlist(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshWatchlistPanel();
       showToast("Watchlist atualizada!", "success");
     } else {
       const data = await resp.json();
@@ -2187,7 +2728,7 @@ async function submitAddGoal(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshGoalsPanel();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao criar meta");
@@ -2257,7 +2798,7 @@ async function submitEditGoal(e, goalId) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshGoalsPanel();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao salvar meta");
@@ -2271,7 +2812,7 @@ async function deleteGoal(goalId) {
   if (!confirm("Excluir esta meta?")) return;
   try {
     await finFetch(`/api/finance/goals/${goalId}`, { method: "DELETE" });
-    loadAll();
+    await refreshGoalsPanel();
   } catch {
     showToast("Erro ao excluir meta");
   }
@@ -2721,7 +3262,7 @@ async function submitAddDividend(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      loadAll();
+      await refreshDividendsPanels();
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao registrar dividendo");
@@ -2735,7 +3276,7 @@ async function deleteDividend(divId) {
   if (!confirm("Excluir este dividendo?")) return;
   try {
     await finFetch(`/api/finance/dividends/${divId}`, { method: "DELETE" });
-    loadAll();
+    await refreshDividendsPanels();
   } catch {
     showToast("Erro ao excluir dividendo");
   }
@@ -3798,6 +4339,7 @@ function renderMarkdown(text) {
 // ══════════════════════════════════════════════════════════
 
 document.addEventListener("DOMContentLoaded", () => {
+  FIN.flags = resolveFinanceFlags();
   try {
     FIN._txFilter = {
       ...FIN._txFilter,
@@ -3813,7 +4355,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   initTheme();
+  initA11yEnhancements();
   initFinanceKeyboardShortcuts();
+  initSectionQuickNav();
+  if (isFinFlagOn("lazyRebalanceLoad")) {
+    initRebalanceLazyLoad();
+  } else {
+    FIN._rebalanceLoaded = true;
+  }
   loadAll();
 
   const refreshBtn = byId("finRefreshBtn");
@@ -3841,6 +4390,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnEditAllocation", openAllocationModal);
   bind("btnExportData", openExportModal);
   bind("btnFinanceSettings", openFinanceSettingsModal);
+  bind("btnFeatureFlags", openFeatureFlagsModal);
   bind("btnNotifications", setupNotifications);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);
@@ -3947,6 +4497,25 @@ function _startAutoRefresh(seconds) {
   if (FIN._autoRefreshInterval) clearInterval(FIN._autoRefreshInterval);
   FIN._autoRefreshInterval = null;
   if (seconds > 0) {
-    FIN._autoRefreshInterval = setInterval(loadAll, seconds * 1000);
+    FIN._autoRefreshInterval = setInterval(
+      () => loadAll({ useSecondaryCache: isFinFlagOn("secondaryPanelCache") }),
+      seconds * 1000,
+    );
   }
+}
+
+function initRebalanceLazyLoad() {
+  const card = byId("finRebalanceCard");
+  if (!card || typeof IntersectionObserver !== "function") return;
+
+  const io = new IntersectionObserver((entries) => {
+    const visible = entries.some((entry) => entry.isIntersecting);
+    if (!visible || FIN._rebalanceLoaded) return;
+    FIN._rebalanceLoaded = true;
+    renderRebalance();
+    renderProjection();
+    io.disconnect();
+  }, { rootMargin: "150px 0px" });
+
+  io.observe(card);
 }
