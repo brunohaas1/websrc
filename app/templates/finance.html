@@ -178,6 +178,44 @@
           <canvas id="pnlChart" height="280"></canvas>
         </div>
       </section>
+
+      <!-- ── Evolução dos Proventos ───────────────────── -->
+      <section class="fin-card fin-wide" id="finDividendsCard">
+        <h2>
+          💸 Evolução dos Proventos
+          <button id="btnAddDividend" class="btn-text" title="Registrar provento">➕ Provento</button>
+          <button id="btnBrowseDividends" class="btn-text" title="Ver todos os registros de proventos">📚 Registros</button>
+        </h2>
+        <div id="finDividendSummary" class="fin-dividend-summary"></div>
+        <div class="fin-dividends-analytics">
+          <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--hero">
+            <canvas id="dividendsChart" height="240"></canvas>
+          </div>
+          <div class="fin-mini-chart-stack">
+            <div class="fin-mini-chart-card">
+              <h3>Por Tipo</h3>
+              <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--small">
+                <canvas id="dividendsTypeChart" height="170"></canvas>
+              </div>
+            </div>
+            <div class="fin-mini-chart-card">
+              <h3>Top Ativos Pagadores</h3>
+              <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--small">
+                <canvas id="dividendsAssetChart" height="170"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="finDividendsContent" class="fin-card-body">
+          <div class="fin-skeleton-table">
+            <div class="skeleton fin-skel-header"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+            <div class="skeleton fin-skel-row"></div>
+          </div>
+        </div>
+      </section>
+
       <!-- ── Evolução Patrimonial (Price History) ─────── -->
       <section class="fin-card fin-wide" id="finHistoryCard">
         <h2>📈 Evolução Patrimonial

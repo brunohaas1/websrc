@@ -775,6 +775,52 @@
   font-size: 0.88rem;
 }
 
+/* ── Buttons: larger and clearer visual hierarchy ─────── */
+.btn-text {
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.34);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.82), rgba(51, 65, 85, 0.62));
+  color: #dbeafe;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.btn-text:hover {
+  background: linear-gradient(135deg, rgba(49, 46, 129, 0.36), rgba(30, 41, 59, 0.9));
+  border-color: rgba(129, 140, 248, 0.62);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.fin-card h2 .btn-text {
+  margin-left: 8px;
+}
+
+.fin-page-btn,
+.fin-ai-btn,
+.fin-form-submit,
+.fin-ai-chat button {
+  min-height: 40px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.fin-del-btn {
+  min-width: 34px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.fin-del-btn:hover {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
 /* ── Skeleton ─────────────────────────────────────────── */
 .fin-card .skeleton {
   background: linear-gradient(90deg,
@@ -836,12 +882,16 @@ body.light .fin-ai-chat input {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 36px;
-  padding: 6px 10px;
+  min-height: 44px;
+  padding: 9px 14px;
   border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 700;
   text-decoration: none;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.78), rgba(30, 41, 59, 0.62));
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #e2e8f0;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.35);
 }
 
 .topbar-tools .btn-nav-records,
@@ -857,10 +907,34 @@ body.light .fin-ai-chat input {
   border-color: rgba(103, 232, 249, 0.7);
 }
 
+.topbar-tools .btn-icon:hover {
+  transform: translateY(-1px);
+  border-color: rgba(129, 140, 248, 0.72);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(51, 65, 85, 0.78));
+}
+
+.topbar-tools .fin-inline-select,
+#autoRefreshSelect.fin-inline-select {
+  min-height: 42px;
+  padding: 8px 34px 8px 12px;
+  font-size: 0.82rem;
+  border-radius: 12px;
+  border-color: rgba(148, 163, 184, 0.28);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.72));
+  color: #e2e8f0;
+}
+
 body.light .topbar-tools .btn-nav-records,
 body.light .topbar-tools .btn-refresh {
   background: linear-gradient(135deg, rgba(14, 116, 144, 0.14), rgba(226, 232, 240, 0.9));
   border-color: rgba(14, 116, 144, 0.45);
+  color: #0f172a;
+}
+
+body.light .topbar-tools .fin-inline-select,
+body.light #autoRefreshSelect.fin-inline-select {
+  background: linear-gradient(135deg, rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.92));
+  border-color: rgba(100, 116, 139, 0.34);
   color: #0f172a;
 }
 
@@ -874,6 +948,18 @@ body.light .topbar-tools .btn-refresh {
   .topbar-tools {
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+
+  .topbar-tools .btn-icon {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+
+  .topbar-tools .fin-inline-select,
+  #autoRefreshSelect.fin-inline-select {
+    min-height: 40px;
+    width: 100%;
   }
 
   .fin-summary-bar {
@@ -923,6 +1009,15 @@ body.light .topbar-tools .btn-refresh {
 
   .fin-chat-msg.user { margin-left: 10px; }
   .fin-chat-msg.ai { margin-right: 10px; }
+
+  .fin-dividends-analytics {
+    grid-template-columns: 1fr;
+  }
+
+  .fin-mini-chart-stack {
+    grid-template-rows: auto;
+    grid-template-columns: 1fr;
+  }
 
   .fin-form-group input,
   .fin-form-group select,
@@ -1956,6 +2051,90 @@ body.light .fin-shortcut-row kbd {
 
 .fin-dividends-chart-wrap--small canvas {
   max-height: 170px;
+}
+
+.fin-dividend-summary {
+  margin-bottom: 12px;
+}
+
+.fin-div-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.fin-div-total-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.fin-div-total-item span {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-s, #94a3b8);
+}
+
+.fin-div-total-item strong {
+  font-size: 1rem;
+  color: var(--text, #e2e8f0);
+}
+
+.fin-div-total-item em {
+  font-size: 0.74rem;
+  color: var(--text-s, #94a3b8);
+  font-style: normal;
+}
+
+.fin-div-total-item.fin-div-grand {
+  border-color: rgba(16, 185, 129, 0.38);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(15, 23, 42, 0.66));
+}
+
+.fin-dividends-analytics {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.fin-mini-chart-stack {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+}
+
+.fin-mini-chart-card {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.fin-mini-chart-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  color: var(--text-s, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fin-div-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.fin-div-table-caption {
+  color: var(--text-s, #94a3b8);
+  font-size: 0.82rem;
 }
 
 /* ── Granular skeleton rows ──────────────────────────── */
