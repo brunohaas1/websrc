@@ -231,6 +231,13 @@ class TestTransactions:
         after_pos = [p for p in after if p.get("asset_id") == asset["id"]]
         assert after_pos[0]["quantity"] == pytest.approx(15.0)
 
+    def test_cleanup_duplicates_get_returns_usage_help(self, client):
+        resp = client.get("/api/finance/maintenance/cleanup-duplicates")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["method"] == "POST"
+
     def test_add_transaction_missing_fields(self, client):
         resp = jpost(client, "/api/finance/transactions", {"asset_id": 1})
         assert resp.status_code == 400

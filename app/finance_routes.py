@@ -534,6 +534,15 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         )
         return jsonify({"ok": True, **payload})
 
+    @app.get("/api/finance/maintenance/cleanup-duplicates")
+    def finance_cleanup_duplicate_transactions_help():
+        return jsonify({
+            "ok": True,
+            "message": "Use POST para executar a limpeza de duplicatas.",
+            "method": "POST",
+            "path": "/api/finance/maintenance/cleanup-duplicates",
+        })
+
     # ── Watchlist ───────────────────────────────────────────
 
     @app.get("/api/finance/watchlist")
