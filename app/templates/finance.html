@@ -187,6 +187,20 @@
           <button id="btnBrowseDividends" class="btn-text" title="Ver todos os registros de proventos">≣ Registros</button>
         </h2>
         <div id="finDividendSummary" class="fin-dividend-summary"></div>
+        <div class="fin-div-controls" role="group" aria-label="Controles de legibilidade do gráfico de proventos">
+          <label class="fin-div-control-item" for="dividendsShowValues">
+            <input id="dividendsShowValues" type="checkbox" checked />
+            Mostrar valores nas barras
+          </label>
+          <label class="fin-div-control-item" for="dividendsLabelDensity">
+            Densidade:
+            <select id="dividendsLabelDensity" class="fin-inline-select" title="Densidade dos rótulos">
+              <option value="smart" selected>Inteligente</option>
+              <option value="all">Todos</option>
+              <option value="sparse">Reduzida</option>
+            </select>
+          </label>
+        </div>
         <div class="fin-dividends-analytics">
           <div class="fin-dividends-chart-wrap fin-dividends-chart-wrap--hero">
             <canvas id="dividendsChart" height="240"></canvas>

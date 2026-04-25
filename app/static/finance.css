@@ -4,6 +4,9 @@
 
 /* ── Summary Bar ──────────────────────────────────────── */
 .fin-summary-bar {
+  --fin-control-height: 40px;
+  --fin-control-radius: 12px;
+  --fin-control-font: 0.84rem;
   display: flex;
   gap: 12px;
   padding: 16px 20px 8px;
@@ -2135,6 +2138,35 @@ body.light .fin-shortcut-row kbd {
 .fin-div-table-caption {
   color: var(--text-s, #94a3b8);
   font-size: 0.82rem;
+}
+
+.fin-div-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0 12px;
+}
+
+.fin-div-control-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-s, #94a3b8);
+}
+
+.fin-div-control-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #6366f1;
+}
+
+.fin-div-control-item .fin-inline-select {
+  min-height: var(--fin-control-height);
+  border-radius: var(--fin-control-radius);
+  font-size: var(--fin-control-font);
 }
 
 /* ── Granular skeleton rows ──────────────────────────── */

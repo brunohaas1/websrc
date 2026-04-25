@@ -57,6 +57,8 @@ const FIN_FLAG_LABELS = {
   secondaryPanelCache: "Cache dos painéis secundários no auto-refresh",
 };
 
+const DIVIDENDS_CHART_PREFS_KEY = "fin_dividends_chart_prefs";
+
 const byId = (id) => document.getElementById(id);
 
 // ── Toast notifications (replaces alert()) ────────────────
@@ -3201,7 +3203,10 @@ function renderDividends(divs) {
     </div>
   `;
 
-  renderDividendsChart(divs);
+  const chartPrefs = getDividendsChartPrefs();
+  applyDividendsChartControls(chartPrefs);
+  bindDividendsChartControls();
+  renderDividendsChart(divs, chartPrefs);
   renderDividendsTypeChart(totals, typeLabels);
   renderDividendsAssetChart(assetTotals);
 }
@@ -3215,7 +3220,65 @@ function _destroyDividendCharts() {
   });
 }
 
-function renderDividendsChart(divs) {
+function getDividendsChartPrefs() {
+  try {
+    const raw = localStorage.getItem(DIVIDENDS_CHART_PREFS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const showValues = parsed?.showValues !== false;
+    const density = ["smart", "all", "sparse"].includes(parsed?.density) ? parsed.density : "smart";
+    return { showValues, density };
+  } catch {
+    return { showValues: true, density: "smart" };
+  }
+}
+
+function setDividendsChartPrefs(nextPrefs) {
+  try {
+    localStorage.setItem(DIVIDENDS_CHART_PREFS_KEY, JSON.stringify(nextPrefs));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function applyDividendsChartControls(prefs) {
+  const showValuesInput = byId("dividendsShowValues");
+  const densitySelect = byId("dividendsLabelDensity");
+  if (showValuesInput) showValuesInput.checked = prefs.showValues !== false;
+  if (densitySelect) densitySelect.value = prefs.density || "smart";
+}
+
+function bindDividendsChartControls() {
+  const showValuesInput = byId("dividendsShowValues");
+  const densitySelect = byId("dividendsLabelDensity");
+  if (showValuesInput && !showValuesInput.dataset.bound) {
+    showValuesInput.dataset.bound = "1";
+    showValuesInput.addEventListener("change", () => {
+      const prefs = getDividendsChartPrefs();
+      const next = { ...prefs, showValues: showValuesInput.checked };
+      setDividendsChartPrefs(next);
+      renderDividendsChart(FIN.dividends || [], next);
+    });
+  }
+  if (densitySelect && !densitySelect.dataset.bound) {
+    densitySelect.dataset.bound = "1";
+    densitySelect.addEventListener("change", () => {
+      const prefs = getDividendsChartPrefs();
+      const next = { ...prefs, density: densitySelect.value || "smart" };
+      setDividendsChartPrefs(next);
+      renderDividendsChart(FIN.dividends || [], next);
+    });
+  }
+}
+
+function formatCompactBRL(value) {
+  const num = Number(value || 0);
+  const abs = Math.abs(num);
+  if (abs >= 1000000) return `R$ ${(num / 1000000).toFixed(1)}M`;
+  if (abs >= 1000) return `R$ ${(num / 1000).toFixed(1)}k`;
+  return formatBRL(num);
+}
+
+function renderDividendsChart(divs, prefs = { showValues: true, density: "smart" }) {
   const canvas = byId("dividendsChart");
   if (!canvas || !window.Chart) return;
 
@@ -3230,10 +3293,14 @@ function renderDividendsChart(divs) {
 
   const labels = Object.keys(monthly).sort();
   const data = labels.map((k) => monthly[k]);
+  const maxVisibleLabels = prefs.density === "all" ? Number.POSITIVE_INFINITY : prefs.density === "sparse" ? 6 : 12;
+  const step = maxVisibleLabels === Number.POSITIVE_INFINITY ? 1 : Math.max(1, Math.ceil(labels.length / maxVisibleLabels));
+  const shouldCompactLabels = labels.length > 10;
 
   const barValueLabelsPlugin = {
     id: "barValueLabelsPlugin",
     afterDatasetsDraw(chart) {
+      if (prefs.showValues === false) return;
       const { ctx } = chart;
       const dataset = chart.data.datasets[0];
       const meta = chart.getDatasetMeta(0);
@@ -3246,9 +3313,10 @@ function renderDividendsChart(divs) {
       ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0";
 
       meta.data.forEach((bar, index) => {
+        if (index % step !== 0 && index !== meta.data.length - 1) return;
         const value = dataset.data[index];
         if (!Number.isFinite(Number(value))) return;
-        const label = formatBRL(value);
+        const label = shouldCompactLabels ? formatCompactBRL(value) : formatBRL(value);
         ctx.fillText(label, bar.x, bar.y - 6);
       });
 
@@ -3293,10 +3361,23 @@ function renderDividendsChart(divs) {
         },
       },
       scales: {
+        x: {
+          ticks: {
+            autoSkip: labels.length > 10,
+            maxRotation: 0,
+            callback: (_v, i) => {
+              const raw = labels[i] || "";
+              if (!raw) return raw;
+              const yy = raw.slice(2, 4);
+              const mm = raw.slice(5, 7);
+              return `${mm}/${yy}`;
+            },
+          },
+        },
         y: {
           beginAtZero: true,
           ticks: {
-            callback: (v) => `R$ ${Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`,
+            callback: (v) => formatCompactBRL(v),
           },
         },
       },
