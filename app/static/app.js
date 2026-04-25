@@ -194,7 +194,10 @@ function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("dashboard-theme", theme);
   const btn = byId("themeToggle");
-  if (btn) btn.textContent = theme === "dark" ? "☀️" : "🌙";
+  if (btn) {
+    const glyph = theme === "dark" ? "◐" : "◑";
+    btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${glyph}</span><span>Tema</span>`;
+  }
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = theme === "dark" ? "#050a15" : "#f0f2f5";
 }

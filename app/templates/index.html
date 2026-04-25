@@ -32,11 +32,11 @@
             <option value="en">🇺🇸 EN</option>
           </select>
           <input type="color" id="accentColorPicker" value="#6366f1" title="Cor de destaque" aria-label="Cor de destaque" class="accent-picker" />
-          <button id="themeToggle" class="btn-icon" title="Alternar tema (T)" aria-label="Alternar tema">☀️</button>
-          <button id="notifBellBtn" class="btn-icon notif-bell" title="Notificações" aria-label="Notificações">🔔 <span id="notifBadge" class="notif-badge" style="display:none">0</span></button>
-          <a href="/finance" class="btn-icon" title="Dashboard Financeiro" aria-label="Ir para Dashboard Financeiro">💰</a>
-          <button id="shareDashBtn" class="btn-icon" title="Compartilhar dashboard" aria-label="Compartilhar dashboard">🔗</button>
-          <button id="settingsBtn" class="btn-icon" title="Configurações" aria-label="Configurações">⚙️</button>
+          <button id="themeToggle" class="btn-icon" title="Alternar tema (T)" aria-label="Alternar tema"><span class="btn-glyph" aria-hidden="true">◐</span><span>Tema</span></button>
+          <button id="notifBellBtn" class="btn-icon notif-bell" title="Notificações" aria-label="Notificações"><span class="btn-glyph" aria-hidden="true">◉</span><span>Alertas</span><span id="notifBadge" class="notif-badge" style="display:none">0</span></button>
+          <a href="/finance" class="btn-icon" title="Dashboard Financeiro" aria-label="Ir para Dashboard Financeiro"><span class="btn-glyph" aria-hidden="true">◈</span><span>Finanças</span></a>
+          <button id="shareDashBtn" class="btn-icon" title="Compartilhar dashboard" aria-label="Compartilhar dashboard"><span class="btn-glyph" aria-hidden="true">⤴</span><span>Compartilhar</span></button>
+          <button id="settingsBtn" class="btn-icon" title="Configurações" aria-label="Configurações"><span class="btn-glyph" aria-hidden="true">⚙</span><span>Config</span></button>
         </div>
       </div>
       <div class="topbar-bottom" role="search">
@@ -67,7 +67,7 @@
           <select id="savedFilterSelect" aria-label="Filtros salvos" title="Filtros salvos">
             <option value="">Filtros salvos</option>
           </select>
-          <button id="saveFilterBtn" class="btn-icon" title="Salvar filtro atual">💾</button>
+          <button id="saveFilterBtn" class="btn-icon" title="Salvar filtro atual"><span class="btn-glyph" aria-hidden="true">⤓</span><span>Salvar</span></button>
           <select id="layoutPresetSelect" aria-label="Layout" title="Layout preset">
             <option value="">Layout</option>
             <option value="default">Padrão</option>
@@ -76,7 +76,7 @@
             <option value="minimal">Minimal</option>
           </select>
         </div>
-        <button id="refreshBtn">⟳ Atualizar</button>
+        <button id="refreshBtn">↻ Atualizar</button>
       </div>
     </header>
 

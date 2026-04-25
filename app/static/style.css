@@ -1676,6 +1676,85 @@ select:focus:not(:focus-visible) { outline: none; }
   transition: all var(--duration);
 }
 
+/* ── Topbar button standardization (main page) ─────────── */
+.topbar-tools .btn-icon,
+.topbar-bottom .btn-icon {
+  width: auto;
+  min-width: 112px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.94), rgba(15, 23, 42, 0.82));
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  color: var(--text);
+  box-shadow: 0 10px 24px rgba(2, 8, 23, 0.32);
+}
+
+.topbar-tools .btn-icon:hover,
+.topbar-bottom .btn-icon:hover {
+  transform: translateY(-2px);
+  border-color: rgba(129, 140, 248, 0.78);
+  background: linear-gradient(145deg, rgba(49, 46, 129, 0.52), rgba(30, 41, 59, 0.92));
+}
+
+.topbar-tools .btn-icon:active,
+.topbar-bottom .btn-icon:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.topbar-tools .btn-glyph,
+.topbar-bottom .btn-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  line-height: 1;
+  border-radius: 999px;
+  background: rgba(129, 140, 248, 0.22);
+  border: 1px solid rgba(165, 180, 252, 0.36);
+  flex-shrink: 0;
+}
+
+.topbar-tools .notif-bell {
+  position: relative;
+}
+
+.topbar-tools .notif-badge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+}
+
+[data-theme="light"] .topbar-tools .btn-icon,
+[data-theme="light"] .topbar-bottom .btn-icon {
+  background: linear-gradient(145deg, rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.9));
+  border-color: rgba(100, 116, 139, 0.34);
+  color: #0f172a;
+  box-shadow: 0 8px 18px rgba(100, 116, 139, 0.2);
+}
+
+[data-theme="light"] .topbar-tools .btn-glyph,
+[data-theme="light"] .topbar-bottom .btn-glyph {
+  background: rgba(148, 163, 184, 0.24);
+  border-color: rgba(100, 116, 139, 0.3);
+}
+
+@media (max-width: 900px) {
+  .topbar-tools .btn-icon,
+  .topbar-bottom .btn-icon {
+    min-width: 104px;
+    min-height: 44px;
+    padding: 9px 12px;
+    font-size: 0.82rem;
+  }
+}
+
 .header-btn:hover {
   border-color: var(--accent);
   color: var(--text);
