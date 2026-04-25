@@ -2227,6 +2227,31 @@ body.light .fin-dividends-chart-wrap--hero {
     color 0.2s ease;
 }
 
+.btn-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  line-height: 1;
+  font-size: 0.95em;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.topbar-tools .btn-icon .btn-glyph {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(129, 140, 248, 0.45);
+}
+
+body.light .btn-glyph {
+  background: rgba(148, 163, 184, 0.22);
+  border-color: rgba(100, 116, 139, 0.34);
+}
+
 .topbar-tools .btn-icon::before,
 .btn-text::before,
 .fin-page-btn::before,

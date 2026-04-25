@@ -24,15 +24,15 @@
           <h1>💰 Dashboard Financeiro</h1>
         </div>
         <div class="topbar-tools">
-          <a href="/" class="btn-icon" title="Voltar ao Dashboard" aria-label="Voltar ao Dashboard">🏠</a>
-          <a href="/finance/registros" class="btn-icon btn-nav-records" title="Abrir página de registros" aria-label="Abrir página de registros">📚 Registros</a>
-          <button id="btnFinanceSettings" class="btn-icon" title="Configurações Financeiras" aria-label="Configurações Financeiras">⚙️</button>
-          <button id="btnExportData" class="btn-icon" title="Exportar dados" aria-label="Exportar dados">📤</button>
-          <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV" aria-label="Importar Excel ou CSV">📥</button>
-          <button id="btnNotifications" class="btn-icon" title="Ativar notificações" aria-label="Ativar notificações">🔔</button>
-          <button id="btnFeatureFlags" class="btn-icon" title="Feature flags" aria-label="Feature flags">🚩</button>
-          <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema">☀️</button>
-          <button id="finRefreshBtn" class="btn-icon btn-refresh" title="Atualizar dados" aria-label="Atualizar dados">⟳ Atualizar</button>
+          <a href="/" class="btn-icon" title="Voltar ao Dashboard" aria-label="Voltar ao Dashboard"><span class="btn-glyph" aria-hidden="true">⌂</span><span>Dashboard</span></a>
+          <a href="/finance/registros" class="btn-icon btn-nav-records" title="Abrir página de registros" aria-label="Abrir página de registros"><span class="btn-glyph" aria-hidden="true">≣</span><span>Registros</span></a>
+          <button id="btnFinanceSettings" class="btn-icon" title="Configurações Financeiras" aria-label="Configurações Financeiras"><span class="btn-glyph" aria-hidden="true">⚙</span><span>Config</span></button>
+          <button id="btnExportData" class="btn-icon" title="Exportar dados" aria-label="Exportar dados"><span class="btn-glyph" aria-hidden="true">⤴</span><span>Exportar</span></button>
+          <button id="btnImportTop" class="btn-icon" title="Importar Excel/CSV" aria-label="Importar Excel ou CSV"><span class="btn-glyph" aria-hidden="true">⤵</span><span>Importar</span></button>
+          <button id="btnNotifications" class="btn-icon" title="Ativar notificações" aria-label="Ativar notificações"><span class="btn-glyph" aria-hidden="true">◉</span><span>Alertas</span></button>
+          <button id="btnFeatureFlags" class="btn-icon" title="Feature flags" aria-label="Feature flags"><span class="btn-glyph" aria-hidden="true">⚑</span><span>Flags</span></button>
+          <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema"><span class="btn-glyph" aria-hidden="true">◐</span><span>Tema</span></button>
+          <button id="finRefreshBtn" class="btn-icon btn-refresh" title="Atualizar dados" aria-label="Atualizar dados"><span class="btn-glyph" aria-hidden="true">↻</span><span>Atualizar</span></button>
           <select id="autoRefreshSelect" class="fin-inline-select" title="Auto-atualizar" aria-label="Intervalo de atualização automática">
             <option value="0">Manual</option>
             <option value="60">1 min</option>
@@ -123,8 +123,8 @@
       <section class="fin-card fin-wide" id="finPortfolioCard">
         <h2>
           💼 Meu Portfólio
-          <button id="btnAddAsset" class="btn-text" title="Adicionar ativo">➕ Ativo</button>
-          <button id="btnImportPortfolio" class="btn-text" title="Importar Excel/CSV">📥 Importar</button>
+          <button id="btnAddAsset" class="btn-text" title="Adicionar ativo">＋ Ativo</button>
+          <button id="btnImportPortfolio" class="btn-text" title="Importar Excel/CSV">⤵ Importar</button>
         </h2>
         <div id="finPortfolioContent" class="fin-card-body">
           <div class="fin-skeleton-table">
@@ -142,7 +142,7 @@
       <section class="fin-card" id="finWatchlistCard">
         <h2>
           👁️ Watchlist
-          <button id="btnAddWatchlist" class="btn-text" title="Adicionar à watchlist">➕ Adicionar</button>
+          <button id="btnAddWatchlist" class="btn-text" title="Adicionar à watchlist">＋ Adicionar</button>
         </h2>
         <div id="finWatchlistContent" class="fin-card-body">
           <div class="fin-skeleton-table">
@@ -157,8 +157,8 @@
       <section class="fin-card" id="finGoalsCard">
         <h2>
           🎯 Metas Financeiras
-          <button id="btnPassiveIncomeGoal" class="btn-text" title="Meta de renda passiva">💸 Renda</button>
-          <button id="btnAddGoal" class="btn-text" title="Nova meta">➕ Nova</button>
+          <button id="btnPassiveIncomeGoal" class="btn-text" title="Meta de renda passiva">◉ Renda</button>
+          <button id="btnAddGoal" class="btn-text" title="Nova meta">＋ Nova</button>
         </h2>
         <div id="finPassiveIncomeGoalSummary" class="fin-passive-goal-summary"></div>
         <div id="finGoalsContent" class="fin-card-body">
@@ -183,8 +183,8 @@
       <section class="fin-card fin-wide" id="finDividendsCard">
         <h2>
           💸 Evolução dos Proventos
-          <button id="btnAddDividend" class="btn-text" title="Registrar provento">➕ Provento</button>
-          <button id="btnBrowseDividends" class="btn-text" title="Ver todos os registros de proventos">📚 Registros</button>
+          <button id="btnAddDividend" class="btn-text" title="Registrar provento">＋ Provento</button>
+          <button id="btnBrowseDividends" class="btn-text" title="Ver todos os registros de proventos">≣ Registros</button>
         </h2>
         <div id="finDividendSummary" class="fin-dividend-summary"></div>
         <div class="fin-dividends-analytics">
@@ -251,7 +251,7 @@
       <section class="fin-card" id="finRebalanceCard">
         <h2>
           ⚖️ Rebalanceamento
-          <button id="btnEditAllocation" class="btn-text" title="Configurar metas de alocação">⚙️ Metas</button>
+          <button id="btnEditAllocation" class="btn-text" title="Configurar metas de alocação">⚙ Metas</button>
         </h2>
         <div class="fin-card-body" style="padding-bottom:0;display:grid;gap:10px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -361,7 +361,7 @@
       <div class="fin-modal">
         <div class="fin-modal-header">
           <h3 id="finModalTitle">Modal</h3>
-          <button id="finModalClose" class="btn-icon">✕</button>
+          <button id="finModalClose" class="btn-icon"><span class="btn-glyph" aria-hidden="true">✕</span><span>Fechar</span></button>
         </div>
         <div id="finModalBody" class="fin-modal-body"></div>
       </div>

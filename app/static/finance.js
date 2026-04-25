@@ -201,9 +201,9 @@ function initTheme() {
       document.body.classList.toggle("light");
       const isLight = document.body.classList.contains("light");
       localStorage.setItem("fin-theme", isLight ? "light" : "dark");
-      btn.textContent = isLight ? "🌙" : "☀️";
+      btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${isLight ? "◑" : "◐"}</span><span>Tema</span>`;
     });
-    btn.textContent = document.body.classList.contains("light") ? "🌙" : "☀️";
+    btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${document.body.classList.contains("light") ? "◑" : "◐"}</span><span>Tema</span>`;
   }
 }
 
@@ -1086,8 +1086,8 @@ function renderPortfolio(portfolio) {
           <td class="text-right mono">${weightPct.toFixed(1)}%</td>
           <td class="text-right mono">${dyHtml}</td>
           <td class="text-center">
-            <button class="fin-del-btn" data-action="addTxForAsset" data-id="${p.asset_id}" title="Nova transação">➕</button>
-            <button class="fin-del-btn" data-action="deleteAsset" data-id="${p.asset_id}" title="Remover">🗑️</button>
+            <button class="fin-del-btn" data-action="addTxForAsset" data-id="${p.asset_id}" title="Nova transação">＋</button>
+            <button class="fin-del-btn" data-action="deleteAsset" data-id="${p.asset_id}" title="Remover">✕</button>
           </td>
         </tr>
       `;
@@ -1117,9 +1117,9 @@ function renderPortfolio(portfolio) {
       </table>
     </div>
     ${totalPages > 1 ? `<div class="fin-pagination">
-      <button class="fin-page-btn" data-action="portfolioPagePrev" ${FIN._portfolioPage === 0 ? "disabled" : ""}>◀</button>
+      <button class="fin-page-btn" data-action="portfolioPagePrev" ${FIN._portfolioPage === 0 ? "disabled" : ""}>‹</button>
       <span class="fin-page-info">${FIN._portfolioPage + 1} / ${totalPages} (${sorted.length} ativos)</span>
-      <button class="fin-page-btn" data-action="portfolioPageNext" ${FIN._portfolioPage >= totalPages - 1 ? "disabled" : ""}>▶</button>
+      <button class="fin-page-btn" data-action="portfolioPageNext" ${FIN._portfolioPage >= totalPages - 1 ? "disabled" : ""}>›</button>
     </div>` : ""}
   `;
 
@@ -1194,7 +1194,7 @@ function renderTransactions(txns) {
       <input id="txFilterMinTotal" class="fin-inline-select" type="number" step="0.01" placeholder="Total min" value="${escapeHtml(FIN._txFilter.minTotal || "")}" />
       <input id="txFilterMaxTotal" class="fin-inline-select" type="number" step="0.01" placeholder="Total max" value="${escapeHtml(FIN._txFilter.maxTotal || "")}" />
       <button id="btnTxFilterClear" class="btn-text" type="button">Limpar</button>
-      <button id="btnBatchEditTx" class="btn-text" type="button">✏️ Lote</button>
+      <button id="btnBatchEditTx" class="btn-text" type="button">✎ Lote</button>
       <span class="fin-tx-count">${filtered.length} de ${txns.length}</span>
     </div>
   `;
@@ -1233,8 +1233,8 @@ function renderTransactions(txns) {
           <td class="text-right mono">${formatBRL(t.fees)}</td>
           <td>${escapeHtml(t.notes || "")}</td>
           <td class="text-center">
-            <button class="fin-del-btn" data-action="openEditTransactionModal" data-id="${t.id}" title="Editar">✏️</button>
-            <button class="fin-del-btn" data-action="deleteTransaction" data-id="${t.id}" title="Excluir">🗑️</button>
+            <button class="fin-del-btn" data-action="openEditTransactionModal" data-id="${t.id}" title="Editar">✎</button>
+            <button class="fin-del-btn" data-action="deleteTransaction" data-id="${t.id}" title="Excluir">✕</button>
           </td>
         </tr>
       `;
@@ -1244,9 +1244,9 @@ function renderTransactions(txns) {
   let paginationHtml = "";
   if (totalPages > 1) {
     paginationHtml = `<div class="fin-pagination">
-      <button class="fin-page-btn" data-action="txPagePrev" ${_txPage === 0 ? "disabled" : ""}>◀</button>
+      <button class="fin-page-btn" data-action="txPagePrev" ${_txPage === 0 ? "disabled" : ""}>‹</button>
       <span class="fin-page-info">${_txPage + 1} / ${totalPages} (${filtered.length} itens)</span>
-      <button class="fin-page-btn" data-action="txPageNext" ${_txPage >= totalPages - 1 ? "disabled" : ""}>▶</button>
+      <button class="fin-page-btn" data-action="txPageNext" ${_txPage >= totalPages - 1 ? "disabled" : ""}>›</button>
     </div>`;
   }
 
@@ -1436,8 +1436,8 @@ function renderWatchlist(watchlist) {
             ${alertHtml}
           </div>
           <div class="fin-wl-actions">
-            <button class="fin-del-btn" data-action="openEditWatchlistModal" data-id="${w.id}" title="Editar">✏️</button>
-            <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">🗑️</button>
+            <button class="fin-del-btn" data-action="openEditWatchlistModal" data-id="${w.id}" title="Editar">✎</button>
+            <button class="fin-del-btn" data-action="deleteWatchlistItem" data-id="${w.id}" title="Remover">✕</button>
           </div>
         </div>
       `;
@@ -1467,8 +1467,8 @@ function renderGoals(goals) {
           <div class="fin-goal-header">
             <span class="fin-goal-name">${escapeHtml(g.name)}</span>
             <div class="fin-goal-actions">
-              <button class="fin-del-btn" data-action="openEditGoalModal" data-id="${g.id}" title="Editar">✏️</button>
-              <button class="fin-del-btn" data-action="deleteGoal" data-id="${g.id}" title="Excluir">🗑️</button>
+              <button class="fin-del-btn" data-action="openEditGoalModal" data-id="${g.id}" title="Editar">✎</button>
+              <button class="fin-del-btn" data-action="deleteGoal" data-id="${g.id}" title="Excluir">✕</button>
             </div>
           </div>
           <div class="fin-goal-amounts">
@@ -1917,7 +1917,7 @@ function openImportModal() {
   openFinModal("Importar Dados", `
     <div class="fin-import-section">
       <div class="fin-import-tabs">
-        <button class="fin-import-tab active" data-tab="general">📥 Importação Geral</button>
+        <button class="fin-import-tab active" data-tab="general">⤵ Importação Geral</button>
         <button class="fin-import-tab" data-tab="nota">📄 Nota de Corretagem</button>
         <button class="fin-import-tab" data-tab="b3">📊 Movimentação B3</button>
       </div>
@@ -1959,7 +1959,7 @@ function openImportModal() {
           </label>
           <div id="finImportStatus" class="fin-import-status" style="display:none"></div>
           <button type="submit" class="fin-form-submit" id="finImportSubmit" disabled>
-            📥 Importar Dados
+            ⤵ Importar Dados
           </button>
         </form>
       </div>
@@ -2365,7 +2365,7 @@ function openAddAssetModal() {
           </div>
         </div>
       </div>
-      <button type="submit" class="fin-form-submit">➕ Adicionar Ativo</button>
+      <button type="submit" class="fin-form-submit">＋ Adicionar Ativo</button>
     </form>
   `);
 
@@ -4400,7 +4400,7 @@ function openExportModal() {
           </select>
         </div>
       </div>
-      <button id="fmExportBtn" class="fin-form-submit">📤 Exportar</button>
+      <button id="fmExportBtn" class="fin-form-submit">⤴ Exportar</button>
     </div>
   `);
 
