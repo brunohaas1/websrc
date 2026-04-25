@@ -604,6 +604,7 @@ async function loadAll(options = {}) {
       FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
       FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
 
+      renderSummary(FIN.summary);
       renderWatchlist(FIN.watchlist);
       renderGoals(FIN.goals);
       renderDividends(FIN.dividends);
