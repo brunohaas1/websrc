@@ -2514,25 +2514,85 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 logger.warning("CoinGecko fetch failed: %s", exc)
 
         def _fetch_indices():
-            """Fetch market indices (IBOV, etc)."""
-            try:
-                resp = http_requests.get(
-                    "https://brapi.dev/api/quote/%5EBVSP",
-                    timeout=8,
-                )
-                if resp.ok:
-                    data = resp.json()
-                    for item in data.get("results", []):
-                        results["indices"][item.get("symbol", "IBOV")] = {
-                            "name": item.get("longName", "Ibovespa"),
-                            "price": item.get("regularMarketPrice"),
-                            "change": item.get("regularMarketChange"),
-                            "change_pct": item.get(
-                                "regularMarketChangePercent",
-                            ),
-                        }
-            except Exception as exc:
-                logger.warning("indices fetch failed: %s", exc)
+            """Fetch market indices via brapi (with token) or Yahoo Finance fallback."""
+            _INDEX_SYMBOLS = {
+                "^BVSP": "Ibovespa",
+                "^GSPC": "S&P 500",
+                "^IXIC": "Nasdaq",
+                "USDBRL=X": "Dólar (BRL)",
+            }
+
+            # Try brapi.dev for IBOV (requires token)
+            brapi_ok = False
+            brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
+            if not brapi_token:
+                brapi_token = repo.get_setting("brapi_token", "").strip()
+            if brapi_token:
+                try:
+                    resp = http_requests.get(
+                        "https://brapi.dev/api/quote/%5EBVSP",
+                        params={"token": brapi_token},
+                        timeout=8,
+                    )
+                    if resp.ok:
+                        data = resp.json()
+                        for item in data.get("results", []):
+                            results["indices"][item.get("symbol", "^BVSP")] = {
+                                "name": item.get("longName", "Ibovespa"),
+                                "price": item.get("regularMarketPrice"),
+                                "change": item.get("regularMarketChange"),
+                                "change_pct": item.get(
+                                    "regularMarketChangePercent",
+                                ),
+                            }
+                        brapi_ok = bool(results["indices"])
+                except Exception as exc:
+                    logger.warning("brapi indices fetch failed: %s", exc)
+
+            # Yahoo Finance v8 chart fallback for all indices
+            for yahoo_sym, default_name in _INDEX_SYMBOLS.items():
+                # Skip IBOV if already loaded from brapi
+                if brapi_ok and yahoo_sym == "^BVSP":
+                    continue
+                try:
+                    yresp = http_requests.get(
+                        f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}",
+                        params={"interval": "1d", "range": "1d"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=8,
+                    )
+                    if not yresp.ok:
+                        continue
+                    chart = yresp.json().get("chart", {}).get("result", [])
+                    if not chart:
+                        continue
+                    meta = chart[0].get("meta", {})
+                    price = meta.get("regularMarketPrice")
+                    prev_close = meta.get("chartPreviousClose") or meta.get(
+                        "previousClose",
+                    )
+                    change = (
+                        round(price - prev_close, 4)
+                        if price is not None and prev_close
+                        else None
+                    )
+                    change_pct = (
+                        round(change / prev_close * 100, 4)
+                        if change is not None and prev_close
+                        else None
+                    )
+                    results["indices"][yahoo_sym] = {
+                        "name": meta.get("longName")
+                        or meta.get("shortName")
+                        or default_name,
+                        "price": price,
+                        "change": change,
+                        "change_pct": change_pct,
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "Yahoo indices fetch failed for %s: %s", yahoo_sym, exc,
+                    )
 
         # Run all fetches in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:

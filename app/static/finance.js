@@ -1189,13 +1189,18 @@ function renderIndices(indices) {
     el.innerHTML = '<p class="fin-empty">Dados de mercado indisponíveis.</p>';
     return;
   }
+  const FX_SYMBOLS = new Set(["USDBRL=X", "EURBRL=X", "BTCBRL=X"]);
   el.innerHTML = entries
-    .map(([_key, idx]) => {
+    .map(([key, idx]) => {
       const cls = changeClass(idx.change_pct);
+      const isFx = FX_SYMBOLS.has(key);
+      const priceStr = isFx
+        ? formatBRL(idx.price)
+        : `${formatNumber(idx.price, 0)} pts`;
       return `
         <div class="fin-index-row">
           <span class="fin-index-name">${escapeHtml(idx.name)}</span>
-          <span class="fin-index-price">${formatNumber(idx.price, 0)} pts</span>
+          <span class="fin-index-price">${priceStr}</span>
           <span class="fin-index-change ${cls}">${formatPct(idx.change_pct)}</span>
         </div>
       `;
