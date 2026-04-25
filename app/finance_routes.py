@@ -512,9 +512,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("2/day")
     @require_finance_key
     def finance_cleanup_duplicate_transactions():
-        payload = repo.cleanup_duplicate_fin_transactions()
+        tx_payload = repo.cleanup_duplicate_fin_transactions()
+        div_payload = repo.cleanup_duplicate_fin_dividends()
         touched_asset_ids = [
-            int(aid) for aid in payload.pop("touched_asset_ids", [])
+            int(aid) for aid in tx_payload.pop("touched_asset_ids", [])
         ]
         for asset_id in touched_asset_ids:
             _recalc_portfolio(repo, asset_id)
@@ -524,15 +525,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         )
         _audit(
             "cleanup",
-            "transaction_duplicates",
+            "duplicates",
             None,
             {
-                "deleted": payload.get("deleted", 0),
-                "duplicates": payload.get("duplicates", 0),
+                "tx_deleted": tx_payload.get("deleted", 0),
+                "div_deleted": div_payload.get("deleted", 0),
                 "assets": len(touched_asset_ids),
             },
         )
-        return jsonify({"ok": True, **payload})
+        return jsonify({
+            "ok": True,
+            "transactions": tx_payload,
+            "dividends": div_payload,
+        })
 
     @app.get("/api/finance/maintenance/cleanup-duplicates")
     def finance_cleanup_duplicate_transactions_help():
@@ -1470,7 +1475,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             and not data["total_amount"]
         ):
             data["total_amount"] = data["amount_per_share"] * data["quantity"]
-        div_id = repo.add_fin_dividend(data)
+        try:
+            div_id = repo.add_fin_dividend(data)
+        except ValueError as exc:
+            if "duplicado" in str(exc).lower():
+                return jsonify({"error": str(exc)}), 409
+            raise
         _invalidate_financial_state_cache(include_dividends=True)
         return jsonify({"ok": True, "id": div_id}), 201
 

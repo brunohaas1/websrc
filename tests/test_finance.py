@@ -221,8 +221,8 @@ class TestTransactions:
         assert cleanup.status_code == 200
         payload = cleanup.get_json()
         assert payload["ok"] is True
-        assert payload["deleted"] == 1
-        assert payload["duplicates"] == 1
+        assert payload["transactions"]["deleted"] == 1
+        assert payload["transactions"]["duplicates"] == 1
 
         txs_after = client.get("/api/finance/transactions").get_json()
         assert len([t for t in txs_after if t["asset_id"] == asset["id"]]) == 2
@@ -238,7 +238,51 @@ class TestTransactions:
         assert data["ok"] is True
         assert data["method"] == "POST"
 
-    def test_add_transaction_missing_fields(self, client):
+    def test_add_duplicate_dividend_is_rejected(self, client):
+        asset = _add_asset(client).get_json()
+        div_data = {
+            "asset_id": asset["id"],
+            "div_type": "dividend",
+            "amount_per_share": 1.5,
+            "total_amount": 15.0,
+            "quantity": 10,
+            "ex_date": "2025-03-01",
+            "pay_date": "2025-03-15",
+            "notes": "",
+        }
+        r1 = jpost(client, "/api/finance/dividends", div_data)
+        assert r1.status_code == 201
+        r2 = jpost(client, "/api/finance/dividends", div_data)
+        assert r2.status_code == 409
+
+    def test_cleanup_duplicate_dividends(self, client, app):
+        asset = _add_asset(client).get_json()
+        from app.db import get_connection
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """INSERT INTO fin_dividends
+                    (asset_id, div_type, amount_per_share, total_amount,
+                     quantity, ex_date, pay_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (asset["id"], "dividend", 2.0, 20.0, 10, "2025-01-01", "2025-01-15", ""),
+            )
+            conn.execute(
+                """INSERT INTO fin_dividends
+                    (asset_id, div_type, amount_per_share, total_amount,
+                     quantity, ex_date, pay_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (asset["id"], "dividend", 2.0, 20.0, 10, "2025-01-01", "2025-01-15", ""),
+            )
+            conn.commit()
+
+        cleanup = jpost(client, "/api/finance/maintenance/cleanup-duplicates", {})
+        assert cleanup.status_code == 200
+        payload = cleanup.get_json()
+        assert payload["ok"] is True
+        assert payload["dividends"]["deleted"] == 1
+        assert payload["dividends"]["duplicates"] == 1
+
+
         resp = jpost(client, "/api/finance/transactions", {"asset_id": 1})
         assert resp.status_code == 400
         assert "Campos" in resp.get_json()["error"]

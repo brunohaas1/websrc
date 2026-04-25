@@ -2359,7 +2359,95 @@ class Repository:
 
     # ── Dividends ───────────────────────────────────────────
 
+    def is_duplicate_fin_dividend(self, data: dict[str, Any]) -> bool:
+        key_fields = (
+            int(data["asset_id"]),
+            str(data.get("div_type", "dividend") or "").strip().lower(),
+            float(data.get("amount_per_share", 0) or 0),
+            float(data.get("total_amount", 0) or 0),
+            float(data.get("quantity", 0) or 0),
+            str(data.get("ex_date") or "").strip(),
+            str(data.get("pay_date") or "").strip(),
+            str(data.get("notes") or "").strip(),
+        )
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("""
+                    SELECT 1 FROM fin_dividends
+                    WHERE asset_id=? AND div_type=?
+                      AND amount_per_share=? AND total_amount=?
+                      AND quantity=? AND (ex_date=? OR (ex_date IS NULL AND ?=''))
+                      AND pay_date=?
+                      AND (notes=? OR (notes IS NULL AND ?=''))
+                    LIMIT 1
+                """),
+                (
+                    key_fields[0], key_fields[1],
+                    key_fields[2], key_fields[3],
+                    key_fields[4], key_fields[5], key_fields[5],
+                    key_fields[6],
+                    key_fields[7], key_fields[7],
+                ),
+            ).fetchone()
+        return row is not None
+
+    def cleanup_duplicate_fin_dividends(self) -> dict[str, Any]:
+        scanned = 0
+        duplicate_rows = 0
+        deleted = 0
+
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("""
+                    SELECT id, asset_id, div_type, amount_per_share,
+                           total_amount, quantity, ex_date, pay_date, notes
+                    FROM fin_dividends
+                    ORDER BY id ASC
+                """),
+            ).fetchall()
+
+            scanned = len(rows)
+            seen: set[tuple[Any, ...]] = set()
+            delete_ids: list[int] = []
+
+            for row in rows:
+                key = (
+                    int(row["asset_id"]),
+                    str(row["div_type"] or "").strip().lower(),
+                    float(row["amount_per_share"] or 0),
+                    float(row["total_amount"] or 0),
+                    float(row["quantity"] or 0),
+                    str(row["ex_date"] or "").strip(),
+                    str(row["pay_date"] or "").strip(),
+                    str(row["notes"] or "").strip(),
+                )
+                if key in seen:
+                    duplicate_rows += 1
+                    delete_ids.append(int(row["id"]))
+                    continue
+                seen.add(key)
+
+            if delete_ids:
+                placeholders = ",".join(["?"] * len(delete_ids))
+                conn.execute(
+                    self._sql(
+                        f"DELETE FROM fin_dividends WHERE id IN ({placeholders})"
+                    ),
+                    tuple(delete_ids),
+                )
+                deleted = len(delete_ids)
+
+            conn.commit()
+
+        return {
+            "scanned": scanned,
+            "duplicates": duplicate_rows,
+            "deleted": deleted,
+        }
+
     def add_fin_dividend(self, data: dict[str, Any]) -> int:
+        if self.is_duplicate_fin_dividend(data):
+            raise ValueError("Dividendo duplicado")
         with get_connection(self.database_target) as conn:
             q = self._sql("""
                 INSERT INTO fin_dividends

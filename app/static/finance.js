@@ -4737,7 +4737,9 @@ async function runCleanupDuplicates() {
     if (!resp.ok) {
       showToast(data.error || "Erro na limpeza", "error");
     } else {
-      const msg = `✅ Verificadas: ${data.scanned} | Duplicatas: ${data.duplicates} | Removidas: ${data.deleted}`;
+      const tx = data.transactions || {};
+      const div = data.dividends || {};
+      const msg = `✅ Transações: ${tx.scanned ?? 0} verificadas, ${tx.deleted ?? 0} removidas | Dividendos: ${div.scanned ?? 0} verificados, ${div.deleted ?? 0} removidos`;
       if (result) { result.textContent = msg; result.style.display = "block"; }
       showToast(msg, "success");
     }
