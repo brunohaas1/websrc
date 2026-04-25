@@ -1,7 +1,17 @@
 /* Cache version – bump on deploy or use build hash */
-const CACHE_VERSION = "v2-" + "20260302";
+const CACHE_VERSION = "v2-" + "20260425";
 const CACHE_NAME = "webdash-" + CACHE_VERSION;
-const PRECACHE = ["/", "/static/style.css", "/static/app.js"];
+const PRECACHE = [
+  "/",
+  "/finance",
+  "/finance/registros",
+  "/static/style.css",
+  "/static/app.js",
+  "/static/finance.css",
+  "/static/finance.js",
+  "/static/finance_records.js",
+  "/static/manifest.json",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

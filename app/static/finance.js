@@ -70,6 +70,7 @@ const FIN_ONBOARDING_SEEN_KEY = "fin_onboarding_seen_v1";
 const FIN_ALERT_PREFS_KEY = "fin_alert_prefs_v1";
 
 const byId = (id) => document.getElementById(id);
+let _deferredInstallPrompt = null;
 
 function getAlertPrefs() {
   try {
@@ -148,6 +149,33 @@ function showToast(message, type = "error", options = {}) {
     toast.addEventListener("transitionend", () => toast.remove());
     setTimeout(() => toast.remove(), 400);
   }, durationMs);
+}
+
+function initFinancePWA() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js").catch(() => {
+      // ignore registration failures on unsupported contexts
+    });
+  }
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    _deferredInstallPrompt = e;
+    showToast("App instalavel disponivel", "info", {
+      actionLabel: "Instalar",
+      onAction: async () => {
+        if (!_deferredInstallPrompt) return;
+        _deferredInstallPrompt.prompt();
+        try {
+          await _deferredInstallPrompt.userChoice;
+        } catch {
+          // ignore
+        }
+        _deferredInstallPrompt = null;
+      },
+      durationMs: 8000,
+    });
+  });
 }
 
 function escapeHtml(text) {
@@ -5800,6 +5828,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initTheme();
   initDensityMode();
+  initFinancePWA();
   initA11yEnhancements();
   initFinanceLayoutTools();
   initFinanceKeyboardShortcuts();
