@@ -64,12 +64,14 @@ const FIN_FLAG_LABELS = {
 const DIVIDENDS_CHART_PREFS_KEY = "fin_dividends_chart_prefs";
 const FIN_THEME_KEY = "fin-theme";
 const FIN_LAYOUT_KEY = "fin_layout_v1";
-const FIN_THEME_ORDER = ["dark", "light", "ocean"];
+const FIN_THEME_ORDER = ["dark", "light", "ocean", "sunset"];
+const FIN_DENSITY_KEY = "fin-density";
+const FIN_ONBOARDING_SEEN_KEY = "fin_onboarding_seen_v1";
 
 const byId = (id) => document.getElementById(id);
 
 // ── Toast notifications (replaces alert()) ────────────────
-function showToast(message, type = "error") {
+function showToast(message, type = "error", options = {}) {
   let container = byId("finToastContainer");
   if (!container) {
     container = document.createElement("div");
@@ -82,14 +84,46 @@ function showToast(message, type = "error") {
   }
   const toast = document.createElement("div");
   toast.className = `fin-toast fin-toast-${type}`;
-  toast.textContent = message;
+  const text = document.createElement("span");
+  text.className = "fin-toast-message";
+  text.textContent = message;
+  toast.appendChild(text);
+
+  if (options.actionLabel && typeof options.onAction === "function") {
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "fin-toast-action";
+    actionBtn.textContent = String(options.actionLabel);
+    actionBtn.addEventListener("click", () => {
+      try {
+        options.onAction();
+      } finally {
+        toast.classList.remove("fin-toast-show");
+        setTimeout(() => toast.remove(), 220);
+      }
+    });
+    toast.appendChild(actionBtn);
+  }
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "fin-toast-close";
+  closeBtn.setAttribute("aria-label", "Fechar notificação");
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", () => {
+    toast.classList.remove("fin-toast-show");
+    setTimeout(() => toast.remove(), 220);
+  });
+  toast.appendChild(closeBtn);
+
   container.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("fin-toast-show"));
+  const durationMs = Number(options.durationMs || 3500);
   setTimeout(() => {
     toast.classList.remove("fin-toast-show");
     toast.addEventListener("transitionend", () => toast.remove());
     setTimeout(() => toast.remove(), 400);
-  }, 3500);
+  }, durationMs);
 }
 
 function escapeHtml(text) {
@@ -203,21 +237,49 @@ function isFinFlagOn(flagName) {
 
 function applyFinanceTheme(theme) {
   const nextTheme = FIN_THEME_ORDER.includes(theme) ? theme : "dark";
-  document.body.classList.remove("light", "theme-ocean");
+  document.body.classList.remove("light", "theme-ocean", "theme-sunset");
   if (nextTheme === "light") {
     document.body.classList.add("light");
   } else if (nextTheme === "ocean") {
     document.body.classList.add("theme-ocean");
+  } else if (nextTheme === "sunset") {
+    document.body.classList.add("theme-sunset");
   }
   localStorage.setItem(FIN_THEME_KEY, nextTheme);
 
   const btn = byId("themeToggle");
   if (btn) {
-    const glyphMap = { dark: "◐", light: "◑", ocean: "◒" };
+    const glyphMap = { dark: "◐", light: "◑", ocean: "◒", sunset: "◓" };
     btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${glyphMap[nextTheme] || "◐"}</span><span>Tema</span>`;
     btn.title = `Tema atual: ${nextTheme}`;
     btn.setAttribute("aria-label", `Tema atual: ${nextTheme}`);
   }
+}
+
+function applyFinanceDensity(density) {
+  const next = density === "compact" ? "compact" : "comfortable";
+  document.body.classList.remove("fin-density-compact", "fin-density-comfortable");
+  document.body.classList.add(next === "compact" ? "fin-density-compact" : "fin-density-comfortable");
+  localStorage.setItem(FIN_DENSITY_KEY, next);
+  const btn = byId("btnDensity");
+  if (btn) {
+    btn.innerHTML = next === "compact"
+      ? '<span class="btn-glyph" aria-hidden="true">▤</span><span>Compacto</span>'
+      : '<span class="btn-glyph" aria-hidden="true">▥</span><span>Conforto</span>';
+  }
+}
+
+function initDensityMode() {
+  const saved = localStorage.getItem(FIN_DENSITY_KEY) || "comfortable";
+  applyFinanceDensity(saved);
+  const btn = byId("btnDensity");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const current = localStorage.getItem(FIN_DENSITY_KEY) || "comfortable";
+    const next = current === "compact" ? "comfortable" : "compact";
+    applyFinanceDensity(next);
+    showToast(`Densidade: ${next === "compact" ? "compacta" : "confortável"}`, "info");
+  });
 }
 
 function initTheme() {
@@ -544,6 +606,110 @@ function resetFinanceLayout() {
   });
   setLayoutEditMode(false);
   showToast("Layout resetado para o padrão.", "success");
+}
+
+function applyLayoutPreset(presetId) {
+  const presets = {
+    conservador: {
+      hide: ["finAICard", "finAuditCard"],
+      promote: ["finHistoryCard", "finPortfolioCard", "finGoalsCard", "finDividendsCard"],
+    },
+    dividendos: {
+      hide: ["finPnLCard", "finRebalanceCard"],
+      promote: ["finDividendsCard", "finDividendCeilingCard", "finGoalsCard", "finPortfolioCard"],
+    },
+    growth: {
+      hide: ["finDividendCeilingCard"],
+      promote: ["finPerformanceCard", "finHistoryCard", "finPnLCard", "finPortfolioCard"],
+    },
+  };
+  const preset = presets[presetId];
+  const grid = byId("financeMain");
+  if (!preset || !grid) return;
+
+  const cards = [...grid.querySelectorAll(".fin-card[id]")];
+  const byCardId = new Map(cards.map((card) => [card.id, card]));
+  cards.forEach((card) => {
+    card.style.display = preset.hide.includes(card.id) ? "none" : "";
+  });
+  preset.promote.forEach((id) => {
+    const card = byCardId.get(id);
+    if (card) grid.appendChild(card);
+  });
+  persistFinanceLayout();
+  showToast(`Preset aplicado: ${presetId}`, "success");
+}
+
+function openLayoutPresetModal() {
+  openFinModal("Presets de Layout", `
+    <div class="fin-shortcuts-list">
+      <button class="fin-form-submit" type="button" data-layout-preset="conservador">Conservador</button>
+      <button class="fin-form-submit" type="button" data-layout-preset="dividendos">Dividendos</button>
+      <button class="fin-form-submit" type="button" data-layout-preset="growth">Growth</button>
+    </div>
+  `);
+  byId("finModalBody")?.querySelectorAll("[data-layout-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyLayoutPreset(btn.dataset.layoutPreset || "");
+      closeFinModal();
+    });
+  });
+}
+
+function openQuickTourModal() {
+  openFinModal("Guia Rápido (1 minuto)", `
+    <div class="fin-shortcuts-list">
+      <div class="fin-shortcut-row"><kbd>1</kbd><span>Use <strong>Layout</strong> para arrastar e organizar cards</span></div>
+      <div class="fin-shortcut-row"><kbd>2</kbd><span>Use <strong>Cards</strong> para esconder os que não usa</span></div>
+      <div class="fin-shortcut-row"><kbd>3</kbd><span>Use <strong>Preset</strong> para aplicar estratégia rápida</span></div>
+      <div class="fin-shortcut-row"><kbd>4</kbd><span>Use <strong>Tema</strong> e <strong>Densidade</strong> para personalizar visual</span></div>
+      <div class="fin-shortcut-row"><kbd>5</kbd><span><strong>Registros</strong> abre a visão detalhada dos lançamentos</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+      <button type="button" id="btnTourStart" class="fin-form-submit">Começar agora</button>
+    </div>
+  `);
+  byId("btnTourStart")?.addEventListener("click", () => {
+    closeFinModal();
+    byId("finPortfolioCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast("Tour concluído. Aproveite seu dashboard!", "success");
+  });
+}
+
+function maybeAutoOpenQuickTour() {
+  const seen = localStorage.getItem(FIN_ONBOARDING_SEEN_KEY) === "1";
+  if (seen) return;
+  localStorage.setItem(FIN_ONBOARDING_SEEN_KEY, "1");
+  setTimeout(() => openQuickTourModal(), 500);
+}
+
+function renderEmptyState(message, ctaLabel, ctaAction) {
+  const buttonHtml = ctaLabel && ctaAction
+    ? `<button class="btn-text fin-empty-cta" type="button" data-empty-action="${escapeHtml(ctaAction)}">${escapeHtml(ctaLabel)}</button>`
+    : "";
+  return `
+    <div class="fin-empty-block">
+      <p class="fin-empty">${escapeHtml(message)}</p>
+      ${buttonHtml}
+    </div>
+  `;
+}
+
+function runEmptyStateAction(action) {
+  const map = {
+    addAsset: openAddAssetModal,
+    addTransaction: openAddTransactionModal,
+    addDividend: openAddDividendModal,
+    addWatchlist: openAddWatchlistModal,
+    addGoal: openAddGoalModal,
+    clearTxFilters: () => {
+      FIN._txFilter = { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" };
+      localStorage.removeItem("fin_tx_filter");
+      renderTransactions(FIN.transactions);
+    },
+  };
+  const fn = map[action];
+  if (fn) fn();
 }
 
 function showKeyboardShortcutsHelp() {
@@ -1269,11 +1435,11 @@ function renderPortfolio(portfolio) {
   const el = byId("finPortfolioContent");
   if (!el) return;
   if (!portfolio.length) {
-    el.innerHTML = `
-      <p class="fin-empty">
-        Nenhum ativo no portfólio. Adicione um ativo e registre transações para começar!
-      </p>
-    `;
+    el.innerHTML = renderEmptyState(
+      "Nenhum ativo no portfólio ainda.",
+      "Adicionar ativo",
+      "addAsset",
+    );
     return;
   }
 
@@ -1468,7 +1634,11 @@ function renderTransactions(txns) {
   `;
 
   if (!filtered.length) {
-    el.innerHTML = filterBar + '<p class="fin-empty">Nenhuma transação encontrada.</p>';
+    el.innerHTML = filterBar + renderEmptyState(
+      "Nenhuma transação encontrada para os filtros atuais.",
+      "Limpar filtros",
+      "clearTxFilters",
+    );
     _bindTxFilters();
     return;
   }
@@ -1657,7 +1827,11 @@ function renderWatchlist(watchlist) {
   const el = byId("finWatchlistContent");
   if (!el) return;
   if (!watchlist.length) {
-    el.innerHTML = '<p class="fin-empty">Watchlist vazia. Adicione ativos para monitorar!</p>';
+    el.innerHTML = renderEmptyState(
+      "Watchlist vazia no momento.",
+      "Adicionar ativo",
+      "addWatchlist",
+    );
     return;
   }
 
@@ -1718,7 +1892,11 @@ function renderGoals(goals) {
   if (!el) return;
   renderPassiveIncomeGoalSummary();
   if (!goals.length) {
-    el.innerHTML = '<p class="fin-empty">Nenhuma meta financeira. Crie uma meta para acompanhar!</p>';
+    el.innerHTML = renderEmptyState(
+      "Nenhuma meta financeira criada.",
+      "Criar meta",
+      "addGoal",
+    );
     return;
   }
 
@@ -3417,7 +3595,11 @@ function renderDividends(divs) {
   if (!el) return;
 
   if (!divs.length) {
-    el.innerHTML = '<p class="fin-empty">Nenhum dividendo registrado. Registre proventos recebidos!</p>';
+    el.innerHTML = renderEmptyState(
+      "Nenhum dividendo registrado até agora.",
+      "Registrar provento",
+      "addDividend",
+    );
     if (summaryEl) summaryEl.innerHTML = "";
     _destroyDividendCharts();
     return;
@@ -3611,6 +3793,13 @@ function renderDividendsChart(divs, prefs = { showValues: true, density: "smart"
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      onClick: (_evt, elements, chart) => {
+        if (!elements || !elements.length) return;
+        const idx = elements[0].index;
+        const monthKey = chart?.data?.labels?.[idx];
+        if (!monthKey) return;
+        openDividendMonthDrilldown(String(monthKey), divs || []);
+      },
       plugins: {
         legend: { display: false },
         title: {
@@ -3649,6 +3838,37 @@ function renderDividendsChart(divs, prefs = { showValues: true, density: "smart"
       },
     },
   });
+}
+
+function openDividendMonthDrilldown(monthKey, divs) {
+  const filtered = (divs || []).filter((d) => {
+    const raw = d.pay_date || d.ex_date || d.created_at || "";
+    return String(raw).startsWith(monthKey);
+  });
+  const rows = filtered
+    .sort((a, b) => String(b.pay_date || b.ex_date || "").localeCompare(String(a.pay_date || a.ex_date || "")))
+    .map((d) => `
+      <tr>
+        <td>${escapeHtml(d.symbol || "—")}</td>
+        <td>${escapeHtml(d.div_type || "dividend")}</td>
+        <td>${escapeHtml(String(d.pay_date || d.ex_date || "").slice(0, 10))}</td>
+        <td class="text-right mono">${formatNumber(d.quantity || 0)}</td>
+        <td class="text-right mono">${formatBRL(d.total_amount || 0)}</td>
+      </tr>
+    `)
+    .join("");
+  const total = filtered.reduce((sum, d) => sum + Number(d.total_amount || 0), 0);
+  openFinModal(`Drill-down de proventos: ${escapeHtml(monthKey)}`, `
+    <p class="fin-empty" style="text-align:left;margin-bottom:8px;">${filtered.length} lançamento(s) • Total ${formatBRL(total)}</p>
+    <div class="fin-table-wrap">
+      <table class="fin-table">
+        <thead>
+          <tr><th>Ativo</th><th>Tipo</th><th>Data</th><th class="text-right">Qtd</th><th class="text-right">Total</th></tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="5" class="fin-empty">Sem lançamentos.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `);
 }
 
 function renderDividendsTypeChart(totals, typeLabels) {
@@ -4241,6 +4461,13 @@ async function loadHistoryChart(assetId, options = {}) {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { intersect: false, mode: "index" },
+        onClick: (_evt, elements, chart) => {
+          if (!elements || !elements.length) return;
+          const idx = elements[0].index;
+          const selectedDate = chart?.data?.labels?.[idx];
+          if (!selectedDate) return;
+          drillDownTransactionsByDate(assetId, String(selectedDate));
+        },
         plugins: {
           legend: { display: datasets.length > 1 },
           tooltip: {
@@ -4276,6 +4503,29 @@ async function loadHistoryChart(assetId, options = {}) {
   } catch (err) {
     console.error("History chart error:", err);
   }
+}
+
+function drillDownTransactionsByDate(assetId, date) {
+  if (!date) return;
+  FIN._txFilter.dateFrom = date;
+  FIN._txFilter.dateTo = date;
+  if (assetId && assetId !== "__total__") {
+    FIN._txFilter.asset = String(assetId);
+  } else {
+    FIN._txFilter.asset = "";
+  }
+  localStorage.setItem("fin_tx_filter", JSON.stringify(FIN._txFilter));
+  renderTransactions(FIN.transactions || []);
+  const txCard = byId("finTransactionsCard");
+  if (txCard) txCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  showToast(`Drill-down aplicado: transações em ${date}`, "info", {
+    actionLabel: "Limpar",
+    onAction: () => {
+      FIN._txFilter = { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" };
+      localStorage.removeItem("fin_tx_filter");
+      renderTransactions(FIN.transactions || []);
+    },
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4725,6 +4975,129 @@ async function loadIRReport(year) {
 // Export Data
 // ══════════════════════════════════════════════════════════
 
+function _downloadBlob(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1200);
+}
+
+function _csvEscape(value) {
+  const txt = String(value ?? "");
+  return /[",\n;]/.test(txt) ? `"${txt.replace(/"/g, '""')}"` : txt;
+}
+
+function _toCsv(rows, headers) {
+  const lines = [];
+  lines.push(headers.map((h) => _csvEscape(h)).join(";"));
+  rows.forEach((row) => {
+    lines.push(row.map((v) => _csvEscape(v)).join(";"));
+  });
+  return lines.join("\n");
+}
+
+function exportFilteredCsv(type) {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+
+  if (type === "transactions") {
+    let rows = [...(FIN.transactions || [])];
+    const f = FIN._txFilter || {};
+    if (f.asset) rows = rows.filter((t) => t.asset_id === Number(f.asset));
+    if (f.type) rows = rows.filter((t) => t.tx_type === f.type);
+    if (f.dateFrom) rows = rows.filter((t) => String(t.tx_date || "").slice(0, 10) >= f.dateFrom);
+    if (f.dateTo) rows = rows.filter((t) => String(t.tx_date || "").slice(0, 10) <= f.dateTo);
+    if (f.minTotal !== "") rows = rows.filter((t) => Number(t.total || 0) >= Number(f.minTotal));
+    if (f.maxTotal !== "") rows = rows.filter((t) => Number(t.total || 0) <= Number(f.maxTotal));
+
+    const csv = _toCsv(
+      rows.map((t) => [
+        (t.tx_date || "").slice(0, 10),
+        t.tx_type || "",
+        t.symbol || "",
+        t.quantity || 0,
+        t.price || 0,
+        t.total || 0,
+        t.fees || 0,
+        t.notes || "",
+      ]),
+      ["data", "tipo", "ativo", "quantidade", "preco", "total", "taxas", "notas"],
+    );
+    _downloadBlob(`transacoes-filtradas-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+    showToast(`CSV filtrado exportado (${rows.length} linhas).`, "success");
+    return;
+  }
+
+  if (type === "dividends") {
+    const rows = [...(FIN.dividends || [])];
+    const csv = _toCsv(
+      rows.map((d) => [
+        d.symbol || "",
+        d.div_type || "",
+        (d.pay_date || d.ex_date || "").slice(0, 10),
+        d.quantity || 0,
+        d.amount_per_share || 0,
+        d.total_amount || 0,
+        d.notes || "",
+      ]),
+      ["ativo", "tipo", "data", "quantidade", "valor_por_cota", "total", "notas"],
+    );
+    _downloadBlob(`dividendos-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+    showToast(`CSV de dividendos exportado (${rows.length} linhas).`, "success");
+    return;
+  }
+
+  const rows = [...(FIN.portfolio || [])];
+  const csv = _toCsv(
+    rows.map((p) => [
+      p.symbol || "",
+      p.name || "",
+      p.asset_type || "",
+      p.quantity || 0,
+      p.avg_price || 0,
+      p.current_price || 0,
+      p.total_invested || 0,
+    ]),
+    ["ativo", "nome", "tipo", "quantidade", "preco_medio", "preco_atual", "investido"],
+  );
+  _downloadBlob(`portfolio-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+  showToast(`CSV do portfólio exportado (${rows.length} linhas).`, "success");
+}
+
+function exportChartImage(chartKey, format) {
+  const chart = FIN.charts[chartKey];
+  if (!chart || !chart.canvas) {
+    showToast("Gráfico não disponível para exportação.", "warning");
+    return;
+  }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+  const dataUrl = chart.toBase64Image("image/png", 1);
+  const safeName = chartKey.replace(/[^a-z0-9_-]/gi, "").toLowerCase();
+
+  if (format === "svg") {
+    const width = chart.width || 1280;
+    const height = chart.height || 720;
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>\n`
+      + `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
+      + `<image href="${dataUrl}" width="${width}" height="${height}" /></svg>`;
+    _downloadBlob(`grafico-${safeName}-${stamp}.svg`, svg, "image/svg+xml;charset=utf-8");
+    showToast("Gráfico exportado em SVG.", "success");
+    return;
+  }
+
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = `grafico-${safeName}-${stamp}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  showToast("Gráfico exportado em PNG.", "success");
+}
+
 function openExportModal() {
   openFinModal("Exportar Dados", `
     <div class="fin-export-section">
@@ -4735,6 +5108,7 @@ function openExportModal() {
           <select id="fmExportFormat">
             <option value="xlsx">Excel (.xlsx)</option>
             <option value="csv">CSV</option>
+            <option value="csv_local">CSV filtrado (local)</option>
           </select>
         </div>
         <div class="fin-form-group">
@@ -4747,7 +5121,27 @@ function openExportModal() {
           </select>
         </div>
       </div>
+      <div class="fin-form-row" style="margin-top:8px">
+        <div class="fin-form-group">
+          <label>Gráfico</label>
+          <select id="fmChartType">
+            <option value="dividends">Fluxo de dividendos</option>
+            <option value="allocation">Alocação</option>
+            <option value="performance">Performance</option>
+            <option value="history">Histórico</option>
+            <option value="pnl">P&L</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Imagem</label>
+          <select id="fmChartFormat">
+            <option value="png">PNG</option>
+            <option value="svg">SVG</option>
+          </select>
+        </div>
+      </div>
       <button id="fmExportBtn" class="fin-form-submit">⤴ Exportar</button>
+      <button id="fmExportChartBtn" class="btn-text" type="button" style="margin-top:8px">🖼 Baixar gráfico</button>
     </div>
   `);
 
@@ -4756,10 +5150,28 @@ function openExportModal() {
     btn.addEventListener("click", () => {
       const format = byId("fmExportFormat").value;
       const type = byId("fmExportType").value;
+      if (format === "csv_local") {
+        exportFilteredCsv(type === "all" ? "portfolio" : type);
+        closeFinModal();
+        return;
+      }
       window.location.href = `/api/finance/export?format=${format}&type=${type}`;
       closeFinModal();
     });
   }
+
+  byId("fmExportChartBtn")?.addEventListener("click", () => {
+    const map = {
+      dividends: "dividends",
+      allocation: "allocation",
+      performance: "performance",
+      history: "history",
+      pnl: "pnl",
+    };
+    const chartType = byId("fmChartType")?.value || "dividends";
+    const chartFormat = byId("fmChartFormat")?.value || "png";
+    exportChartImage(map[chartType] || "dividends", chartFormat);
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -5187,6 +5599,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   initTheme();
+  initDensityMode();
   initA11yEnhancements();
   initFinanceLayoutTools();
   initFinanceKeyboardShortcuts();
@@ -5196,6 +5609,7 @@ document.addEventListener("DOMContentLoaded", () => {
   } else {
     FIN._rebalanceLoaded = true;
   }
+  maybeAutoOpenQuickTour();
   loadAll();
 
   const refreshBtn = byId("finRefreshBtn");
@@ -5226,7 +5640,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnFeatureFlags", openFeatureFlagsModal);
   bind("btnLayoutMode", toggleLayoutEditMode);
   bind("btnLayoutManage", openLayoutManagerModal);
+  bind("btnLayoutPreset", openLayoutPresetModal);
   bind("btnLayoutReset", resetFinanceLayout);
+  bind("btnTour", openQuickTourModal);
   bind("btnNotifications", setupNotifications);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);
@@ -5240,6 +5656,15 @@ document.addEventListener("DOMContentLoaded", () => {
   if (overlay) {
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) closeFinModal();
+    });
+  }
+
+  const main = byId("financeMain");
+  if (main) {
+    main.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-empty-action]");
+      if (!btn) return;
+      runEmptyStateAction(btn.dataset.emptyAction || "");
     });
   }
 

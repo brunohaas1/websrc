@@ -10,6 +10,37 @@ body.theme-ocean {
   --text-muted: #88c5df;
 }
 
+body.theme-sunset {
+  --bg: #1a0f12;
+  --card-bg: rgba(46, 17, 22, 0.76);
+  --border: rgba(251, 146, 60, 0.25);
+  --text: #ffe8dc;
+  --text-muted: #f5b89f;
+}
+
+body.fin-density-compact .fin-card {
+  padding: 12px 14px;
+}
+body.fin-density-compact .fin-card h2 {
+  font-size: 0.92rem;
+  margin-bottom: 8px;
+}
+body.fin-density-compact .fin-table th,
+body.fin-density-compact .fin-table td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 0.8rem;
+}
+
+body.fin-density-comfortable .fin-card {
+  padding: 20px 22px;
+}
+body.fin-density-comfortable .fin-table th,
+body.fin-density-comfortable .fin-table td {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
 .btn-icon.is-active {
   border-color: rgba(56, 189, 248, 0.48);
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.22) inset;
@@ -1796,16 +1827,45 @@ body.light .fin-alloc-total {
 .fin-toast {
   pointer-events: auto;
   max-width: 380px;
-  padding: 12px 20px;
+  padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.88rem;
   font-weight: 500;
   color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   backdrop-filter: blur(12px);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   transform: translateX(120%);
   opacity: 0;
   transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.fin-toast-message {
+  flex: 1;
+}
+
+.fin-toast-action,
+.fin-toast-close {
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fin-toast-action {
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  padding: 4px 8px;
+  font-size: 0.76rem;
+}
+
+.fin-toast-close {
+  background: transparent;
+  color: inherit;
+  padding: 0 6px;
+  font-size: 1rem;
 }
 
 .fin-toast-show {
@@ -1862,6 +1922,20 @@ body.light .fin-alloc-total {
 .fin-page-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.fin-empty-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fin-empty-cta {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.2));
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 700;
 }
 
 .fin-page-info {
