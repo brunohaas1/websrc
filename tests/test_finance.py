@@ -13,6 +13,13 @@ def jpost(client, url, data=None, **kw):
     return client.post(url, data=json.dumps(data or {}), content_type="application/json", **kw)
 
 
+def cleanup_headers(key: str = "test-cleanup-1"):
+    return {
+        "X-Cleanup-Confirm": "CONFIRM_CLEANUP_DUPLICATES",
+        "X-Idempotency-Key": key,
+    }
+
+
 def jput(client, url, data=None, **kw):
     return client.put(url, data=json.dumps(data or {}), content_type="application/json", **kw)
 
@@ -217,6 +224,7 @@ class TestTransactions:
             client,
             "/api/finance/maintenance/cleanup-duplicates",
             {},
+            headers=cleanup_headers("tx-cleanup-1"),
         )
         assert cleanup.status_code == 200
         payload = cleanup.get_json()
@@ -237,6 +245,12 @@ class TestTransactions:
         data = resp.get_json()
         assert data["ok"] is True
         assert data["method"] == "POST"
+
+    def test_cleanup_duplicates_requires_confirmation_headers(self, client):
+        resp = jpost(client, "/api/finance/maintenance/cleanup-duplicates", {})
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "X-Cleanup-Confirm" in data.get("required_header", "")
 
     def test_add_duplicate_dividend_is_rejected(self, client):
         asset = _add_asset(client).get_json()
@@ -275,12 +289,49 @@ class TestTransactions:
             )
             conn.commit()
 
-        cleanup = jpost(client, "/api/finance/maintenance/cleanup-duplicates", {})
+        cleanup = jpost(
+            client,
+            "/api/finance/maintenance/cleanup-duplicates",
+            {},
+            headers=cleanup_headers("div-cleanup-1"),
+        )
         assert cleanup.status_code == 200
         payload = cleanup.get_json()
         assert payload["ok"] is True
         assert payload["dividends"]["deleted"] == 1
         assert payload["dividends"]["duplicates"] == 1
+
+    def test_cleanup_duplicates_idempotent_replay(self, client, app):
+        asset = _add_asset(client).get_json()
+        from app.db import get_connection
+
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """INSERT INTO fin_dividends
+                    (asset_id, div_type, amount_per_share, total_amount,
+                     quantity, ex_date, pay_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (asset["id"], "dividend", 1.0, 10.0, 10, "2025-02-01", "2025-02-15", ""),
+            )
+            conn.execute(
+                """INSERT INTO fin_dividends
+                    (asset_id, div_type, amount_per_share, total_amount,
+                     quantity, ex_date, pay_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (asset["id"], "dividend", 1.0, 10.0, 10, "2025-02-01", "2025-02-15", ""),
+            )
+            conn.commit()
+
+        h = cleanup_headers("same-key-replay")
+        first = jpost(client, "/api/finance/maintenance/cleanup-duplicates", {}, headers=h)
+        assert first.status_code == 200
+        first_payload = first.get_json()
+        assert first_payload["dividends"]["deleted"] == 1
+
+        second = jpost(client, "/api/finance/maintenance/cleanup-duplicates", {}, headers=h)
+        assert second.status_code == 200
+        second_payload = second.get_json()
+        assert second_payload.get("idempotent_replay") is True
 
 
         resp = jpost(client, "/api/finance/transactions", {"asset_id": 1})

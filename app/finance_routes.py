@@ -38,6 +38,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         "independence": 180,
         "benchmark": 600,
     }
+    CLEANUP_CONFIRM_TOKEN = "CONFIRM_CLEANUP_DUPLICATES"
+    CLEANUP_COOLDOWN_SECONDS = 600
+    CLEANUP_IDEMPOTENCY_TTL = 3600
 
     def _invalidate_cache_prefixes(*prefixes: str) -> None:
         for prefix in prefixes:
@@ -512,6 +515,36 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("2/day")
     @require_finance_key
     def finance_cleanup_duplicate_transactions():
+        confirm_token = str(request.headers.get("X-Cleanup-Confirm", "")).strip()
+        if confirm_token != CLEANUP_CONFIRM_TOKEN:
+            return jsonify({
+                "error": "Confirmação obrigatória para limpeza.",
+                "required_header": "X-Cleanup-Confirm",
+                "required_value": CLEANUP_CONFIRM_TOKEN,
+            }), 400
+
+        idem_key = str(request.headers.get("X-Idempotency-Key", "")).strip()
+        if not idem_key:
+            return jsonify({
+                "error": "Header X-Idempotency-Key é obrigatório.",
+            }), 400
+
+        idem_cache_key = f"finance:cleanup:idem:{idem_key}"
+        cached_result = cache.get(idem_cache_key)
+        if cached_result:
+            return jsonify({"ok": True, "idempotent_replay": True, **cached_result})
+
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        cooldown_key = "finance:cleanup:last_run_ts"
+        last_run = cache.get(cooldown_key) or {}
+        last_ts = int(last_run.get("ts", 0) or 0)
+        if last_ts and (now_ts - last_ts) < CLEANUP_COOLDOWN_SECONDS:
+            retry_after = CLEANUP_COOLDOWN_SECONDS - (now_ts - last_ts)
+            return jsonify({
+                "error": "Cleanup em cooldown. Tente novamente depois.",
+                "retry_after_seconds": retry_after,
+            }), 429
+
         tx_payload = repo.cleanup_duplicate_fin_transactions()
         div_payload = repo.cleanup_duplicate_fin_dividends()
         touched_asset_ids = [
@@ -531,13 +564,17 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "tx_deleted": tx_payload.get("deleted", 0),
                 "div_deleted": div_payload.get("deleted", 0),
                 "assets": len(touched_asset_ids),
+                "idempotency_key": idem_key,
             },
         )
-        return jsonify({
+        response_payload = {
             "ok": True,
             "transactions": tx_payload,
             "dividends": div_payload,
-        })
+        }
+        cache.set(idem_cache_key, response_payload, CLEANUP_IDEMPOTENCY_TTL)
+        cache.set(cooldown_key, {"ts": now_ts}, CLEANUP_COOLDOWN_SECONDS)
+        return jsonify(response_payload)
 
     @app.get("/api/finance/maintenance/cleanup-duplicates")
     def finance_cleanup_duplicate_transactions_help():
@@ -546,6 +583,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "message": "Use POST para executar a limpeza de duplicatas.",
             "method": "POST",
             "path": "/api/finance/maintenance/cleanup-duplicates",
+            "required_headers": {
+                "X-Cleanup-Confirm": CLEANUP_CONFIRM_TOKEN,
+                "X-Idempotency-Key": "<valor-unico>",
+            },
+            "cooldown_seconds": CLEANUP_COOLDOWN_SECONDS,
         })
 
     # ── Watchlist ───────────────────────────────────────────

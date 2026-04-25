@@ -5334,6 +5334,10 @@ async function openFinanceSettingsModal() {
       return;
     }
 
+    const historyPrefs = readHistoryPrefs();
+    const divPrefs = getDividendsChartPrefs();
+    const autoRefresh = localStorage.getItem("fin_auto_refresh") || "300";
+
     openFinModal("Configurações Financeiras", `
       <form data-form-action="submitFinanceSettings">
         <p class="fin-empty" style="text-align:left;margin-bottom:12px">
@@ -5385,6 +5389,39 @@ async function openFinanceSettingsModal() {
           <input type="number" id="finSetCurrencyUpdate" min="1" max="1440" value="${escapeHtml(data.currency_update_minutes || "15")}" />
         </div>
 
+        <hr style="margin:16px 0;border-color:var(--fin-border,#333)">
+        <p class="fin-empty" style="text-align:left;margin-bottom:10px;font-weight:600">🎛 Preferências de visualização</p>
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Período padrão (Histórico)</label>
+            <select id="finPrefHistoryPeriod">
+              <option value="30" ${String(historyPrefs.period) === "30" ? "selected" : ""}>30 dias</option>
+              <option value="90" ${String(historyPrefs.period) === "90" ? "selected" : ""}>90 dias</option>
+              <option value="180" ${String(historyPrefs.period) === "180" ? "selected" : ""}>6 meses</option>
+              <option value="365" ${String(historyPrefs.period) === "365" ? "selected" : ""}>1 ano</option>
+            </select>
+          </div>
+          <div class="fin-form-group">
+            <label>Densidade padrão (Proventos)</label>
+            <select id="finPrefDivDensity">
+              <option value="smart" ${String(divPrefs.density) === "smart" ? "selected" : ""}>Inteligente</option>
+              <option value="all" ${String(divPrefs.density) === "all" ? "selected" : ""}>Todos</option>
+              <option value="sparse" ${String(divPrefs.density) === "sparse" ? "selected" : ""}>Reduzida</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="fin-form-group">
+          <label>Auto-refresh padrão</label>
+          <select id="finPrefAutoRefresh">
+            <option value="0" ${autoRefresh === "0" ? "selected" : ""}>Manual</option>
+            <option value="60" ${autoRefresh === "60" ? "selected" : ""}>1 min</option>
+            <option value="300" ${autoRefresh === "300" ? "selected" : ""}>5 min</option>
+            <option value="600" ${autoRefresh === "600" ? "selected" : ""}>10 min</option>
+            <option value="1800" ${autoRefresh === "1800" ? "selected" : ""}>30 min</option>
+          </select>
+        </div>
+
         <button type="submit" class="fin-form-submit">💾 Salvar configurações</button>
       </form>
 
@@ -5408,12 +5445,36 @@ async function openFinanceSettingsModal() {
 async function runCleanupDuplicates() {
   const btn = byId("btnCleanupDuplicates");
   const result = byId("cleanupResult");
+
+  const accepted = window.prompt(
+    "Confirma limpeza de duplicatas? Digite CONFIRM_CLEANUP_DUPLICATES para continuar.",
+    "",
+  );
+  if (accepted !== "CONFIRM_CLEANUP_DUPLICATES") {
+    showToast("Limpeza cancelada: confirmação inválida.", "warning");
+    return;
+  }
+
+  const idemKey = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : `cleanup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
   if (btn) { btn.disabled = true; btn.textContent = "⏳ Processando…"; }
   try {
-    const resp = await finFetch("/api/finance/maintenance/cleanup-duplicates", { method: "POST" });
+    const resp = await finFetch("/api/finance/maintenance/cleanup-duplicates", {
+      method: "POST",
+      headers: {
+        "X-Cleanup-Confirm": "CONFIRM_CLEANUP_DUPLICATES",
+        "X-Idempotency-Key": idemKey,
+      },
+    });
     const data = await resp.json();
     if (!resp.ok) {
-      showToast(data.error || "Erro na limpeza", "error");
+      if (resp.status === 429 && data.retry_after_seconds) {
+        showToast(`Cooldown ativo. Aguarde ${data.retry_after_seconds}s.`, "warning");
+      } else {
+        showToast(data.error || "Erro na limpeza", "error");
+      }
     } else {
       const tx = data.transactions || {};
       const div = data.dividends || {};
@@ -5440,6 +5501,9 @@ async function submitFinanceSettings() {
 
   const brapiToken = byId("finSetBrapiToken")?.value?.trim() || "";
   const financeApiKey = byId("finSetFinanceApiKey")?.value?.trim() || "";
+  const prefHistoryPeriod = byId("finPrefHistoryPeriod")?.value || "180";
+  const prefDivDensity = byId("finPrefDivDensity")?.value || "smart";
+  const prefAutoRefresh = byId("finPrefAutoRefresh")?.value || "300";
   if (brapiToken) payload.brapi_token = brapiToken;
   if (financeApiKey) payload.finance_api_key = financeApiKey;
 
@@ -5456,8 +5520,29 @@ async function submitFinanceSettings() {
       return;
     }
 
+    // Persist local visualization defaults
+    const historyPrefs = readHistoryPrefs();
+    localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
+      ...historyPrefs,
+      period: prefHistoryPeriod,
+    }));
+
+    const divPrefs = getDividendsChartPrefs();
+    setDividendsChartPrefs({
+      ...divPrefs,
+      density: ["smart", "all", "sparse"].includes(prefDivDensity) ? prefDivDensity : "smart",
+    });
+
+    localStorage.setItem("fin_auto_refresh", prefAutoRefresh);
+    const autoSel = byId("autoRefreshSelect");
+    if (autoSel) autoSel.value = prefAutoRefresh;
+    _startAutoRefresh(Number(prefAutoRefresh));
+
     showToast("Configurações salvas com sucesso!", "success");
     closeFinModal();
+    applyHistoryPrefs();
+    loadHistoryFromControls();
+    renderDividends(FIN.dividends || []);
     loadAll();
   } catch {
     showToast("Erro de rede ao salvar configurações", "error");
