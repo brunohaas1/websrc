@@ -3194,52 +3194,12 @@ function renderDividends(divs) {
     `;
   }
 
-  const rows = divs.slice(0, 50).map((d) => {
-    const date = (d.pay_date || d.ex_date || d.created_at || "").slice(0, 10);
-    const typeCls = d.div_type === "jcp" ? "fin-badge-sell" : "fin-badge-buy";
-    const label = (typeLabels[d.div_type] || d.div_type || "DIV").toUpperCase();
-    return `
-      <tr>
-        <td>${escapeHtml(date)}</td>
-        <td><span class="fin-badge ${typeCls}">${escapeHtml(label)}</span></td>
-        <td><strong>${escapeHtml(d.symbol || "—")}</strong></td>
-        <td class="text-right mono">${formatNumber(d.quantity, 0)}</td>
-        <td class="text-right mono">${formatBRL(d.amount_per_share)}</td>
-        <td class="text-right mono">${formatBRL(d.total_amount)}</td>
-        <td>${escapeHtml(d.notes || "")}</td>
-        <td class="text-center">
-          <button class="fin-del-btn" data-action="deleteDividend" data-id="${d.id}" title="Excluir">🗑️</button>
-        </td>
-      </tr>
-    `;
-  }).join("");
-
   el.innerHTML = `
     <div class="fin-div-table-toolbar">
-      <div class="fin-div-table-caption">Lista recente de proventos, com foco em consulta rápida dos últimos registros.</div>
-      <button type="button" id="btnBrowseDividendsInline" class="btn-text">Ver todos e filtrar</button>
-    </div>
-    <div class="fin-table-wrap">
-      <table class="fin-table">
-        <thead>
-          <tr>
-            <th>Data Pgto</th>
-            <th>Tipo</th>
-            <th>Ativo</th>
-            <th class="text-right">Qtd</th>
-            <th class="text-right">$/Ação</th>
-            <th class="text-right">Total</th>
-            <th>Notas</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="fin-div-table-caption">Nesta tela ficam apenas os gráficos e o resumo de proventos.</div>
+      <a href="/finance/registros" class="btn-text">Abrir Registros</a>
     </div>
   `;
-
-  const browseBtn = byId("btnBrowseDividendsInline");
-  if (browseBtn) browseBtn.addEventListener("click", () => openCadastroBrowserModal("dividends"));
 
   renderDividendsChart(divs);
   renderDividendsTypeChart(totals, typeLabels);
@@ -3271,10 +3231,36 @@ function renderDividendsChart(divs) {
   const labels = Object.keys(monthly).sort();
   const data = labels.map((k) => monthly[k]);
 
+  const barValueLabelsPlugin = {
+    id: "barValueLabelsPlugin",
+    afterDatasetsDraw(chart) {
+      const { ctx } = chart;
+      const dataset = chart.data.datasets[0];
+      const meta = chart.getDatasetMeta(0);
+      if (!dataset || !meta || !meta.data) return;
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.font = "700 11px Inter, sans-serif";
+      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0";
+
+      meta.data.forEach((bar, index) => {
+        const value = dataset.data[index];
+        if (!Number.isFinite(Number(value))) return;
+        const label = formatBRL(value);
+        ctx.fillText(label, bar.x, bar.y - 6);
+      });
+
+      ctx.restore();
+    },
+  };
+
   if (FIN.charts.dividends) FIN.charts.dividends.destroy();
 
   FIN.charts.dividends = new Chart(canvas, {
     type: "bar",
+    plugins: [barValueLabelsPlugin],
     data: {
       labels,
       datasets: [
