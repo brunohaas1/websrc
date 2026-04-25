@@ -1959,7 +1959,39 @@ class Repository:
 
     # ── Transactions ────────────────────────────────────────
 
+    def is_duplicate_fin_transaction(self, data: dict[str, Any]) -> bool:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("""
+                    SELECT id
+                    FROM fin_transactions
+                    WHERE asset_id = ?
+                      AND tx_type = ?
+                      AND quantity = ?
+                      AND price = ?
+                      AND total = ?
+                      AND fees = ?
+                      AND tx_date = ?
+                      AND COALESCE(notes, '') = COALESCE(?, '')
+                    LIMIT 1
+                """),
+                (
+                    data["asset_id"],
+                    data.get("tx_type", "buy"),
+                    data["quantity"],
+                    data["price"],
+                    data["total"],
+                    data.get("fees", 0),
+                    data.get("tx_date"),
+                    data.get("notes"),
+                ),
+            ).fetchone()
+            return row is not None
+
     def add_fin_transaction(self, data: dict[str, Any]) -> int:
+        if self.is_duplicate_fin_transaction(data):
+            raise ValueError("Transação duplicada")
+
         with get_connection(self.database_target) as conn:
             q = self._sql("""
                 INSERT INTO fin_transactions

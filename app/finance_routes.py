@@ -335,6 +335,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if tx_type not in ("buy", "sell"):
             return jsonify({"error": "tx_type: buy ou sell"}), 400
         total = qty * price + fees
+        tx_date = str(body.get("tx_date", "")).strip()
+        if not tx_date:
+            tx_date = datetime.now().strftime("%Y-%m-%d")
         data = {
             "asset_id": int(body["asset_id"]),
             "tx_type": tx_type,
@@ -343,9 +346,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "total": total,
             "fees": fees,
             "notes": sanitize_text(str(body.get("notes", "")), 500),
-            "tx_date": str(body.get("tx_date", "")),
+            "tx_date": tx_date,
         }
-        tx_id = repo.add_fin_transaction(data)
+        try:
+            tx_id = repo.add_fin_transaction(data)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 409
 
         # Update portfolio automatically
         _recalc_portfolio(repo, data["asset_id"])

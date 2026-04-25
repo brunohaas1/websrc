@@ -168,6 +168,15 @@ class TestTransactions:
         assert data["ok"] is True
         assert data["id"] >= 1
 
+    def test_add_duplicate_transaction_is_rejected(self, client):
+        asset = _add_asset(client).get_json()
+        first = _add_tx(client, asset["id"], qty=10, price=30)
+        assert first.status_code == 201
+
+        second = _add_tx(client, asset["id"], qty=10, price=30)
+        assert second.status_code == 409
+        assert "duplicada" in second.get_json()["error"].lower()
+
     def test_add_transaction_missing_fields(self, client):
         resp = jpost(client, "/api/finance/transactions", {"asset_id": 1})
         assert resp.status_code == 400
