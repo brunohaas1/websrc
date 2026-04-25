@@ -84,7 +84,33 @@
   padding: 18px 20px;
   backdrop-filter: blur(8px);
   transition: transform 0.2s, box-shadow 0.2s;
-  overflow: hidden;
+  overflow: auto;
+  resize: vertical;
+  min-height: 80px;
+  align-self: start;
+  box-sizing: border-box;
+}
+
+/* Resize grip affordance */
+.fin-card::after {
+  content: '';
+  display: block;
+  height: 6px;
+  margin: 10px -20px -18px;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0px,
+    transparent 3px,
+    rgba(148, 163, 184, 0.18) 3px,
+    rgba(148, 163, 184, 0.18) 5px
+  );
+  cursor: ns-resize;
+  border-radius: 0 0 14px 14px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.fin-card:hover::after {
+  opacity: 1;
 }
 
 .fin-card:hover {
@@ -987,6 +1013,10 @@ body.light #autoRefreshSelect.fin-inline-select {
 
   .fin-card {
     padding: 14px 14px;
+    resize: none;
+  }
+  .fin-card::after {
+    display: none;
   }
 
   .fin-card.fin-wide {
@@ -2031,7 +2061,7 @@ body.light .fin-shortcut-row kbd {
   padding: 0 4px;
 }
 .fin-dividends-chart-wrap--hero {
-  height: 240px;
+  height: 420px;
   margin-top: 0;
   padding: 12px;
   border-radius: 16px;
@@ -2049,7 +2079,7 @@ body.light .fin-shortcut-row kbd {
   max-height: 180px;
 }
 .fin-dividends-chart-wrap--hero canvas {
-  max-height: 220px;
+  max-height: 400px;
 }
 
 .fin-dividends-chart-wrap--small canvas {
