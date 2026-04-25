@@ -1988,6 +1988,63 @@ class Repository:
             ).fetchone()
             return row is not None
 
+    def cleanup_duplicate_fin_transactions(self) -> dict[str, Any]:
+        scanned = 0
+        duplicate_rows = 0
+        deleted = 0
+        touched_asset_ids: set[int] = set()
+
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("""
+                    SELECT id, asset_id, tx_type, quantity, price,
+                           total, fees, notes, tx_date
+                    FROM fin_transactions
+                    ORDER BY id ASC
+                """),
+            ).fetchall()
+
+            scanned = len(rows)
+            seen: set[tuple[Any, ...]] = set()
+            delete_ids: list[int] = []
+
+            for row in rows:
+                key = (
+                    int(row["asset_id"]),
+                    str(row["tx_type"] or "").strip().lower(),
+                    float(row["quantity"] or 0),
+                    float(row["price"] or 0),
+                    float(row["total"] or 0),
+                    float(row["fees"] or 0),
+                    str(row["tx_date"] or "").strip(),
+                    str(row["notes"] or "").strip(),
+                )
+                if key in seen:
+                    duplicate_rows += 1
+                    delete_ids.append(int(row["id"]))
+                    touched_asset_ids.add(int(row["asset_id"]))
+                    continue
+                seen.add(key)
+
+            if delete_ids:
+                placeholders = ",".join(["?"] * len(delete_ids))
+                conn.execute(
+                    self._sql(
+                        f"DELETE FROM fin_transactions WHERE id IN ({placeholders})"
+                    ),
+                    tuple(delete_ids),
+                )
+                deleted = len(delete_ids)
+
+            conn.commit()
+
+        return {
+            "scanned": scanned,
+            "duplicates": duplicate_rows,
+            "deleted": deleted,
+            "touched_asset_ids": sorted(touched_asset_ids),
+        }
+
     def add_fin_transaction(self, data: dict[str, Any]) -> int:
         if self.is_duplicate_fin_transaction(data):
             raise ValueError("Transação duplicada")

@@ -508,6 +508,32 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _audit("batch_update", "transaction", None, {"count": updated, "tx_ids": tx_ids, "fields": sorted(list(data.keys()))})
         return jsonify({"ok": True, "updated": updated})
 
+    @app.post("/api/finance/maintenance/cleanup-duplicates")
+    @limiter.limit("2/day")
+    @require_finance_key
+    def finance_cleanup_duplicate_transactions():
+        payload = repo.cleanup_duplicate_fin_transactions()
+        touched_asset_ids = [
+            int(aid) for aid in payload.pop("touched_asset_ids", [])
+        ]
+        for asset_id in touched_asset_ids:
+            _recalc_portfolio(repo, asset_id)
+        _invalidate_financial_state_cache(
+            include_market=True,
+            include_dividends=True,
+        )
+        _audit(
+            "cleanup",
+            "transaction_duplicates",
+            None,
+            {
+                "deleted": payload.get("deleted", 0),
+                "duplicates": payload.get("duplicates", 0),
+                "assets": len(touched_asset_ids),
+            },
+        )
+        return jsonify({"ok": True, **payload})
+
     # ── Watchlist ───────────────────────────────────────────
 
     @app.get("/api/finance/watchlist")

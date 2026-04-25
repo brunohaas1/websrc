@@ -177,6 +177,60 @@ class TestTransactions:
         assert second.status_code == 409
         assert "duplicada" in second.get_json()["error"].lower()
 
+    def test_cleanup_duplicate_transactions_recalculates_portfolio(
+        self,
+        client,
+        app,
+    ):
+        from app.db import get_connection
+
+        asset = _add_asset(client).get_json()
+        tx1 = _add_tx(client, asset["id"], qty=10, price=30).get_json()
+        _add_tx(client, asset["id"], qty=5, price=40)
+
+        # Simulate old duplicate row already present in database.
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO fin_transactions
+                    (asset_id, tx_type, quantity, price, total, fees, notes, tx_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (asset["id"], "buy", 10, 30, 300, 0, "", "2025-01-15"),
+            )
+            conn.commit()
+
+        # Force a portfolio recalc while duplicate still exists,
+        # without changing dedupe key fields.
+        recalc_resp = jput(
+            client,
+            f"/api/finance/transactions/{tx1['id']}",
+            {"fees": 0},
+        )
+        assert recalc_resp.status_code == 200
+
+        before = client.get("/api/finance/portfolio").get_json()
+        before_pos = [p for p in before if p.get("asset_id") == asset["id"]]
+        assert before_pos[0]["quantity"] == pytest.approx(25.0)
+
+        cleanup = jpost(
+            client,
+            "/api/finance/maintenance/cleanup-duplicates",
+            {},
+        )
+        assert cleanup.status_code == 200
+        payload = cleanup.get_json()
+        assert payload["ok"] is True
+        assert payload["deleted"] == 1
+        assert payload["duplicates"] == 1
+
+        txs_after = client.get("/api/finance/transactions").get_json()
+        assert len([t for t in txs_after if t["asset_id"] == asset["id"]]) == 2
+
+        after = client.get("/api/finance/portfolio").get_json()
+        after_pos = [p for p in after if p.get("asset_id") == asset["id"]]
+        assert after_pos[0]["quantity"] == pytest.approx(15.0)
+
     def test_add_transaction_missing_fields(self, client):
         resp = jpost(client, "/api/finance/transactions", {"asset_id": 1})
         assert resp.status_code == 400
