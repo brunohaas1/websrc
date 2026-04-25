@@ -2549,11 +2549,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 except Exception as exc:
                     logger.warning("brapi indices fetch failed: %s", exc)
 
-            # Yahoo Finance v8 chart fallback for all indices
-            for yahoo_sym, default_name in _INDEX_SYMBOLS.items():
-                # Skip IBOV if already loaded from brapi
+            # Yahoo Finance v8 chart fallback — fetch all in parallel
+            def _yahoo_index(yahoo_sym: str, default_name: str) -> None:
                 if brapi_ok and yahoo_sym == "^BVSP":
-                    continue
+                    return
                 try:
                     yresp = http_requests.get(
                         f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}",
@@ -2562,10 +2561,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         timeout=8,
                     )
                     if not yresp.ok:
-                        continue
+                        return
                     chart = yresp.json().get("chart", {}).get("result", [])
                     if not chart:
-                        continue
+                        return
                     meta = chart[0].get("meta", {})
                     price = meta.get("regularMarketPrice")
                     prev_close = meta.get("chartPreviousClose") or meta.get(
@@ -2593,6 +2592,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     logger.warning(
                         "Yahoo indices fetch failed for %s: %s", yahoo_sym, exc,
                     )
+
+            with ThreadPoolExecutor(max_workers=4) as idx_executor:
+                idx_futures = [
+                    idx_executor.submit(_yahoo_index, sym, name)
+                    for sym, name in _INDEX_SYMBOLS.items()
+                ]
+                for f in as_completed(idx_futures):
+                    f.result()
 
         # Run all fetches in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:
