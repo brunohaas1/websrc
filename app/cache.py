@@ -40,6 +40,11 @@ class MemoryTTLCache:
     def delete(self, key: str) -> None:
         self._store.pop(key, None)
 
+    def delete_prefix(self, prefix: str) -> None:
+        keys = [k for k in self._store.keys() if k.startswith(prefix)]
+        for key in keys:
+            self._store.pop(key, None)
+
 
 class RedisJSONCache:
     def __init__(self, redis_client):
@@ -70,6 +75,14 @@ class RedisJSONCache:
     def delete(self, key: str) -> None:
         try:
             self.redis.delete(key)
+        except Exception:
+            pass
+
+    def delete_prefix(self, prefix: str) -> None:
+        try:
+            keys = list(self.redis.scan_iter(match=f"{prefix}*"))
+            if keys:
+                self.redis.delete(*keys)
         except Exception:
             pass
 
