@@ -2,6 +2,29 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+function finFetch(url, opts = {}) {
+  const meta = document.querySelector('meta[name="finance-key"]');
+  const key = meta ? meta.getAttribute("content") : "";
+  if (key) {
+    opts.headers = { ...(opts.headers || {}), "X-Finance-Key": key };
+  }
+  return fetch(url, opts);
+}
+
+async function fetchRecordsJson(url, fallbackValue = []) {
+  try {
+    const response = await finFetch(url);
+    if (!response.ok) {
+      console.warn("Records endpoint returned non-OK status", { url, status: response.status });
+      return fallbackValue;
+    }
+    return await response.json();
+  } catch (err) {
+    console.warn("Records endpoint request failed", { url, err });
+    return fallbackValue;
+  }
+}
+
 function formatBRL(value) {
   if (value == null || Number.isNaN(Number(value))) return "—";
   return Number(value).toLocaleString("pt-BR", {
@@ -119,11 +142,10 @@ async function loadRecords() {
   if (divEl) divEl.innerHTML = '<p class="fin-empty">Carregando proventos...</p>';
 
   try {
-    const [txResp, divResp] = await Promise.all([
-      fetch("/api/finance/transactions?limit=500"),
-      fetch("/api/finance/dividends?limit=500"),
+    const [txData, divData] = await Promise.all([
+      fetchRecordsJson("/api/finance/transactions?limit=500", []),
+      fetchRecordsJson("/api/finance/dividends", []),
     ]);
-    const [txData, divData] = await Promise.all([txResp.json(), divResp.json()]);
     renderTransactions(Array.isArray(txData) ? txData : []);
     renderDividends(Array.isArray(divData) ? divData : []);
   } catch (err) {

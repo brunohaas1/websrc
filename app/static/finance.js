@@ -127,6 +127,20 @@ function finFetch(url, opts = {}) {
   return fetch(url, opts);
 }
 
+async function fetchFinanceJson(url, fallbackValue) {
+  try {
+    const response = await finFetch(url);
+    if (!response.ok) {
+      console.warn("Finance endpoint returned non-OK status", { url, status: response.status });
+      return fallbackValue;
+    }
+    return await response.json();
+  } catch (err) {
+    console.warn("Finance endpoint request failed", { url, err });
+    return fallbackValue;
+  }
+}
+
 function badgeClass(type) {
   const map = {
     stock: "fin-badge-stock",
@@ -347,31 +361,31 @@ async function loadAll(options = {}) {
   try {
     const criticalFetchStart = perfEnabled ? performance.now() : 0;
     const [summary, transactions, watchlist, goals, assets, dividends, allocTargets, passiveGoal] = await Promise.all([
-      finFetch("/api/finance/summary").then((r) => r.json()),
-      finFetch("/api/finance/transactions").then((r) => r.json()),
-      finFetch("/api/finance/watchlist").then((r) => r.json()),
-      finFetch("/api/finance/goals").then((r) => r.json()),
-      finFetch("/api/finance/assets").then((r) => r.json()),
-      finFetch("/api/finance/dividends").then((r) => r.json()),
-      finFetch("/api/finance/allocation-targets").then((r) => r.json()),
-      finFetch("/api/finance/goals/passive-income").then((r) => r.json()),
+      fetchFinanceJson("/api/finance/summary", { portfolio: [], currency_rates: [] }),
+      fetchFinanceJson("/api/finance/transactions", []),
+      fetchFinanceJson("/api/finance/watchlist", []),
+      fetchFinanceJson("/api/finance/goals", []),
+      fetchFinanceJson("/api/finance/assets", []),
+      fetchFinanceJson("/api/finance/dividends", []),
+      fetchFinanceJson("/api/finance/allocation-targets", []),
+      fetchFinanceJson("/api/finance/goals/passive-income", { target_monthly: 0, note: "" }),
     ]);
     if (perfEnabled) _setPerfRunPatch(perfRunId, { criticalFetchMs: _ms(performance.now() - criticalFetchStart) });
 
-    FIN.summary = summary;
-    FIN.portfolio = summary.portfolio || [];
-    FIN.transactions = transactions;
-    FIN.watchlist = watchlist;
-    FIN.goals = goals;
-    FIN.assets = (assets || []).map((a) => ({
+    FIN.summary = summary || { portfolio: [], currency_rates: [] };
+    FIN.portfolio = FIN.summary.portfolio || [];
+    FIN.transactions = Array.isArray(transactions) ? transactions : [];
+    FIN.watchlist = Array.isArray(watchlist) ? watchlist : [];
+    FIN.goals = Array.isArray(goals) ? goals : [];
+    FIN.assets = (Array.isArray(assets) ? assets : []).map((a) => ({
       id: a.id,
       symbol: a.symbol,
       name: a.name || a.symbol,
       asset_type: a.asset_type,
     }));
-    FIN.dividends = dividends || [];
+    FIN.dividends = Array.isArray(dividends) ? dividends : [];
     FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
-    FIN.allocationTargets = allocTargets || [];
+    FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
 
     const criticalRenderStart = perfEnabled ? performance.now() : 0;
     renderSummary(summary);
@@ -4836,7 +4850,6 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddGoal", openAddGoalModal);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
-  bind("btnBrowseRecords", () => openCadastroBrowserModal("assets"));
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
   bind("btnEditAllocation", openAllocationModal);
   bind("btnExportData", openExportModal);
