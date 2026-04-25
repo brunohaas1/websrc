@@ -2280,12 +2280,17 @@ body.light .btn-glyph {
 }
 
 .topbar-tools .btn-icon {
-  min-height: 46px;
-  padding: 10px 15px;
+  width: auto;
+  min-width: 120px;
+  min-height: 52px;
+  padding: 12px 18px;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.32);
   background: linear-gradient(145deg, rgba(30, 41, 59, 0.94), rgba(15, 23, 42, 0.82));
   box-shadow: 0 10px 24px rgba(2, 8, 23, 0.35);
+  gap: 9px;
+  white-space: nowrap;
+  line-height: 1.1;
 }
 
 .topbar-tools .btn-icon:hover {
@@ -2403,5 +2408,12 @@ body.light .fin-ai-btn.active {
     min-height: 42px;
     font-size: 0.83rem;
     padding: 8px 12px;
+  }
+
+  .topbar-tools .btn-icon {
+    width: auto;
+    min-width: 108px;
+    min-height: 46px;
+    padding: 10px 14px;
   }
 }
