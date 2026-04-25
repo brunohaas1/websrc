@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#050a15" />
-    <meta name="finance-flags" content='{}' />
+    <meta name="finance-flags" content='{{ finance_flags|default({})|tojson }}' />
     <link rel="manifest" href="/static/manifest.json" />
     <title>Dashboard Financeiro — Personal Web Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -14,8 +14,46 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='finance.css') }}?v={{ asset_hash('finance.css') }}" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_shared.js') }}?v={{ asset_hash('finance_shared.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_flags.js') }}?v={{ asset_hash('finance_flags.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_audit.js') }}?v={{ asset_hash('finance_audit.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_history.js') }}?v={{ asset_hash('finance_history.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_dividends.js') }}?v={{ asset_hash('finance_dividends.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_settings.js') }}?v={{ asset_hash('finance_settings.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_ai.js') }}?v={{ asset_hash('finance_ai.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_bootstrap.js') }}?v={{ asset_hash('finance_bootstrap.js') }}" defer></script>
   </head>
   <body>
+    {% macro fin_skeleton(kind='rows') -%}
+      <div class="fin-skeleton-table" data-skeleton-kind="{{ kind }}">
+        {% if kind == 'mini_rows' %}
+          <div class="skeleton fin-skel-row fin-skel-sm"></div>
+          <div class="skeleton fin-skel-row fin-skel-sm"></div>
+          <div class="skeleton fin-skel-row fin-skel-sm"></div>
+        {% elif kind == 'portfolio' %}
+          <div class="skeleton fin-skel-header"></div>
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+        {% elif kind == 'watchlist' %}
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+          <div class="skeleton fin-skel-row"></div>
+        {% elif kind == 'goals' %}
+          <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+          <div class="skeleton fin-skel-progress"></div>
+          <div class="skeleton fin-skel-row fin-skel-row--short"></div>
+          <div class="skeleton fin-skel-progress"></div>
+        {% elif kind == 'dividends' %}
+          <div class="skeleton fin-skel-header"></div>
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row"></div>
+          <div class="skeleton fin-skel-row"></div>
+        {% endif %}
+      </div>
+    {%- endmacro %}
+
     <a class="skip-link" href="#financeMain">Pular para conteúdo principal</a>
 
     <header class="topbar">
@@ -89,11 +127,7 @@
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>
         <div id="finCurrencyContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-          </div>
+          {{ fin_skeleton('mini_rows') }}
         </div>
       </section>
 
@@ -101,11 +135,7 @@
       <section class="fin-card" id="finIndicesCard">
         <h2>📊 Índices de Mercado</h2>
         <div id="finIndicesContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-            <div class="skeleton fin-skel-row fin-skel-sm"></div>
-          </div>
+          {{ fin_skeleton('mini_rows') }}
         </div>
       </section>
 
@@ -134,13 +164,7 @@
           <button id="btnImportPortfolio" class="btn-text" title="Importar Excel/CSV">⤵ Importar</button>
         </h2>
         <div id="finPortfolioContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-header"></div>
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
-          </div>
+          {{ fin_skeleton('portfolio') }}
         </div>
       </section>
 
@@ -152,11 +176,7 @@
           <button id="btnAddWatchlist" class="btn-text" title="Adicionar à watchlist">＋ Adicionar</button>
         </h2>
         <div id="finWatchlistContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
-            <div class="skeleton fin-skel-row"></div>
-          </div>
+          {{ fin_skeleton('watchlist') }}
         </div>
       </section>
 
@@ -169,12 +189,7 @@
         </h2>
         <div id="finPassiveIncomeGoalSummary" class="fin-passive-goal-summary"></div>
         <div id="finGoalsContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
-            <div class="skeleton fin-skel-progress"></div>
-            <div class="skeleton fin-skel-row fin-skel-row--short"></div>
-            <div class="skeleton fin-skel-progress"></div>
-          </div>
+          {{ fin_skeleton('goals') }}
         </div>
       </section>
 
@@ -228,12 +243,7 @@
           </div>
         </div>
         <div id="finDividendsContent" class="fin-card-body">
-          <div class="fin-skeleton-table">
-            <div class="skeleton fin-skel-header"></div>
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row"></div>
-            <div class="skeleton fin-skel-row"></div>
-          </div>
+          {{ fin_skeleton('dividends') }}
         </div>
       </section>
 
@@ -350,7 +360,16 @@
       </section>
 
       <section class="fin-card" id="finAuditCard">
-        <h2>🧾 Auditoria</h2>
+        <h2>🧾 Auditoria
+          <select id="auditActionFilter" class="fin-inline-select" title="Filtrar ação">
+            <option value="">Todas ações</option>
+            <option value="add">Add</option>
+            <option value="update">Update</option>
+            <option value="delete">Delete</option>
+            <option value="cleanup">Cleanup</option>
+            <option value="batch_update">Batch update</option>
+          </select>
+        </h2>
         <div id="finAuditContent" class="fin-card-body">
           <p class="fin-empty">Sem eventos recentes.</p>
         </div>

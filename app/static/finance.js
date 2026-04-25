@@ -26,8 +26,10 @@ const FIN = {
   _txFilter: { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" },
   _txSelected: {},
   performanceMetrics: null,
+  auditEntries: [],
   _rebalanceLoaded: false,
   _secondaryCache: { ts: 0, payload: null },
+  _widgetCache: {},
   _marketStaleNotified: false,
   _perf: { seq: 0, lastRunId: 0, runs: {}, last: null, history: [] },
   flags: {},
@@ -38,62 +40,18 @@ const FIN = {
 };
 
 const SECONDARY_CACHE_TTL_MS = 25000;
+const WIDGET_CACHE_TTL_MS = 20000;
 const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
 const MARKET_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const FIN_FLAGS_STORAGE_KEY = "fin_feature_flags";
-const FIN_FLAGS_DEFAULT = {
-  a11yEnhancements: true,
-  keyboardShortcuts: true,
-  sectionQuickNav: true,
-  featureFlagsUI: true,
-  perfTelemetry: true,
-  lazyRebalanceLoad: true,
-  secondaryPanelCache: true,
-};
 
-const FIN_FLAG_LABELS = {
-  a11yEnhancements: "Melhorias de acessibilidade",
-  keyboardShortcuts: "Atalhos globais de teclado",
-  sectionQuickNav: "Navegação por seções (Alt+1..9)",
-  featureFlagsUI: "Painel de feature flags",
-  perfTelemetry: "Métricas de performance no carregamento",
-  lazyRebalanceLoad: "Lazy load de rebalanceamento/projeção",
-  secondaryPanelCache: "Cache dos painéis secundários no auto-refresh",
-};
-
-const DIVIDENDS_CHART_PREFS_KEY = "fin_dividends_chart_prefs";
 const FIN_THEME_KEY = "fin-theme";
 const FIN_LAYOUT_KEY = "fin_layout_v1";
 const FIN_THEME_ORDER = ["dark", "light", "ocean", "sunset"];
 const FIN_DENSITY_KEY = "fin-density";
 const FIN_ONBOARDING_SEEN_KEY = "fin_onboarding_seen_v1";
-const FIN_ALERT_PREFS_KEY = "fin_alert_prefs_v1";
 
 const byId = (id) => document.getElementById(id);
 let _deferredInstallPrompt = null;
-
-function getAlertPrefs() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(FIN_ALERT_PREFS_KEY) || "{}");
-    return {
-      watchlistCooldownMinutes: Math.max(1, Number(raw.watchlistCooldownMinutes || 60)),
-      goalMilestonesEnabled: raw.goalMilestonesEnabled !== false,
-      dividendMinIncrease: Math.max(0, Number(raw.dividendMinIncrease || 1)),
-    };
-  } catch {
-    return {
-      watchlistCooldownMinutes: 60,
-      goalMilestonesEnabled: true,
-      dividendMinIncrease: 1,
-    };
-  }
-}
-
-function setAlertPrefs(next) {
-  const current = getAlertPrefs();
-  const merged = { ...current, ...(next || {}) };
-  localStorage.setItem(FIN_ALERT_PREFS_KEY, JSON.stringify(merged));
-}
 
 // ── Toast notifications (replaces alert()) ────────────────
 function showToast(message, type = "error", options = {}) {
@@ -107,8 +65,10 @@ function showToast(message, type = "error", options = {}) {
     container.setAttribute("role", "status");
     document.body.appendChild(container);
   }
+
   const toast = document.createElement("div");
   toast.className = `fin-toast fin-toast-${type}`;
+
   const text = document.createElement("span");
   text.className = "fin-toast-message";
   text.textContent = message;
@@ -116,269 +76,36 @@ function showToast(message, type = "error", options = {}) {
 
   if (options.actionLabel && typeof options.onAction === "function") {
     const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
     actionBtn.className = "fin-toast-action";
-    actionBtn.textContent = String(options.actionLabel);
+    actionBtn.textContent = options.actionLabel;
     actionBtn.addEventListener("click", () => {
-      try {
-        options.onAction();
-      } finally {
-        toast.classList.remove("fin-toast-show");
-        setTimeout(() => toast.remove(), 220);
-      }
+      try { options.onAction(); } catch { /* noop */ }
+      toast.remove();
     });
     toast.appendChild(actionBtn);
   }
 
   const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
   closeBtn.className = "fin-toast-close";
   closeBtn.setAttribute("aria-label", "Fechar notificação");
-  closeBtn.textContent = "×";
-  closeBtn.addEventListener("click", () => {
-    toast.classList.remove("fin-toast-show");
-    setTimeout(() => toast.remove(), 220);
-  });
+  closeBtn.textContent = "x";
+  closeBtn.addEventListener("click", () => toast.remove());
   toast.appendChild(closeBtn);
 
   container.appendChild(toast);
-  requestAnimationFrame(() => toast.classList.add("fin-toast-show"));
-  const durationMs = Number(options.durationMs || 3500);
-  setTimeout(() => {
-    toast.classList.remove("fin-toast-show");
-    toast.addEventListener("transitionend", () => toast.remove());
-    setTimeout(() => toast.remove(), 400);
-  }, durationMs);
+  const timeout = Number(options.timeout || (type === "success" ? 2800 : 4200));
+  setTimeout(() => toast.remove(), Math.max(1200, timeout));
 }
 
-function initFinancePWA() {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/sw.js").catch(() => {
-      // ignore registration failures on unsupported contexts
-    });
-  }
-
-  window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault();
-    _deferredInstallPrompt = e;
-    showToast("App instalavel disponivel", "info", {
-      actionLabel: "Instalar",
-      onAction: async () => {
-        if (!_deferredInstallPrompt) return;
-        _deferredInstallPrompt.prompt();
-        try {
-          await _deferredInstallPrompt.userChoice;
-        } catch {
-          // ignore
-        }
-        _deferredInstallPrompt = null;
-      },
-      durationMs: 8000,
-    });
-  });
-}
-
-function escapeHtml(text) {
-  const d = document.createElement("div");
-  d.textContent = String(text ?? "");
-  return d.innerHTML;
-}
-
-function formatBRL(value) {
-  if (value == null || isNaN(value)) return "—";
-  return Number(value).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-}
-
-function formatPct(value) {
-  if (value == null || isNaN(value)) return "—";
-  const sign = value >= 0 ? "+" : "";
-  return `${sign}${Number(value).toFixed(2)}%`;
-}
-
-function formatNumber(value, decimals = 2) {
-  if (value == null || isNaN(value)) return "—";
-  return Number(value).toLocaleString("pt-BR", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-function changeClass(value) {
-  if (value == null) return "";
-  return value >= 0 ? "fin-up" : "fin-down";
-}
-
-// ── Authenticated fetch helper ────────────────────────────
-// The finance key can be provided via a <meta name="finance-key"> tag in the template.
-function finFetch(url, opts = {}) {
-  const meta = document.querySelector('meta[name="finance-key"]');
-  const key = meta ? meta.getAttribute("content") : "";
-  if (key) {
-    opts.headers = { ...(opts.headers || {}), "X-Finance-Key": key };
-  }
-  return fetch(url, opts);
-}
-
-async function fetchFinanceJson(url, fallbackValue) {
-  try {
-    const response = await finFetch(url);
-    if (!response.ok) {
-      console.warn("Finance endpoint returned non-OK status", { url, status: response.status });
-      return fallbackValue;
-    }
-    return await response.json();
-  } catch (err) {
-    console.warn("Finance endpoint request failed", { url, err });
-    return fallbackValue;
-  }
-}
-
-function badgeClass(type) {
-  const map = {
-    stock: "fin-badge-stock",
-    crypto: "fin-badge-crypto",
-    fii: "fin-badge-fii",
-    etf: "fin-badge-etf",
-    fund: "fin-badge-fund",
-    "renda-fixa": "fin-badge-renda-fixa",
-  };
-  return map[type] || "fin-badge-stock";
-}
-
-function _readFinFlagsFromMeta() {
-  const meta = document.querySelector('meta[name="finance-flags"]');
-  const raw = meta ? String(meta.getAttribute("content") || "").trim() : "";
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function _readFinFlagsFromStorage() {
-  try {
-    const raw = localStorage.getItem(FIN_FLAGS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function resolveFinanceFlags() {
-  const metaFlags = _readFinFlagsFromMeta();
-  const storedFlags = _readFinFlagsFromStorage();
-  const merged = { ...FIN_FLAGS_DEFAULT, ...metaFlags, ...storedFlags };
-  return Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, Boolean(v)]));
-}
-
-function isFinFlagOn(flagName) {
-  if (!flagName) return false;
-  if (!FIN.flags || typeof FIN.flags !== "object") return Boolean(FIN_FLAGS_DEFAULT[flagName]);
-  if (Object.prototype.hasOwnProperty.call(FIN.flags, flagName)) return Boolean(FIN.flags[flagName]);
-  return Boolean(FIN_FLAGS_DEFAULT[flagName]);
-}
-
-// ── Theme Toggle ─────────────────────────────────────────
-
-function applyFinanceTheme(theme) {
-  const nextTheme = FIN_THEME_ORDER.includes(theme) ? theme : "dark";
-  document.body.classList.remove("light", "theme-ocean", "theme-sunset");
-  if (nextTheme === "light") {
-    document.body.classList.add("light");
-  } else if (nextTheme === "ocean") {
-    document.body.classList.add("theme-ocean");
-  } else if (nextTheme === "sunset") {
-    document.body.classList.add("theme-sunset");
-  }
-  localStorage.setItem(FIN_THEME_KEY, nextTheme);
-
-  const btn = byId("themeToggle");
-  if (btn) {
-    const glyphMap = { dark: "◐", light: "◑", ocean: "◒", sunset: "◓" };
-    btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${glyphMap[nextTheme] || "◐"}</span><span>Tema</span>`;
-    btn.title = `Tema atual: ${nextTheme}`;
-    btn.setAttribute("aria-label", `Tema atual: ${nextTheme}`);
-  }
-}
-
-function applyFinanceDensity(density) {
-  const next = density === "compact" ? "compact" : "comfortable";
-  document.body.classList.remove("fin-density-compact", "fin-density-comfortable");
-  document.body.classList.add(next === "compact" ? "fin-density-compact" : "fin-density-comfortable");
-  localStorage.setItem(FIN_DENSITY_KEY, next);
-  const btn = byId("btnDensity");
-  if (btn) {
-    btn.innerHTML = next === "compact"
-      ? '<span class="btn-glyph" aria-hidden="true">▤</span><span>Compacto</span>'
-      : '<span class="btn-glyph" aria-hidden="true">▥</span><span>Conforto</span>';
-  }
-}
-
-function initDensityMode() {
-  const saved = localStorage.getItem(FIN_DENSITY_KEY) || "comfortable";
-  applyFinanceDensity(saved);
-  const btn = byId("btnDensity");
-  if (!btn) return;
-  btn.addEventListener("click", () => {
-    const current = localStorage.getItem(FIN_DENSITY_KEY) || "comfortable";
-    const next = current === "compact" ? "comfortable" : "compact";
-    applyFinanceDensity(next);
-    showToast(`Densidade: ${next === "compact" ? "compacta" : "confortável"}`, "info");
-  });
-}
-
-function initTheme() {
-  const saved = localStorage.getItem(FIN_THEME_KEY) || "dark";
-  applyFinanceTheme(saved);
-  const btn = byId("themeToggle");
-  if (btn) {
-    btn.addEventListener("click", () => {
-      const current = localStorage.getItem(FIN_THEME_KEY) || "dark";
-      const idx = FIN_THEME_ORDER.indexOf(current);
-      const next = FIN_THEME_ORDER[(idx + 1) % FIN_THEME_ORDER.length];
-      applyFinanceTheme(next);
-      showToast(`Tema alterado: ${next}`, "info");
-    });
-  }
-}
-
-// ── Keyboard Shortcuts ───────────────────────────────────
-
-function initFinanceKeyboardShortcuts() {
-  if (!isFinFlagOn("keyboardShortcuts")) return;
-  document.addEventListener("keydown", (e) => {
-    // Ignore when typing in an input/textarea/select or modal is open
-    const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    const overlay = byId("finModalOverlay");
-    if (overlay && overlay.style.display !== "none") return;
-
-    const ctrl = e.ctrlKey || e.metaKey;
-
-    if (ctrl && e.key === "r") { e.preventDefault(); loadAll(); showToast("Atualizando dados...", "info"); return; }
-    if (ctrl && e.key === "i") { e.preventDefault(); openImportModal(); return; }
-    if (ctrl && e.key === "e") { e.preventDefault(); openExportModal(); return; }
-    if (e.key === "?") { showKeyboardShortcutsHelp(); return; }
-    if (e.key === "Escape") { closeFinModal(); return; }
-  });
-}
-
-function initSectionQuickNav() {
-  if (!isFinFlagOn("sectionQuickNav")) return;
+function initQuickNav() {
+  if (!isFinFlagOn("sectionQuickNav") && !isFinFlagOn("quickNav")) return;
   const sectionMap = {
-    "1": "finPortfolioCard",
-    "2": "finTransactionsCard",
-    "3": "finDividendsCard",
-    "4": "finHistoryCard",
-    "5": "finRebalanceCard",
-    "6": "finPerformanceCard",
+    "1": "finSummaryCard",
+    "2": "finPortfolioCard",
+    "3": "finTxCard",
+    "4": "finDividendsCard",
+    "5": "finHistoryCard",
+    "6": "finAlertsCard",
     "7": "finWatchlistCard",
     "8": "finGoalsCard",
     "9": "finAICard",
@@ -777,52 +504,6 @@ function showKeyboardShortcutsHelp() {
   `);
 }
 
-function openFeatureFlagsModal() {
-  const rows = Object.keys(FIN_FLAGS_DEFAULT).map((key) => `
-    <label class="fin-shortcut-row" style="justify-content:space-between;gap:14px;align-items:center;">
-      <span>${escapeHtml(FIN_FLAG_LABELS[key] || key)}</span>
-      <input type="checkbox" class="fin-flag-check" data-flag="${key}" ${isFinFlagOn(key) ? "checked" : ""} />
-    </label>
-  `).join("");
-
-  openFinModal("Feature Flags", `
-    <form id="finFeatureFlagsForm">
-      <p class="fin-empty" style="text-align:left;margin-bottom:10px;">Controle de recursos por ambiente. Alterações são salvas no navegador atual.</p>
-      <div class="fin-shortcuts-list">${rows}</div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
-        <button type="button" id="finFlagsReset" class="btn-text">Restaurar padrão</button>
-        <button type="submit" class="fin-form-submit">Salvar e aplicar</button>
-      </div>
-    </form>
-  `);
-
-  const form = byId("finFeatureFlagsForm");
-  const resetBtn = byId("finFlagsReset");
-
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      localStorage.removeItem(FIN_FLAGS_STORAGE_KEY);
-      closeFinModal();
-      showToast("Feature flags restauradas para o padrão.", "success");
-      window.location.reload();
-    });
-  }
-
-  if (form) {
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const nextFlags = { ...FIN_FLAGS_DEFAULT };
-      form.querySelectorAll(".fin-flag-check[data-flag]").forEach((el) => {
-        nextFlags[el.dataset.flag] = el.checked;
-      });
-      localStorage.setItem(FIN_FLAGS_STORAGE_KEY, JSON.stringify(nextFlags));
-      closeFinModal();
-      showToast("Feature flags atualizadas. Recarregando...", "info");
-      window.location.reload();
-    });
-  }
-}
-
 // ══════════════════════════════════════════════════════════
 // Data Loading
 // ══════════════════════════════════════════════════════════
@@ -839,6 +520,7 @@ async function loadAll(options = {}) {
     startedAt: performance.now(),
     criticalFetchMs: null,
     criticalRenderMs: null,
+    deferredDataMs: null,
     deferredChartsMs: null,
     secondaryMs: null,
     secondaryCacheHit: false,
@@ -846,59 +528,107 @@ async function loadAll(options = {}) {
   }
   try {
     const criticalFetchStart = perfEnabled ? performance.now() : 0;
-    const [summary, transactions, watchlist, goals, assets, dividends, allocTargets, passiveGoal] = await Promise.all([
+    const [summary, transactions] = await Promise.all([
       fetchFinanceJson("/api/finance/summary", { portfolio: [], currency_rates: [] }),
       fetchFinanceJson("/api/finance/transactions", []),
-      fetchFinanceJson("/api/finance/watchlist", []),
-      fetchFinanceJson("/api/finance/goals", []),
-      fetchFinanceJson("/api/finance/assets", []),
-      fetchFinanceJson("/api/finance/dividends", []),
-      fetchFinanceJson("/api/finance/allocation-targets", []),
-      fetchFinanceJson("/api/finance/goals/passive-income", { target_monthly: 0, note: "" }),
     ]);
     if (perfEnabled) _setPerfRunPatch(perfRunId, { criticalFetchMs: _ms(performance.now() - criticalFetchStart) });
 
     FIN.summary = summary || { portfolio: [], currency_rates: [] };
     FIN.portfolio = FIN.summary.portfolio || [];
     FIN.transactions = Array.isArray(transactions) ? transactions : [];
-    FIN.watchlist = Array.isArray(watchlist) ? watchlist : [];
-    FIN.goals = Array.isArray(goals) ? goals : [];
-    FIN.assets = (Array.isArray(assets) ? assets : []).map((a) => ({
-      id: a.id,
-      symbol: a.symbol,
-      name: a.name || a.symbol,
-      asset_type: a.asset_type,
-    }));
-    FIN.dividends = Array.isArray(dividends) ? dividends : [];
-    FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
-    FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
 
     const criticalRenderStart = perfEnabled ? performance.now() : 0;
     renderSummary(summary);
     renderCurrency(summary.currency_rates || []);
     renderPortfolio(FIN.portfolio);
     renderTransactions(transactions);
-    renderWatchlist(watchlist);
-    renderGoals(goals);
-    renderDividends(FIN.dividends);
-    if (FIN._rebalanceLoaded) {
-      renderRebalance();
-      renderProjection();
-      renderDividendCeiling();
-      renderIndependenceScenario();
-    }
-    populateHistorySelect();
-    applyHistoryPrefs();
-    loadHistoryFromControls();
-    populateIRYears();
-    checkWatchlistAlerts();
-    checkDividendAlerts();
-    checkGoalsMilestones(goals);
     if (perfEnabled) {
       _setPerfRunPatch(perfRunId, { criticalRenderMs: _ms(performance.now() - criticalRenderStart) });
       _commitPerf(perfRunId);
     }
     updateLastUpdated();
+
+    // Fill non-critical cards after first paint.
+    _scheduleDeferred(async () => {
+      const deferredDataStart = perfEnabled ? performance.now() : 0;
+      const useWidgetCache = useSecondaryCache && isFinFlagOn("secondaryPanelCache");
+      const [watchlist, goals, assets, dividends, allocTargets, passiveGoal] = await Promise.all([
+        fetchWidgetJsonCached(
+          "watchlist",
+          "/api/finance/watchlist",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "goals",
+          "/api/finance/goals",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "assets",
+          "/api/finance/assets",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "dividends",
+          "/api/finance/dividends",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "allocation-targets",
+          "/api/finance/allocation-targets",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "passive-income",
+          "/api/finance/goals/passive-income",
+          { target_monthly: 0, note: "" },
+          { useCache: useWidgetCache },
+        ),
+      ]);
+
+      FIN.watchlist = Array.isArray(watchlist) ? watchlist : [];
+      FIN.goals = Array.isArray(goals) ? goals : [];
+      FIN.assets = (Array.isArray(assets) ? assets : []).map((a) => ({
+        id: a.id,
+        symbol: a.symbol,
+        name: a.name || a.symbol,
+        asset_type: a.asset_type,
+      }));
+      FIN.dividends = Array.isArray(dividends) ? dividends : [];
+      FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
+      FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
+
+      renderWatchlist(FIN.watchlist);
+      renderGoals(FIN.goals);
+      renderDividends(FIN.dividends);
+      if (FIN._rebalanceLoaded) {
+        renderRebalance();
+        renderProjection();
+        renderDividendCeiling();
+        renderIndependenceScenario();
+      }
+      populateHistorySelect();
+      applyHistoryPrefs();
+      loadHistoryFromControls();
+      populateIRYears();
+      checkWatchlistAlerts();
+      checkDividendAlerts();
+      checkGoalsMilestones(FIN.goals);
+
+      if (perfEnabled) {
+        _setPerfRunPatch(perfRunId, {
+          deferredDataMs: _ms(performance.now() - deferredDataStart),
+        });
+        _commitPerf(perfRunId);
+      }
+      updateLastUpdated();
+    });
 
     // Defer chart creation to keep first paint responsive.
     _scheduleDeferred(() => {
@@ -1383,25 +1113,6 @@ function renderPerformanceMetrics(metrics) {
   `;
 }
 
-function renderAuditTrail(entries) {
-  const el = byId("finAuditContent");
-  if (!el) return;
-  if (!entries || !entries.length) {
-    el.innerHTML = '<p class="fin-empty">Sem eventos recentes.</p>';
-    return;
-  }
-  el.innerHTML = entries.map((e) => {
-    const ts = String(e.created_at || "").replace("T", " ").slice(0, 19);
-    return `
-      <div class="fin-audit-item">
-        <span class="fin-audit-time">${escapeHtml(ts)}</span>
-        <span class="fin-audit-action">${escapeHtml(e.action || "")}</span>
-        <span class="fin-audit-target">${escapeHtml(e.target_type || "")} #${escapeHtml(String(e.target_id || "-"))}</span>
-      </div>
-    `;
-  }).join("");
-}
-
 function checkDividendAlerts() {
   const prefs = getAlertPrefs();
   const total = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
@@ -1410,6 +1121,12 @@ function checkDividendAlerts() {
   const increase = total - prev;
   if (increase >= prefs.dividendMinIncrease && prev > 0) {
     showToast(`Novo provento detectado. Total acumulado: ${formatBRL(total)}`, "info");
+    if (prefs.notifyDividendsDesktop && Notification.permission === "granted") {
+      new Notification("💸 Novo provento detectado", {
+        body: `Acumulado: ${formatBRL(total)} (variação: ${formatBRL(increase)})`,
+        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>",
+      });
+    }
   }
   localStorage.setItem(key, String(total));
 }
@@ -3639,396 +3356,7 @@ async function deleteGoal(goalId) {
   }
 }
 
-// ══════════════════════════════════════════════════════════
-// Dividends
-// ══════════════════════════════════════════════════════════
-
-function renderDividends(divs) {
-  const el = byId("finDividendsContent");
-  const summaryEl = byId("finDividendSummary");
-  if (!el) return;
-
-  if (!divs.length) {
-    el.innerHTML = renderEmptyState(
-      "Nenhum dividendo registrado até agora.",
-      "Registrar provento",
-      "addDividend",
-    );
-    if (summaryEl) summaryEl.innerHTML = "";
-    _destroyDividendCharts();
-    return;
-  }
-
-  // Summary totals by type
-  const totals = {};
-  const assetTotals = {};
-  const monthTotals = {};
-  let grandTotal = 0;
-  divs.forEach((d) => {
-    const t = d.div_type || "dividend";
-    const symbol = d.symbol || "—";
-    const monthKey = (d.pay_date || d.ex_date || d.created_at || "").slice(0, 7);
-    totals[t] = (totals[t] || 0) + (d.total_amount || 0);
-    assetTotals[symbol] = (assetTotals[symbol] || 0) + (d.total_amount || 0);
-    if (monthKey) monthTotals[monthKey] = (monthTotals[monthKey] || 0) + (d.total_amount || 0);
-    grandTotal += d.total_amount || 0;
-  });
-
-  const monthEntries = Object.entries(monthTotals).sort(([a], [b]) => a.localeCompare(b));
-  const last12 = monthEntries.slice(-12);
-  const last12Total = last12.reduce((sum, [, value]) => sum + value, 0);
-  const averageMonth = monthEntries.length ? grandTotal / monthEntries.length : 0;
-  const bestMonth = last12.length ? [...last12].sort((a, b) => b[1] - a[1])[0] : null;
-  const bestAsset = Object.entries(assetTotals).sort((a, b) => b[1] - a[1])[0] || null;
-  const totalCount = divs.length;
-
-  const currMonthVal = monthEntries.length ? Number(monthEntries[monthEntries.length - 1][1] || 0) : 0;
-  const prevMonthVal = monthEntries.length > 1 ? Number(monthEntries[monthEntries.length - 2][1] || 0) : 0;
-  const momPct = prevMonthVal > 0 ? ((currMonthVal / prevMonthVal) - 1) * 100 : null;
-
-  const currentMonthKey = monthEntries.length ? String(monthEntries[monthEntries.length - 1][0] || "") : "";
-  let yoyPct = null;
-  if (currentMonthKey && currentMonthKey.length >= 7) {
-    const yy = Number(currentMonthKey.slice(0, 4));
-    const mm = currentMonthKey.slice(5, 7);
-    const prevYearKey = `${yy - 1}-${mm}`;
-    const prevYearVal = Number(monthTotals[prevYearKey] || 0);
-    if (prevYearVal > 0) {
-      yoyPct = ((currMonthVal / prevYearVal) - 1) * 100;
-    }
-  }
-
-  const baselineAvg = last12.length ? (last12Total / last12.length) : averageMonth;
-  const forecast3 = baselineAvg * 3;
-  const forecast6 = baselineAvg * 6;
-  const forecast12 = baselineAvg * 12;
-
-  const typeLabels = { dividend: "Dividendos", jcp: "JCP", rendimento: "Rendimentos", bonus: "Bonificação" };
-  if (summaryEl) {
-    summaryEl.innerHTML = `
-      <div class="fin-div-totals">
-        <div class="fin-div-total-item fin-div-grand"><span>Total Geral</span><strong>${formatBRL(grandTotal)}</strong><em>${totalCount} lançamento(s)</em></div>
-        <div class="fin-div-total-item"><span>Média Mensal</span><strong>${formatBRL(averageMonth)}</strong><em>${monthEntries.length || 0} mês(es)</em></div>
-        <div class="fin-div-total-item"><span>Últimos 12 Meses</span><strong>${formatBRL(last12Total)}</strong><em>${last12.length || 0} competência(s)</em></div>
-        <div class="fin-div-total-item"><span>MoM</span><strong class="${momPct == null ? "" : changeClass(momPct)}">${momPct == null ? "—" : formatPct(momPct)}</strong><em>mês atual vs anterior</em></div>
-        <div class="fin-div-total-item"><span>YoY</span><strong class="${yoyPct == null ? "" : changeClass(yoyPct)}">${yoyPct == null ? "—" : formatPct(yoyPct)}</strong><em>mês atual vs ano anterior</em></div>
-        <div class="fin-div-total-item"><span>Melhor Mês</span><strong>${bestMonth ? formatBRL(bestMonth[1]) : "—"}</strong><em>${bestMonth ? escapeHtml(bestMonth[0]) : "sem dados"}</em></div>
-        <div class="fin-div-total-item"><span>Maior Pagador</span><strong>${bestAsset ? formatBRL(bestAsset[1]) : "—"}</strong><em>${bestAsset ? escapeHtml(bestAsset[0]) : "sem dados"}</em></div>
-        <div class="fin-div-total-item"><span>Projeção 3m</span><strong>${formatBRL(forecast3)}</strong><em>base média recente</em></div>
-        <div class="fin-div-total-item"><span>Projeção 6m</span><strong>${formatBRL(forecast6)}</strong><em>base média recente</em></div>
-        <div class="fin-div-total-item"><span>Projeção 12m</span><strong>${formatBRL(forecast12)}</strong><em>base média recente</em></div>
-        ${Object.entries(totals).map(([k, v]) =>
-          `<div class="fin-div-total-item"><span>${typeLabels[k] || k}</span><strong>${formatBRL(v)}</strong></div>`
-        ).join("")}
-      </div>
-    `;
-  }
-
-  el.innerHTML = `
-    <div class="fin-div-table-toolbar">
-      <div class="fin-div-table-caption">Nesta tela ficam apenas os gráficos e o resumo de proventos.</div>
-      <a href="/finance/registros" class="btn-text">Abrir Registros</a>
-    </div>
-  `;
-
-  const chartPrefs = getDividendsChartPrefs();
-  applyDividendsChartControls(chartPrefs);
-  bindDividendsChartControls();
-  renderDividendsChart(divs, chartPrefs);
-  renderDividendsTypeChart(totals, typeLabels);
-  renderDividendsAssetChart(assetTotals);
-}
-
-function _destroyDividendCharts() {
-  ["dividends", "dividendsType", "dividendsAsset"].forEach((key) => {
-    if (FIN.charts[key]) {
-      FIN.charts[key].destroy();
-      delete FIN.charts[key];
-    }
-  });
-}
-
-function getDividendsChartPrefs() {
-  try {
-    const raw = localStorage.getItem(DIVIDENDS_CHART_PREFS_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    const showValues = parsed?.showValues !== false;
-    const density = ["smart", "all", "sparse"].includes(parsed?.density) ? parsed.density : "smart";
-    return { showValues, density };
-  } catch {
-    return { showValues: true, density: "smart" };
-  }
-}
-
-function setDividendsChartPrefs(nextPrefs) {
-  try {
-    localStorage.setItem(DIVIDENDS_CHART_PREFS_KEY, JSON.stringify(nextPrefs));
-  } catch {
-    // ignore storage failures
-  }
-}
-
-function applyDividendsChartControls(prefs) {
-  const showValuesInput = byId("dividendsShowValues");
-  const densitySelect = byId("dividendsLabelDensity");
-  if (showValuesInput) showValuesInput.checked = prefs.showValues !== false;
-  if (densitySelect) densitySelect.value = prefs.density || "smart";
-}
-
-function bindDividendsChartControls() {
-  const showValuesInput = byId("dividendsShowValues");
-  const densitySelect = byId("dividendsLabelDensity");
-  if (showValuesInput && !showValuesInput.dataset.bound) {
-    showValuesInput.dataset.bound = "1";
-    showValuesInput.addEventListener("change", () => {
-      const prefs = getDividendsChartPrefs();
-      const next = { ...prefs, showValues: showValuesInput.checked };
-      setDividendsChartPrefs(next);
-      renderDividendsChart(FIN.dividends || [], next);
-    });
-  }
-  if (densitySelect && !densitySelect.dataset.bound) {
-    densitySelect.dataset.bound = "1";
-    densitySelect.addEventListener("change", () => {
-      const prefs = getDividendsChartPrefs();
-      const next = { ...prefs, density: densitySelect.value || "smart" };
-      setDividendsChartPrefs(next);
-      renderDividendsChart(FIN.dividends || [], next);
-    });
-  }
-}
-
-function formatCompactBRL(value) {
-  const num = Number(value || 0);
-  const abs = Math.abs(num);
-  if (abs >= 1000000) return `R$ ${(num / 1000000).toFixed(1)}M`;
-  if (abs >= 1000) return `R$ ${(num / 1000).toFixed(1)}k`;
-  return formatBRL(num);
-}
-
-function renderDividendsChart(divs, prefs = { showValues: true, density: "smart" }) {
-  const canvas = byId("dividendsChart");
-  if (!canvas || !window.Chart) return;
-
-  // Group by YYYY-MM
-  const monthly = {};
-  divs.forEach((d) => {
-    const raw = d.pay_date || d.ex_date || d.created_at || "";
-    const key = raw.slice(0, 7); // "YYYY-MM"
-    if (!key) return;
-    monthly[key] = (monthly[key] || 0) + (d.total_amount || 0);
-  });
-
-  const labels = Object.keys(monthly).sort();
-  const data = labels.map((k) => monthly[k]);
-  const maxVisibleLabels = prefs.density === "all" ? Number.POSITIVE_INFINITY : prefs.density === "sparse" ? 6 : 12;
-  const step = maxVisibleLabels === Number.POSITIVE_INFINITY ? 1 : Math.max(1, Math.ceil(labels.length / maxVisibleLabels));
-  const shouldCompactLabels = labels.length > 10;
-
-  const barValueLabelsPlugin = {
-    id: "barValueLabelsPlugin",
-    afterDatasetsDraw(chart) {
-      if (prefs.showValues === false) return;
-      const { ctx } = chart;
-      const dataset = chart.data.datasets[0];
-      const meta = chart.getDatasetMeta(0);
-      if (!dataset || !meta || !meta.data) return;
-
-      ctx.save();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.font = "700 11px Inter, sans-serif";
-      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0";
-
-      meta.data.forEach((bar, index) => {
-        if (index % step !== 0 && index !== meta.data.length - 1) return;
-        const value = dataset.data[index];
-        if (!Number.isFinite(Number(value))) return;
-        const label = shouldCompactLabels ? formatCompactBRL(value) : formatBRL(value);
-        ctx.fillText(label, bar.x, bar.y - 6);
-      });
-
-      ctx.restore();
-    },
-  };
-
-  if (FIN.charts.dividends) FIN.charts.dividends.destroy();
-
-  FIN.charts.dividends = new Chart(canvas, {
-    type: "bar",
-    plugins: [barValueLabelsPlugin],
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Dividendos por mês (R$)",
-          data,
-          backgroundColor: "rgba(16, 185, 129, 0.7)",
-          borderColor: "rgba(16, 185, 129, 1)",
-          borderWidth: 1,
-          borderRadius: 4,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      onClick: (_evt, elements, chart) => {
-        if (!elements || !elements.length) return;
-        const idx = elements[0].index;
-        const monthKey = chart?.data?.labels?.[idx];
-        if (!monthKey) return;
-        openDividendMonthDrilldown(String(monthKey), divs || []);
-      },
-      plugins: {
-        legend: { display: false },
-        title: {
-          display: true,
-          text: "Fluxo mensal de dividendos",
-          color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
-          padding: { bottom: 14 },
-          font: { size: 15, weight: "700" },
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ` ${formatBRL(ctx.parsed.y)}`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          ticks: {
-            autoSkip: labels.length > 10,
-            maxRotation: 0,
-            callback: (_v, i) => {
-              const raw = labels[i] || "";
-              if (!raw) return raw;
-              const yy = raw.slice(2, 4);
-              const mm = raw.slice(5, 7);
-              return `${mm}/${yy}`;
-            },
-          },
-        },
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: (v) => formatCompactBRL(v),
-          },
-        },
-      },
-    },
-  });
-}
-
-function openDividendMonthDrilldown(monthKey, divs) {
-  const filtered = (divs || []).filter((d) => {
-    const raw = d.pay_date || d.ex_date || d.created_at || "";
-    return String(raw).startsWith(monthKey);
-  });
-  const rows = filtered
-    .sort((a, b) => String(b.pay_date || b.ex_date || "").localeCompare(String(a.pay_date || a.ex_date || "")))
-    .map((d) => `
-      <tr>
-        <td>${escapeHtml(d.symbol || "—")}</td>
-        <td>${escapeHtml(d.div_type || "dividend")}</td>
-        <td>${escapeHtml(String(d.pay_date || d.ex_date || "").slice(0, 10))}</td>
-        <td class="text-right mono">${formatNumber(d.quantity || 0)}</td>
-        <td class="text-right mono">${formatBRL(d.total_amount || 0)}</td>
-      </tr>
-    `)
-    .join("");
-  const total = filtered.reduce((sum, d) => sum + Number(d.total_amount || 0), 0);
-  openFinModal(`Drill-down de proventos: ${escapeHtml(monthKey)}`, `
-    <p class="fin-empty" style="text-align:left;margin-bottom:8px;">${filtered.length} lançamento(s) • Total ${formatBRL(total)}</p>
-    <div class="fin-table-wrap">
-      <table class="fin-table">
-        <thead>
-          <tr><th>Ativo</th><th>Tipo</th><th>Data</th><th class="text-right">Qtd</th><th class="text-right">Total</th></tr>
-        </thead>
-        <tbody>${rows || '<tr><td colspan="5" class="fin-empty">Sem lançamentos.</td></tr>'}</tbody>
-      </table>
-    </div>
-  `);
-}
-
-function renderDividendsTypeChart(totals, typeLabels) {
-  const canvas = byId("dividendsTypeChart");
-  if (!canvas || !window.Chart) return;
-  const labels = Object.keys(totals);
-  const values = labels.map((key) => totals[key]);
-  if (FIN.charts.dividendsType) FIN.charts.dividendsType.destroy();
-  if (!labels.length) return;
-
-  FIN.charts.dividendsType = new Chart(canvas, {
-    type: "doughnut",
-    data: {
-      labels: labels.map((key) => typeLabels[key] || key),
-      datasets: [{
-        data: values,
-        backgroundColor: ["#10b981", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444"],
-        borderWidth: 0,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: "bottom",
-          labels: { color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0" },
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${formatBRL(ctx.raw)}`,
-          },
-        },
-      },
-    },
-  });
-}
-
-function renderDividendsAssetChart(assetTotals) {
-  const canvas = byId("dividendsAssetChart");
-  if (!canvas || !window.Chart) return;
-  const topAssets = Object.entries(assetTotals)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6);
-  if (FIN.charts.dividendsAsset) FIN.charts.dividendsAsset.destroy();
-  if (!topAssets.length) return;
-
-  FIN.charts.dividendsAsset = new Chart(canvas, {
-    type: "bar",
-    data: {
-      labels: topAssets.map(([symbol]) => symbol),
-      datasets: [{
-        label: "Total recebido",
-        data: topAssets.map(([, value]) => value),
-        backgroundColor: "rgba(59, 130, 246, 0.78)",
-        borderRadius: 8,
-      }],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ` ${formatBRL(ctx.raw)}`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          ticks: {
-            callback: (v) => `R$ ${Number(v).toLocaleString("pt-BR")}`,
-          },
-        },
-      },
-    },
-  });
-}
+// Dividends domain moved to app/static/finance_dividends.js.
 
 function getCadastroCollections() {
   return {
@@ -4236,407 +3564,7 @@ async function deleteDividend(divId) {
   }
 }
 
-// ══════════════════════════════════════════════════════════
-// Price History Chart (Evolução Patrimonial)
-// ══════════════════════════════════════════════════════════
-
-function populateHistorySelect() {
-  const sel = byId("historyAssetSelect");
-  if (!sel) return;
-  const current = sel.value;
-  const opts = FIN.assets.map((a) =>
-    `<option value="${a.id}" ${String(a.id) === current ? "selected" : ""}>${escapeHtml(a.symbol)}</option>`
-  ).join("");
-  sel.innerHTML =
-    `<option value="">Selecione...</option>`
-    + `<option value="__total__" ${current === "__total__" ? "selected" : ""}>Total da carteira</option>`
-    + opts;
-}
-
-const HISTORY_PREFS_KEY = "fin-history-prefs";
-
-function readHistoryPrefs() {
-  try {
-    const raw = localStorage.getItem(HISTORY_PREFS_KEY);
-    if (!raw) return {
-      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
-    };
-    const parsed = JSON.parse(raw);
-    const benchmarks = Array.isArray(parsed.benchmarks)
-      ? parsed.benchmarks.filter((b) => ["ibov", "cdi", "ipca"].includes(String(b)))
-      : (parsed.benchmark ? [String(parsed.benchmark)] : []);
-    return {
-      assetId: String(parsed.assetId || ""),
-      period: String(parsed.period || "180"),
-      compareTotal: Boolean(parsed.compareTotal),
-      benchmarks,
-      showInvested: parsed.showInvested !== false,
-    };
-  } catch {
-    return {
-      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
-    };
-  }
-}
-
-function saveHistoryPrefs() {
-  const sel = byId("historyAssetSelect");
-  const periodSel = byId("historyPeriodSelect");
-  const compareEl = byId("historyCompareTotal");
-  const benchmarkSel = byId("historyBenchmarkSelect");
-  const investedEl = byId("historyShowInvested");
-  if (!sel || !periodSel || !compareEl || !benchmarkSel || !investedEl) return;
-  const benchmarks = [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean);
-  localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
-    assetId: sel.value || "",
-    period: periodSel.value || "180",
-    compareTotal: compareEl.checked,
-    benchmarks,
-    showInvested: investedEl.checked,
-  }));
-}
-
-function applyHistoryPrefs() {
-  const prefs = readHistoryPrefs();
-  const sel = byId("historyAssetSelect");
-  const periodSel = byId("historyPeriodSelect");
-  const compareEl = byId("historyCompareTotal");
-  const benchmarkSel = byId("historyBenchmarkSelect");
-  const investedEl = byId("historyShowInvested");
-
-  if (periodSel) {
-    const allowed = ["30", "90", "180", "365"];
-    periodSel.value = allowed.includes(prefs.period) ? prefs.period : "180";
-  }
-  if (compareEl) compareEl.checked = !!prefs.compareTotal;
-  if (benchmarkSel) {
-    const allowedB = new Set(["ibov", "cdi", "ipca"]);
-    [...benchmarkSel.options].forEach((opt) => {
-      opt.selected = Array.isArray(prefs.benchmarks) && allowedB.has(opt.value) && prefs.benchmarks.includes(opt.value);
-    });
-  }
-  if (investedEl) investedEl.checked = prefs.showInvested !== false;
-
-  if (sel) {
-    const validValues = new Set(["", "__total__", ...FIN.assets.map((a) => String(a.id))]);
-    sel.value = validValues.has(prefs.assetId) ? prefs.assetId : "";
-  }
-}
-
-function _historySeriesMap(rows) {
-  const map = new Map();
-  for (const row of rows || []) {
-    const date = (row.captured_at || "").slice(0, 10);
-    if (!date) continue;
-    map.set(date, Number(row.price || 0));
-  }
-  return map;
-}
-
-function _historyRangeDays() {
-  const periodSel = byId("historyPeriodSelect");
-  return Number(periodSel?.value || 180);
-}
-
-async function loadHistoryFromControls() {
-  const sel = byId("historyAssetSelect");
-  const compareEl = byId("historyCompareTotal");
-  const benchmarkSel = byId("historyBenchmarkSelect");
-  const investedEl = byId("historyShowInvested");
-  if (!sel) return;
-  saveHistoryPrefs();
-  const benchmarks = benchmarkSel
-    ? [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean)
-    : [];
-  await loadHistoryChart(sel.value, {
-    compareTotal: !!(compareEl && compareEl.checked),
-    rangeDays: _historyRangeDays(),
-    benchmarks,
-    showInvested: !(investedEl && investedEl.checked === false),
-  });
-}
-
-async function loadHistoryChart(assetId, options = {}) {
-  const emptyEl = byId("historyEmpty");
-  const canvas = byId("historyChart");
-  if (!canvas) return;
-  const isTotal = assetId === "__total__";
-  const compareTotal = !!options.compareTotal;
-  const rangeDays = Number(options.rangeDays || 180);
-  const benchmarkKeys = Array.isArray(options.benchmarks)
-    ? options.benchmarks.map((b) => String(b || "").trim().toLowerCase()).filter((b) => ["ibov", "cdi", "ipca"].includes(b))
-    : [];
-  const showInvested = options.showInvested !== false;
-  const limit = Math.min(365, Math.max(1, rangeDays));
-
-  if (!assetId) {
-    if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
-    canvas.style.display = "none";
-    if (emptyEl) emptyEl.style.display = "";
-    return;
-  }
-
-  try {
-    const reqs = [];
-    reqs.push(
-      finFetch(isTotal
-        ? `/api/finance/portfolio-history?limit=${limit}`
-        : `/api/finance/asset-history/${assetId}?limit=${limit}`
-      ).then((r) => r.json())
-    );
-    if (!isTotal && compareTotal) {
-      reqs.push(finFetch(`/api/finance/portfolio-history?limit=${limit}`).then((r) => r.json()));
-    }
-    if (showInvested) {
-      const investedUrl = isTotal
-        ? `/api/finance/invested-history?limit=${limit}`
-        : `/api/finance/invested-history?asset_id=${encodeURIComponent(assetId)}&limit=${limit}`;
-      reqs.push(finFetch(investedUrl).then((r) => r.json()));
-    }
-    if (benchmarkKeys.length) {
-      reqs.push(Promise.all(benchmarkKeys.map((b) =>
-        finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(b)}&limit=${limit}`).then((r) => r.json())
-      )));
-    }
-
-    const results = await Promise.all(reqs);
-    let resultIdx = 0;
-    const primaryData = results[resultIdx++] || [];
-    const totalData = (!isTotal && compareTotal) ? (results[resultIdx++] || []) : [];
-    const investedData = showInvested ? (results[resultIdx++] || []) : [];
-    const benchmarkSeries = benchmarkKeys.length ? (results[resultIdx++] || []) : [];
-
-    if (!primaryData.length) {
-      canvas.style.display = "none";
-      if (emptyEl) {
-        emptyEl.style.display = "";
-        emptyEl.textContent = isTotal
-          ? "Sem dados históricos para o total da carteira ainda."
-          : "Sem dados históricos para este ativo ainda.";
-      }
-      if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
-      return;
-    }
-
-    canvas.style.display = "";
-    if (emptyEl) emptyEl.style.display = "none";
-
-    const primary = (primaryData || []).slice().reverse();
-    const hasCompare = !isTotal && compareTotal && Array.isArray(totalData) && totalData.length > 0;
-
-    let datasets = [];
-    let labels = primary.map((d) => (d.captured_at || "").slice(0, 10));
-
-    if (hasCompare) {
-      const total = totalData.slice().reverse();
-      const assetMap = _historySeriesMap(primary);
-      const totalMap = _historySeriesMap(total);
-      labels = [...new Set([...assetMap.keys(), ...totalMap.keys()])].sort();
-
-      datasets.push({
-        label: "Ativo (R$)",
-        data: labels.map((d) => assetMap.get(d) ?? null),
-        yAxisID: "y",
-        borderColor: "#6366f1",
-        backgroundColor: "rgba(99,102,241,0.08)",
-        fill: false,
-        tension: 0.3,
-        pointRadius: labels.length > 60 ? 0 : 2,
-        borderWidth: 2,
-        spanGaps: true,
-      });
-      datasets.push({
-        label: "Total da carteira (R$)",
-        data: labels.map((d) => totalMap.get(d) ?? null),
-        yAxisID: "y",
-        borderColor: "#22c55e",
-        backgroundColor: "rgba(34,197,94,0.08)",
-        fill: false,
-        tension: 0.3,
-        pointRadius: labels.length > 60 ? 0 : 2,
-        borderWidth: 2,
-        spanGaps: true,
-      });
-    } else {
-      const prices = primary.map((d) => Number(d.price || 0));
-      datasets.push({
-        label: isTotal ? "Total da carteira (R$)" : "Preço (R$)",
-        data: prices,
-        yAxisID: "y",
-        borderColor: "#6366f1",
-        backgroundColor: "rgba(99,102,241,0.1)",
-        fill: true,
-        tension: 0.3,
-        pointRadius: prices.length > 60 ? 0 : 2,
-        borderWidth: 2,
-      });
-    }
-
-    if (benchmarkKeys.length && Array.isArray(benchmarkSeries) && benchmarkSeries.length) {
-      const colorMap = {
-        ibov: { border: "#f59e0b", bg: "rgba(245,158,11,0.08)", label: "IBOV" },
-        cdi: { border: "#22c55e", bg: "rgba(34,197,94,0.08)", label: "CDI" },
-        ipca: { border: "#ef4444", bg: "rgba(239,68,68,0.08)", label: "IPCA" },
-      };
-      const maps = [];
-      benchmarkSeries.forEach((seriesRows, idx) => {
-        const key = benchmarkKeys[idx];
-        const m = new Map();
-        (seriesRows || []).forEach((row) => {
-          const d = (row.captured_at || "").slice(0, 10);
-          if (!d) return;
-          m.set(d, Number(row.normalized_pct || 0));
-        });
-        if (m.size) maps.push({ key, map: m });
-      });
-
-      if (maps.length) {
-        const mergedLabels = [...new Set([
-          ...labels,
-          ...maps.flatMap((it) => [...it.map.keys()]),
-        ])].sort();
-        datasets = datasets.map((ds) => {
-          const map = new Map(labels.map((d, i) => [d, ds.data[i] ?? null]));
-          return {
-            ...ds,
-            data: mergedLabels.map((d) => (map.has(d) ? map.get(d) : null)),
-            spanGaps: true,
-          };
-        });
-
-        maps.forEach((entry) => {
-          const color = colorMap[entry.key] || colorMap.ibov;
-          datasets.push({
-            label: `Benchmark ${color.label} (%)`,
-            data: mergedLabels.map((d) => (entry.map.has(d) ? entry.map.get(d) : null)),
-            yAxisID: "y1",
-            borderColor: color.border,
-            backgroundColor: color.bg,
-            fill: false,
-            tension: 0.3,
-            pointRadius: mergedLabels.length > 60 ? 0 : 2,
-            borderWidth: 2,
-            spanGaps: true,
-          });
-        });
-        labels = mergedLabels;
-      }
-    }
-
-    if (showInvested && Array.isArray(investedData) && investedData.length) {
-      const invMap = _historySeriesMap(investedData);
-      if (invMap.size) {
-        const mergedLabels = [...new Set([...labels, ...invMap.keys()])].sort();
-        datasets = datasets.map((ds) => {
-          const map = new Map(labels.map((d, i) => [d, ds.data[i] ?? null]));
-          return {
-            ...ds,
-            data: mergedLabels.map((d) => (map.has(d) ? map.get(d) : null)),
-            spanGaps: true,
-          };
-        });
-
-        let last = null;
-        const investedSeries = mergedLabels.map((d) => {
-          if (invMap.has(d)) last = invMap.get(d);
-          return last;
-        });
-
-        datasets.push({
-          label: "Aporte acumulado (R$)",
-          data: investedSeries,
-          yAxisID: "y",
-          borderColor: "#94a3b8",
-          backgroundColor: "rgba(148,163,184,0.08)",
-          borderDash: [6, 4],
-          fill: false,
-          tension: 0.2,
-          pointRadius: mergedLabels.length > 60 ? 0 : 1.5,
-          borderWidth: 2,
-          spanGaps: true,
-        });
-        labels = mergedLabels;
-      }
-    }
-
-    if (FIN.charts.history) FIN.charts.history.destroy();
-
-    FIN.charts.history = new Chart(canvas, {
-      type: "line",
-      data: {
-        labels,
-        datasets,
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { intersect: false, mode: "index" },
-        onClick: (_evt, elements, chart) => {
-          if (!elements || !elements.length) return;
-          const idx = elements[0].index;
-          const selectedDate = chart?.data?.labels?.[idx];
-          if (!selectedDate) return;
-          drillDownTransactionsByDate(assetId, String(selectedDate));
-        },
-        plugins: {
-          legend: { display: datasets.length > 1 },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                const raw = Number(ctx.raw || 0);
-                if (ctx.dataset.yAxisID === "y1") {
-                  return ` ${ctx.dataset.label}: ${formatPct(raw)}`;
-                }
-                return ` ${ctx.dataset.label}: ${formatBRL(raw)}`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: { display: false },
-            ticks: { color: "#8b92a5", font: { size: 10 }, maxTicksLimit: 12 },
-          },
-          y: {
-            grid: { color: "rgba(255,255,255,0.05)" },
-            ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => formatBRL(v) },
-          },
-          y1: {
-            display: datasets.some((d) => d.yAxisID === "y1"),
-            position: "right",
-            grid: { drawOnChartArea: false },
-            ticks: { color: "#f59e0b", font: { size: 10 }, callback: (v) => formatPct(v) },
-          },
-        },
-      },
-    });
-  } catch (err) {
-    console.error("History chart error:", err);
-  }
-}
-
-function drillDownTransactionsByDate(assetId, date) {
-  if (!date) return;
-  FIN._txFilter.dateFrom = date;
-  FIN._txFilter.dateTo = date;
-  if (assetId && assetId !== "__total__") {
-    FIN._txFilter.asset = String(assetId);
-  } else {
-    FIN._txFilter.asset = "";
-  }
-  localStorage.setItem("fin_tx_filter", JSON.stringify(FIN._txFilter));
-  renderTransactions(FIN.transactions || []);
-  const txCard = byId("finTransactionsCard");
-  if (txCard) txCard.scrollIntoView({ behavior: "smooth", block: "start" });
-  showToast(`Drill-down aplicado: transações em ${date}`, "info", {
-    actionLabel: "Limpar",
-    onAction: () => {
-      FIN._txFilter = { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" };
-      localStorage.removeItem("fin_tx_filter");
-      renderTransactions(FIN.transactions || []);
-    },
-  });
-}
+// Price history domain moved to app/static/finance_history.js.
 
 // ══════════════════════════════════════════════════════════
 // Rebalancing
@@ -5374,7 +4302,7 @@ function checkGoalsMilestones(goals) {
       const label = highest >= 100 ? "Meta concluída!" : `${highest}% atingido!`;
       showToast(`${icon} "${escapeHtml(g.name)}" — ${label}`, "success");
 
-      if (Notification.permission === "granted") {
+      if (prefs.notifyGoalsDesktop && Notification.permission === "granted") {
         new Notification(`${icon} Meta: ${g.name}`, {
           body: `${label} Atual: ${formatBRL(g.current_amount)} / ${formatBRL(g.target_amount)}`,
           icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>",
@@ -5414,7 +4342,7 @@ function checkWatchlistAlerts() {
   });
   renderWatchlistAlertsBanner(triggered);
 
-  if (Notification.permission !== "granted") return;
+  if (!prefs.notifyWatchlistDesktop || Notification.permission !== "granted") return;
   const notified = JSON.parse(localStorage.getItem("fin_notified_alerts") || "{}");
   const now = Date.now();
   const cooldownMs = Math.max(1, Number(prefs.watchlistCooldownMinutes || 60)) * 60000;
@@ -5435,593 +4363,8 @@ function checkWatchlistAlerts() {
   localStorage.setItem("fin_notified_alerts", JSON.stringify(notified));
 }
 
-// ══════════════════════════════════════════════════════════
-// Finance Settings
-// ══════════════════════════════════════════════════════════
+// Finance settings domain moved to app/static/finance_settings.js.
 
-async function openFinanceSettingsModal() {
-  try {
-    const resp = await finFetch("/api/finance/settings");
-    const data = await resp.json();
-    if (!resp.ok) {
-      showToast(data.error || "Erro ao carregar configurações", "error");
-      return;
-    }
+// AI analysis domain moved to app/static/finance_ai.js.
 
-    const historyPrefs = readHistoryPrefs();
-    const divPrefs = getDividendsChartPrefs();
-    const autoRefresh = localStorage.getItem("fin_auto_refresh") || "300";
-    const alertPrefs = getAlertPrefs();
-
-    openFinModal("Configurações Financeiras", `
-      <form data-form-action="submitFinanceSettings">
-        <p class="fin-empty" style="text-align:left;margin-bottom:12px">
-          Ajuste API keys e provedores do módulo financeiro. Para campos de chave,
-          deixe em branco para manter o valor atual.
-        </p>
-
-        <div class="fin-form-group">
-          <label>BRAPI Token</label>
-          <input type="password" id="finSetBrapiToken" placeholder="${data.brapi_token_set ? "•••••••• (já configurado)" : "cole seu token aqui"}" autocomplete="off" />
-        </div>
-
-        <div class="fin-form-group">
-          <label>Finance API Key</label>
-          <input type="password" id="finSetFinanceApiKey" placeholder="${data.finance_api_key_set ? "•••••••• (já configurado)" : "opcional"}" autocomplete="off" />
-        </div>
-
-        <div class="fin-form-row">
-          <div class="fin-form-group">
-            <label>IA local habilitada</label>
-            <select id="finSetAiEnabled">
-              <option value="1" ${String(data.ai_local_enabled) === "1" ? "selected" : ""}>Sim</option>
-              <option value="0" ${String(data.ai_local_enabled) === "0" ? "selected" : ""}>Não</option>
-            </select>
-          </div>
-          <div class="fin-form-group">
-            <label>Timeout IA (segundos)</label>
-            <input type="number" id="finSetAiTimeout" min="5" max="300" value="${escapeHtml(data.ai_local_timeout_seconds || "45")}" />
-          </div>
-        </div>
-
-        <div class="fin-form-group">
-          <label>URL IA Local</label>
-          <input type="url" id="finSetAiUrl" value="${escapeHtml(data.ai_local_url || "")}" />
-        </div>
-
-        <div class="fin-form-group">
-          <label>Modelo IA</label>
-          <input type="text" id="finSetAiModel" value="${escapeHtml(data.ai_local_model || "")}" />
-        </div>
-
-        <div class="fin-form-group">
-          <label>URL API de Câmbio</label>
-          <input type="url" id="finSetCurrencyApi" value="${escapeHtml(data.currency_api_url || "")}" />
-        </div>
-
-        <div class="fin-form-group">
-          <label>Atualização de câmbio (min)</label>
-          <input type="number" id="finSetCurrencyUpdate" min="1" max="1440" value="${escapeHtml(data.currency_update_minutes || "15")}" />
-        </div>
-
-        <hr style="margin:16px 0;border-color:var(--fin-border,#333)">
-        <p class="fin-empty" style="text-align:left;margin-bottom:10px;font-weight:600">🎛 Preferências de visualização</p>
-        <div class="fin-form-row">
-          <div class="fin-form-group">
-            <label>Período padrão (Histórico)</label>
-            <select id="finPrefHistoryPeriod">
-              <option value="30" ${String(historyPrefs.period) === "30" ? "selected" : ""}>30 dias</option>
-              <option value="90" ${String(historyPrefs.period) === "90" ? "selected" : ""}>90 dias</option>
-              <option value="180" ${String(historyPrefs.period) === "180" ? "selected" : ""}>6 meses</option>
-              <option value="365" ${String(historyPrefs.period) === "365" ? "selected" : ""}>1 ano</option>
-            </select>
-          </div>
-          <div class="fin-form-group">
-            <label>Densidade padrão (Proventos)</label>
-            <select id="finPrefDivDensity">
-              <option value="smart" ${String(divPrefs.density) === "smart" ? "selected" : ""}>Inteligente</option>
-              <option value="all" ${String(divPrefs.density) === "all" ? "selected" : ""}>Todos</option>
-              <option value="sparse" ${String(divPrefs.density) === "sparse" ? "selected" : ""}>Reduzida</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="fin-form-group">
-          <label>Auto-refresh padrão</label>
-          <select id="finPrefAutoRefresh">
-            <option value="0" ${autoRefresh === "0" ? "selected" : ""}>Manual</option>
-            <option value="60" ${autoRefresh === "60" ? "selected" : ""}>1 min</option>
-            <option value="300" ${autoRefresh === "300" ? "selected" : ""}>5 min</option>
-            <option value="600" ${autoRefresh === "600" ? "selected" : ""}>10 min</option>
-            <option value="1800" ${autoRefresh === "1800" ? "selected" : ""}>30 min</option>
-          </select>
-        </div>
-
-        <div class="fin-form-row">
-          <div class="fin-form-group">
-            <label>Cooldown alertas watchlist (min)</label>
-            <input type="number" id="finPrefWatchlistCooldown" min="1" max="1440" value="${escapeHtml(alertPrefs.watchlistCooldownMinutes || 60)}" />
-          </div>
-          <div class="fin-form-group">
-            <label>Aumento mínimo proventos (R$)</label>
-            <input type="number" id="finPrefDividendMinIncrease" min="0" step="0.01" value="${escapeHtml(alertPrefs.dividendMinIncrease || 1)}" />
-          </div>
-        </div>
-
-        <div class="fin-form-group">
-          <label>Alertas de marcos de metas</label>
-          <select id="finPrefGoalMilestonesEnabled">
-            <option value="1" ${alertPrefs.goalMilestonesEnabled ? "selected" : ""}>Ativado</option>
-            <option value="0" ${!alertPrefs.goalMilestonesEnabled ? "selected" : ""}>Desativado</option>
-          </select>
-        </div>
-
-        <button type="submit" class="fin-form-submit">💾 Salvar configurações</button>
-      </form>
-
-      <hr style="margin:20px 0;border-color:var(--fin-border,#333)">
-      <p class="fin-empty" style="text-align:left;margin-bottom:10px;font-weight:600">🔧 Manutenção</p>
-      <p class="fin-empty" style="text-align:left;margin-bottom:12px;font-size:.85rem">
-        Remove transações duplicadas do histórico (mantém o registro mais antigo de cada grupo idêntico) e recalcula o portfólio.
-      </p>
-      <button id="btnCleanupDuplicates" class="fin-form-submit" style="background:var(--fin-warn,#b45309);max-width:260px">
-        🧹 Limpar transações duplicadas
-      </button>
-      <p id="cleanupResult" style="margin-top:8px;font-size:.85rem;display:none"></p>
-    `);
-  } catch {
-    showToast("Erro de rede ao carregar configurações", "error");
-  }
-
-  byId("btnCleanupDuplicates")?.addEventListener("click", runCleanupDuplicates);
-}
-
-async function runCleanupDuplicates() {
-  const btn = byId("btnCleanupDuplicates");
-  const result = byId("cleanupResult");
-
-  const accepted = window.prompt(
-    "Confirma limpeza de duplicatas? Digite CONFIRM_CLEANUP_DUPLICATES para continuar.",
-    "",
-  );
-  if (accepted !== "CONFIRM_CLEANUP_DUPLICATES") {
-    showToast("Limpeza cancelada: confirmação inválida.", "warning");
-    return;
-  }
-
-  const idemKey = (window.crypto && window.crypto.randomUUID)
-    ? window.crypto.randomUUID()
-    : `cleanup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  if (btn) { btn.disabled = true; btn.textContent = "⏳ Processando…"; }
-  try {
-    const resp = await finFetch("/api/finance/maintenance/cleanup-duplicates", {
-      method: "POST",
-      headers: {
-        "X-Cleanup-Confirm": "CONFIRM_CLEANUP_DUPLICATES",
-        "X-Idempotency-Key": idemKey,
-      },
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      if (resp.status === 429 && data.retry_after_seconds) {
-        showToast(`Cooldown ativo. Aguarde ${data.retry_after_seconds}s.`, "warning");
-      } else {
-        showToast(data.error || "Erro na limpeza", "error");
-      }
-    } else {
-      const tx = data.transactions || {};
-      const div = data.dividends || {};
-      const msg = `✅ Transações: ${tx.scanned ?? 0} verificadas, ${tx.deleted ?? 0} removidas | Dividendos: ${div.scanned ?? 0} verificados, ${div.deleted ?? 0} removidos`;
-      if (result) { result.textContent = msg; result.style.display = "block"; }
-      showToast(msg, "success");
-    }
-  } catch {
-    showToast("Erro de rede na limpeza", "error");
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "🧹 Limpar transações duplicadas"; }
-  }
-}
-
-async function submitFinanceSettings() {
-  const payload = {
-    ai_local_enabled: byId("finSetAiEnabled")?.value || "1",
-    ai_local_timeout_seconds: byId("finSetAiTimeout")?.value || "45",
-    ai_local_url: byId("finSetAiUrl")?.value?.trim() || "",
-    ai_local_model: byId("finSetAiModel")?.value?.trim() || "",
-    currency_api_url: byId("finSetCurrencyApi")?.value?.trim() || "",
-    currency_update_minutes: byId("finSetCurrencyUpdate")?.value || "15",
-  };
-
-  const brapiToken = byId("finSetBrapiToken")?.value?.trim() || "";
-  const financeApiKey = byId("finSetFinanceApiKey")?.value?.trim() || "";
-  const prefHistoryPeriod = byId("finPrefHistoryPeriod")?.value || "180";
-  const prefDivDensity = byId("finPrefDivDensity")?.value || "smart";
-  const prefAutoRefresh = byId("finPrefAutoRefresh")?.value || "300";
-  const prefWatchlistCooldown = Number(byId("finPrefWatchlistCooldown")?.value || 60);
-  const prefDividendMinIncrease = Number(byId("finPrefDividendMinIncrease")?.value || 1);
-  const prefGoalMilestonesEnabled = (byId("finPrefGoalMilestonesEnabled")?.value || "1") === "1";
-  if (brapiToken) payload.brapi_token = brapiToken;
-  if (financeApiKey) payload.finance_api_key = financeApiKey;
-
-  try {
-    const resp = await finFetch("/api/finance/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      showToast(data.error || "Erro ao salvar configurações", "error");
-      return;
-    }
-
-    // Persist local visualization defaults
-    const historyPrefs = readHistoryPrefs();
-    localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
-      ...historyPrefs,
-      period: prefHistoryPeriod,
-    }));
-
-    const divPrefs = getDividendsChartPrefs();
-    setDividendsChartPrefs({
-      ...divPrefs,
-      density: ["smart", "all", "sparse"].includes(prefDivDensity) ? prefDivDensity : "smart",
-    });
-
-    localStorage.setItem("fin_auto_refresh", prefAutoRefresh);
-    const autoSel = byId("autoRefreshSelect");
-    if (autoSel) autoSel.value = prefAutoRefresh;
-    _startAutoRefresh(Number(prefAutoRefresh));
-
-    setAlertPrefs({
-      watchlistCooldownMinutes: Math.max(1, prefWatchlistCooldown),
-      dividendMinIncrease: Math.max(0, prefDividendMinIncrease),
-      goalMilestonesEnabled: prefGoalMilestonesEnabled,
-    });
-
-    showToast("Configurações salvas com sucesso!", "success");
-    closeFinModal();
-    applyHistoryPrefs();
-    loadHistoryFromControls();
-    renderDividends(FIN.dividends || []);
-    loadAll();
-  } catch {
-    showToast("Erro de rede ao salvar configurações", "error");
-  }
-}
-
-// ══════════════════════════════════════════════════════════
-// AI Analysis
-// ══════════════════════════════════════════════════════════
-
-async function requestAIAnalysis(type) {
-  const el = byId("finAIContent");
-  if (!el) return;
-
-  // Toggle active state
-  document.querySelectorAll(".fin-ai-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.type === type);
-  });
-
-  el.innerHTML = '<div class="fin-ai-loading">Analisando seus dados financeiros...</div>';
-
-  try {
-    const resp = await finFetch("/api/finance/ai-analysis", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type }),
-    });
-    const data = await resp.json();
-    if (resp.ok && data.answer) {
-      el.innerHTML = renderMarkdown(data.answer);
-    } else {
-      el.innerHTML = `<p class="fin-empty">${escapeHtml(data.error || "Erro na análise")}</p>`;
-    }
-  } catch {
-    el.innerHTML = '<p class="fin-empty">Erro de rede ao comunicar com a IA.</p>';
-  }
-}
-
-async function sendFinAIChat() {
-  const input = byId("finAIChatInput");
-  const history = byId("finAIChatHistory");
-  if (!input || !history) return;
-  const msg = input.value.trim();
-  if (!msg) return;
-
-  input.value = "";
-  history.innerHTML += `<div class="fin-chat-msg user">${escapeHtml(msg)}</div>`;
-  history.innerHTML += '<div class="fin-chat-msg ai fin-ai-loading" id="finAIChatLoading">Pensando...</div>';
-  history.scrollTop = history.scrollHeight;
-
-  try {
-    const resp = await finFetch("/api/finance/ai-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: msg }),
-    });
-    const data = await resp.json();
-    const loadingEl = byId("finAIChatLoading");
-    if (loadingEl) {
-      if (resp.ok && data.answer) {
-        let html = renderMarkdown(data.answer);
-
-        // Display AI action confirmations
-        if (data.actions && data.actions.length) {
-          html += '<div class="fin-ai-actions">';
-          for (const act of data.actions) {
-            const icon = act.ok ? "✅" : "❌";
-            let desc = "";
-            if (act.action === "add_transaction" || act.action === "buy" || act.action === "sell") {
-              const op = act.tx_type === "sell" ? "Venda" : "Compra";
-              desc = `${op} registrada: ${act.quantity} × ${act.symbol} a ${formatBRL(act.price)}`;
-            } else if (act.action === "add_asset") {
-              desc = `Ativo cadastrado: ${act.symbol}`;
-            } else if (act.action === "add_watchlist") {
-              desc = `Adicionado à watchlist: ${act.symbol}`;
-            } else if (act.action === "add_goal") {
-              desc = `Meta criada: ${act.name}`;
-            } else {
-              desc = `${act.action}: ${act.error || "ok"}`;
-            }
-            html += `<div class="fin-ai-action-item ${act.ok ? "success" : "error"}">${icon} ${escapeHtml(desc)}</div>`;
-          }
-          html += "</div>";
-          // Refresh only impacted sections from AI actions.
-          const domains = inferDomainsFromAiActions(data.actions);
-          await refreshByDomains(domains);
-        }
-
-        loadingEl.innerHTML = html;
-        loadingEl.classList.remove("fin-ai-loading");
-      } else {
-        loadingEl.textContent = data.error || "Erro";
-        loadingEl.classList.remove("fin-ai-loading");
-      }
-    }
-    loadingEl?.removeAttribute("id");
-  } catch {
-    const loadingEl = byId("finAIChatLoading");
-    if (loadingEl) {
-      loadingEl.textContent = "Erro de rede";
-      loadingEl.classList.remove("fin-ai-loading");
-      loadingEl.removeAttribute("id");
-    }
-  }
-  history.scrollTop = history.scrollHeight;
-}
-
-// Simple markdown renderer
-function renderMarkdown(text) {
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
-    .replace(/\n/g, "<br>");
-}
-
-// ══════════════════════════════════════════════════════════
-// Bootstrap
-// ══════════════════════════════════════════════════════════
-
-document.addEventListener("DOMContentLoaded", () => {
-  FIN.flags = resolveFinanceFlags();
-  try {
-    FIN._txFilter = {
-      ...FIN._txFilter,
-      ...(JSON.parse(localStorage.getItem("fin_tx_filter") || "{}") || {}),
-    };
-  } catch {
-    // ignore malformed storage
-  }
-  try {
-    FIN._txSelected = JSON.parse(localStorage.getItem("fin_tx_selected") || "{}") || {};
-  } catch {
-    FIN._txSelected = {};
-  }
-
-  initTheme();
-  initDensityMode();
-  initFinancePWA();
-  initA11yEnhancements();
-  initFinanceLayoutTools();
-  initFinanceKeyboardShortcuts();
-  initSectionQuickNav();
-  if (isFinFlagOn("lazyRebalanceLoad")) {
-    initRebalanceLazyLoad();
-  } else {
-    FIN._rebalanceLoaded = true;
-  }
-  maybeAutoOpenQuickTour();
-  loadAll();
-
-  const refreshBtn = byId("finRefreshBtn");
-  if (refreshBtn) refreshBtn.addEventListener("click", loadAll);
-
-  const chatInput = byId("finAIChatInput");
-  if (chatInput) {
-    chatInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") sendFinAIChat();
-    });
-  }
-
-  // ── Button bindings (CSP-safe, no inline onclick) ────
-  const bind = (id, fn) => { const el = byId(id); if (el) el.addEventListener("click", fn); };
-
-  bind("btnImportTop", openImportModal);
-  bind("btnImportPortfolio", openImportModal);
-  bind("btnAddAsset", openAddAssetModal);
-  bind("btnAddTransaction", openAddTransactionModal);
-  bind("btnAddWatchlist", openAddWatchlistModal);
-  bind("btnAddGoal", openAddGoalModal);
-  bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
-  bind("btnAddDividend", openAddDividendModal);
-  bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
-  bind("btnEditAllocation", openAllocationModal);
-  bind("btnExportData", openExportModal);
-  bind("btnFinanceSettings", openFinanceSettingsModal);
-  bind("btnFeatureFlags", openFeatureFlagsModal);
-  bind("btnLayoutMode", toggleLayoutEditMode);
-  bind("btnLayoutManage", openLayoutManagerModal);
-  bind("btnLayoutPreset", openLayoutPresetModal);
-  bind("btnLayoutReset", resetFinanceLayout);
-  bind("btnTour", openQuickTourModal);
-  bind("btnNotifications", setupNotifications);
-  bind("finAIChatSend", sendFinAIChat);
-  bind("finModalClose", closeFinModal);
-  bind("btnRunRebalanceSim", renderRebalance);
-  bind("btnRunProjection", renderProjection);
-  bind("btnRunDividendCeiling", renderDividendCeiling);
-  bind("btnRunIndependence", renderIndependenceScenario);
-
-  // Modal overlay: close on background click
-  const overlay = byId("finModalOverlay");
-  if (overlay) {
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) closeFinModal();
-    });
-  }
-
-  const main = byId("financeMain");
-  if (main) {
-    main.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-empty-action]");
-      if (!btn) return;
-      runEmptyStateAction(btn.dataset.emptyAction || "");
-    });
-  }
-
-  // AI analysis type buttons
-  document.querySelectorAll(".fin-ai-btn[data-type]").forEach((btn) => {
-    btn.addEventListener("click", () => requestAIAnalysis(btn.dataset.type));
-  });
-
-  // History chart: asset select
-  const histSel = byId("historyAssetSelect");
-  const histPeriodSel = byId("historyPeriodSelect");
-  const histBenchmarkSel = byId("historyBenchmarkSelect");
-  const histInvested = byId("historyShowInvested");
-  const histCompare = byId("historyCompareTotal");
-  if (histSel) {
-    histSel.addEventListener("change", loadHistoryFromControls);
-  }
-  if (histPeriodSel) histPeriodSel.addEventListener("change", loadHistoryFromControls);
-  if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
-  if (histInvested) histInvested.addEventListener("change", loadHistoryFromControls);
-  if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
-
-  const rebalAporteInput = byId("rebalAporteInput");
-  const projectionMonthsInput = byId("projectionMonthsInput");
-  const projectionAporteMensalInput = byId("projectionAporteMensalInput");
-  const dyTargetInput = byId("dyTargetInput");
-  const dyMonthsInput = byId("dyMonthsInput");
-  const indTargetIncomeInput = byId("indTargetIncomeInput");
-  const indYearsInput = byId("indYearsInput");
-  const indAporteInput = byId("indAporteInput");
-  const indSafeRateInput = byId("indSafeRateInput");
-  if (rebalAporteInput) rebalAporteInput.addEventListener("change", renderRebalance);
-  if (projectionMonthsInput) projectionMonthsInput.addEventListener("change", renderProjection);
-  if (projectionAporteMensalInput) projectionAporteMensalInput.addEventListener("change", renderProjection);
-  if (dyTargetInput) dyTargetInput.addEventListener("change", renderDividendCeiling);
-  if (dyMonthsInput) dyMonthsInput.addEventListener("change", renderDividendCeiling);
-  if (indTargetIncomeInput) indTargetIncomeInput.addEventListener("change", renderIndependenceScenario);
-  if (indYearsInput) indYearsInput.addEventListener("change", renderIndependenceScenario);
-  if (indAporteInput) indAporteInput.addEventListener("change", renderIndependenceScenario);
-  if (indSafeRateInput) indSafeRateInput.addEventListener("change", renderIndependenceScenario);
-
-  // IR report: year select
-  const irSel = byId("irYearSelect");
-  if (irSel) {
-    irSel.addEventListener("change", () => loadIRReport(irSel.value));
-  }
-
-  // ── Event delegation for dynamic buttons (CSP-safe) ──
-  const actionMap = {
-    deleteAsset,
-    deleteTransaction,
-    deleteWatchlistItem,
-    deleteGoal,
-    openEditGoalModal,
-    deleteDividend,
-    openEditTransactionModal,
-    openEditWatchlistModal,
-    addTxForAsset,
-  };
-  document.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-action]");
-    if (!btn) return;
-    const action = btn.dataset.action;
-
-    // Pagination actions
-    if (action === "txPagePrev") { _txPage = Math.max(0, _txPage - 1); renderTransactions(FIN.transactions); return; }
-    if (action === "txPageNext") { _txPage++; renderTransactions(FIN.transactions); return; }
-    if (action === "portfolioPagePrev") { FIN._portfolioPage = Math.max(0, FIN._portfolioPage - 1); renderPortfolio(FIN.portfolio); return; }
-    if (action === "portfolioPageNext") { FIN._portfolioPage++; renderPortfolio(FIN.portfolio); return; }
-
-    const fn = actionMap[action];
-    if (fn) fn(Number(btn.dataset.id));
-  });
-
-  // ── Form delegation (data-form-action) ──────────────
-  const formMap = {
-    submitEditTransaction,
-    submitEditWatchlist,
-    submitBatchEditTransactions,
-  };
-  document.addEventListener("submit", (e) => {
-    const fa = e.target.dataset.formAction;
-    if (!fa) return;
-    const fn = formMap[fa];
-    if (fn) fn(e);
-  });
-
-  initAutoRefresh();
-});
-
-// ── Auto-refresh ──────────────────────────────────────
-function initAutoRefresh() {
-  const sel = byId("autoRefreshSelect");
-  if (!sel) return;
-  const saved = localStorage.getItem("fin_auto_refresh") ?? "300";
-  sel.value = saved;
-  _startAutoRefresh(Number(saved));
-  sel.addEventListener("change", () => {
-    localStorage.setItem("fin_auto_refresh", sel.value);
-    _startAutoRefresh(Number(sel.value));
-  });
-}
-
-function _startAutoRefresh(seconds) {
-  if (FIN._autoRefreshInterval) clearInterval(FIN._autoRefreshInterval);
-  FIN._autoRefreshInterval = null;
-  if (seconds > 0) {
-    FIN._autoRefreshInterval = setInterval(
-      () => loadAll({ useSecondaryCache: isFinFlagOn("secondaryPanelCache") }),
-      seconds * 1000,
-    );
-  }
-}
-
-function initRebalanceLazyLoad() {
-  const card = byId("finRebalanceCard");
-  if (!card || typeof IntersectionObserver !== "function") return;
-
-  const io = new IntersectionObserver((entries) => {
-    const visible = entries.some((entry) => entry.isIntersecting);
-    if (!visible || FIN._rebalanceLoaded) return;
-    FIN._rebalanceLoaded = true;
-    renderRebalance();
-    renderProjection();
-    renderDividendCeiling();
-    renderIndependenceScenario();
-    io.disconnect();
-  }, { rootMargin: "150px 0px" });
-
-  io.observe(card);
-}
+// Bootstrap domain moved to app/static/finance_bootstrap.js.

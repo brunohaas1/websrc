@@ -73,9 +73,44 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     # ── Page ────────────────────────────────────────────────
 
+    def _finance_flags_payload() -> dict[str, bool]:
+        defaults: dict[str, bool] = {
+            "a11yEnhancements": True,
+            "keyboardShortcuts": True,
+            "sectionQuickNav": True,
+            "featureFlagsUI": True,
+            "perfTelemetry": True,
+            "lazyRebalanceLoad": True,
+            "secondaryPanelCache": True,
+        }
+        raw = app.config.get("FINANCE_FEATURE_FLAGS")
+        if raw is None:
+            return defaults
+
+        parsed: dict | None = None
+        if isinstance(raw, dict):
+            parsed = raw
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = None
+
+        if not parsed:
+            return defaults
+
+        merged = dict(defaults)
+        for key in defaults:
+            if key in parsed:
+                merged[key] = bool(parsed[key])
+        return merged
+
     @app.get("/finance")
     def finance_page():
-        return render_template("finance.html")
+        return render_template(
+            "finance.html",
+            finance_flags=_finance_flags_payload(),
+        )
 
     @app.get("/finance/registros")
     def finance_records_page():
@@ -174,9 +209,30 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return False
         return math.isfinite(n)
 
-    def _audit(action: str, target_type: str, target_id: int | None, payload: dict | None = None) -> None:
+    def _audit(
+        action: str,
+        target_type: str,
+        target_id: int | None,
+        payload: dict | None = None,
+    ) -> None:
         try:
-            repo.add_fin_audit_log(action, target_type, target_id, payload or {})
+            forwarded_for = str(
+                request.headers.get("X-Forwarded-For", ""),
+            ).split(",")[0].strip()
+            meta = {
+                "ip": forwarded_for or str(request.remote_addr or ""),
+                "ua": str(request.user_agent.string or "")[:180],
+                "path": str(request.path or ""),
+                "method": str(request.method or ""),
+            }
+            merged_payload = dict(payload or {})
+            merged_payload["_meta"] = meta
+            repo.add_fin_audit_log(
+                action,
+                target_type,
+                target_id,
+                merged_payload,
+            )
             _invalidate_cache_prefixes("finance:audit:")
         except Exception as exc:
             logger.warning("finance audit failed: %s", exc)

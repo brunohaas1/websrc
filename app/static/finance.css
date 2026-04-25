@@ -2000,6 +2000,33 @@ body.light .fin-alloc-total {
   letter-spacing: 0.04em;
 }
 
+.fin-audit-high {
+  background: rgba(217, 119, 6, 0.08);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.fin-audit-details {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-s, #94a3b8);
+  font-size: 0.74rem;
+  padding-left: 2px;
+}
+
+.fin-audit-payload {
+  opacity: 0.9;
+}
+
+@media (max-width: 760px) {
+  .fin-audit-item {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
 /* ══════════════════════════════════════════════════════════
    Watchlist Alerts Banner
    ══════════════════════════════════════════════════════════ */
