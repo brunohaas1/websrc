@@ -4709,9 +4709,42 @@ async function openFinanceSettingsModal() {
 
         <button type="submit" class="fin-form-submit">💾 Salvar configurações</button>
       </form>
+
+      <hr style="margin:20px 0;border-color:var(--fin-border,#333)">
+      <p class="fin-empty" style="text-align:left;margin-bottom:10px;font-weight:600">🔧 Manutenção</p>
+      <p class="fin-empty" style="text-align:left;margin-bottom:12px;font-size:.85rem">
+        Remove transações duplicadas do histórico (mantém o registro mais antigo de cada grupo idêntico) e recalcula o portfólio.
+      </p>
+      <button id="btnCleanupDuplicates" class="fin-form-submit" style="background:var(--fin-warn,#b45309);max-width:260px">
+        🧹 Limpar transações duplicadas
+      </button>
+      <p id="cleanupResult" style="margin-top:8px;font-size:.85rem;display:none"></p>
     `);
   } catch {
     showToast("Erro de rede ao carregar configurações", "error");
+  }
+
+  byId("btnCleanupDuplicates")?.addEventListener("click", runCleanupDuplicates);
+}
+
+async function runCleanupDuplicates() {
+  const btn = byId("btnCleanupDuplicates");
+  const result = byId("cleanupResult");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ Processando…"; }
+  try {
+    const resp = await finFetch("/api/finance/maintenance/cleanup-duplicates", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro na limpeza", "error");
+    } else {
+      const msg = `✅ Verificadas: ${data.scanned} | Duplicatas: ${data.duplicates} | Removidas: ${data.deleted}`;
+      if (result) { result.textContent = msg; result.style.display = "block"; }
+      showToast(msg, "success");
+    }
+  } catch {
+    showToast("Erro de rede na limpeza", "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🧹 Limpar transações duplicadas"; }
   }
 }
 
