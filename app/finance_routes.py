@@ -7,7 +7,7 @@ import logging
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request
@@ -1580,10 +1580,15 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         benchmark = str(request.args.get("benchmark", "ibov")).strip().lower()
         limit = min(365, max(1, int(request.args.get("limit", "180"))))
 
-        benchmark_map = {
+        benchmark_yahoo_map = {
             "ibov": "%5EBVSP",
         }
-        if benchmark not in benchmark_map:
+        benchmark_bcb_map = {
+            # SGS series IDs (percent values per period)
+            "cdi": 12,
+            "ipca": 433,
+        }
+        if benchmark not in benchmark_yahoo_map and benchmark not in benchmark_bcb_map:
             return jsonify({"error": "benchmark inválido"}), 400
 
         cache_key = f"finance:benchmark:{benchmark}:{limit}"
@@ -1591,36 +1596,68 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if cached:
             return jsonify(cached)
 
-        if limit <= 30:
-            rng = "1mo"
-        elif limit <= 90:
-            rng = "3mo"
-        elif limit <= 180:
-            rng = "6mo"
-        else:
-            rng = "1y"
-
         try:
-            resp = http_requests.get(
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{benchmark_map[benchmark]}",
-                params={"interval": "1d", "range": rng},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=10,
-            )
-            if not resp.ok:
-                return jsonify([])
-
-            payload = resp.json()
-            result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
-            timestamps = result.get("timestamp") or []
-            closes = (((result.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
-
             rows: list[dict] = []
-            for ts, close in zip(timestamps, closes):
-                if close is None:
-                    continue
-                dt = datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d")
-                rows.append({"captured_at": dt, "price": float(close)})
+
+            if benchmark in benchmark_yahoo_map:
+                if limit <= 30:
+                    rng = "1mo"
+                elif limit <= 90:
+                    rng = "3mo"
+                elif limit <= 180:
+                    rng = "6mo"
+                else:
+                    rng = "1y"
+
+                resp = http_requests.get(
+                    f"https://query1.finance.yahoo.com/v8/finance/chart/{benchmark_yahoo_map[benchmark]}",
+                    params={"interval": "1d", "range": rng},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=10,
+                )
+                if not resp.ok:
+                    return jsonify([])
+
+                payload = resp.json()
+                result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
+                timestamps = result.get("timestamp") or []
+                closes = (((result.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+
+                for ts, close in zip(timestamps, closes):
+                    if close is None:
+                        continue
+                    dt = datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d")
+                    rows.append({"captured_at": dt, "price": float(close)})
+            else:
+                series_id = benchmark_bcb_map[benchmark]
+                end_date = datetime.utcnow().date()
+                start_date = end_date - timedelta(days=max(40, limit * 2))
+                resp = http_requests.get(
+                    f"https://api.bcb.gov.br/dados/serie/bcdata.sgs/{series_id}/dados",
+                    params={
+                        "formato": "json",
+                        "dataInicial": start_date.strftime("%d/%m/%Y"),
+                        "dataFinal": end_date.strftime("%d/%m/%Y"),
+                    },
+                    timeout=10,
+                )
+                if not resp.ok:
+                    return jsonify([])
+
+                points = resp.json() or []
+                level = 100.0
+                for point in points:
+                    raw_date = str(point.get("data") or "").strip()
+                    raw_val = str(point.get("valor") or "").replace(",", ".").strip()
+                    if not raw_date or not raw_val:
+                        continue
+                    try:
+                        dt = datetime.strptime(raw_date, "%d/%m/%Y").strftime("%Y-%m-%d")
+                        pct = float(raw_val)
+                    except Exception:
+                        continue
+                    level *= (1.0 + (pct / 100.0))
+                    rows.append({"captured_at": dt, "price": float(level)})
 
             if not rows:
                 return jsonify([])

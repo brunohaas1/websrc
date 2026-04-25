@@ -3654,6 +3654,27 @@ function renderDividends(divs) {
   const bestAsset = Object.entries(assetTotals).sort((a, b) => b[1] - a[1])[0] || null;
   const totalCount = divs.length;
 
+  const currMonthVal = monthEntries.length ? Number(monthEntries[monthEntries.length - 1][1] || 0) : 0;
+  const prevMonthVal = monthEntries.length > 1 ? Number(monthEntries[monthEntries.length - 2][1] || 0) : 0;
+  const momPct = prevMonthVal > 0 ? ((currMonthVal / prevMonthVal) - 1) * 100 : null;
+
+  const currentMonthKey = monthEntries.length ? String(monthEntries[monthEntries.length - 1][0] || "") : "";
+  let yoyPct = null;
+  if (currentMonthKey && currentMonthKey.length >= 7) {
+    const yy = Number(currentMonthKey.slice(0, 4));
+    const mm = currentMonthKey.slice(5, 7);
+    const prevYearKey = `${yy - 1}-${mm}`;
+    const prevYearVal = Number(monthTotals[prevYearKey] || 0);
+    if (prevYearVal > 0) {
+      yoyPct = ((currMonthVal / prevYearVal) - 1) * 100;
+    }
+  }
+
+  const baselineAvg = last12.length ? (last12Total / last12.length) : averageMonth;
+  const forecast3 = baselineAvg * 3;
+  const forecast6 = baselineAvg * 6;
+  const forecast12 = baselineAvg * 12;
+
   const typeLabels = { dividend: "Dividendos", jcp: "JCP", rendimento: "Rendimentos", bonus: "Bonificação" };
   if (summaryEl) {
     summaryEl.innerHTML = `
@@ -3661,8 +3682,13 @@ function renderDividends(divs) {
         <div class="fin-div-total-item fin-div-grand"><span>Total Geral</span><strong>${formatBRL(grandTotal)}</strong><em>${totalCount} lançamento(s)</em></div>
         <div class="fin-div-total-item"><span>Média Mensal</span><strong>${formatBRL(averageMonth)}</strong><em>${monthEntries.length || 0} mês(es)</em></div>
         <div class="fin-div-total-item"><span>Últimos 12 Meses</span><strong>${formatBRL(last12Total)}</strong><em>${last12.length || 0} competência(s)</em></div>
+        <div class="fin-div-total-item"><span>MoM</span><strong class="${momPct == null ? "" : changeClass(momPct)}">${momPct == null ? "—" : formatPct(momPct)}</strong><em>mês atual vs anterior</em></div>
+        <div class="fin-div-total-item"><span>YoY</span><strong class="${yoyPct == null ? "" : changeClass(yoyPct)}">${yoyPct == null ? "—" : formatPct(yoyPct)}</strong><em>mês atual vs ano anterior</em></div>
         <div class="fin-div-total-item"><span>Melhor Mês</span><strong>${bestMonth ? formatBRL(bestMonth[1]) : "—"}</strong><em>${bestMonth ? escapeHtml(bestMonth[0]) : "sem dados"}</em></div>
         <div class="fin-div-total-item"><span>Maior Pagador</span><strong>${bestAsset ? formatBRL(bestAsset[1]) : "—"}</strong><em>${bestAsset ? escapeHtml(bestAsset[0]) : "sem dados"}</em></div>
+        <div class="fin-div-total-item"><span>Projeção 3m</span><strong>${formatBRL(forecast3)}</strong><em>base média recente</em></div>
+        <div class="fin-div-total-item"><span>Projeção 6m</span><strong>${formatBRL(forecast6)}</strong><em>base média recente</em></div>
+        <div class="fin-div-total-item"><span>Projeção 12m</span><strong>${formatBRL(forecast12)}</strong><em>base média recente</em></div>
         ${Object.entries(totals).map(([k, v]) =>
           `<div class="fin-div-total-item"><span>${typeLabels[k] || k}</span><strong>${formatBRL(v)}</strong></div>`
         ).join("")}
@@ -4205,19 +4231,22 @@ function readHistoryPrefs() {
   try {
     const raw = localStorage.getItem(HISTORY_PREFS_KEY);
     if (!raw) return {
-      assetId: "", period: "180", compareTotal: false, benchmark: "", showInvested: true,
+      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
     };
     const parsed = JSON.parse(raw);
+    const benchmarks = Array.isArray(parsed.benchmarks)
+      ? parsed.benchmarks.filter((b) => ["ibov", "cdi", "ipca"].includes(String(b)))
+      : (parsed.benchmark ? [String(parsed.benchmark)] : []);
     return {
       assetId: String(parsed.assetId || ""),
       period: String(parsed.period || "180"),
       compareTotal: Boolean(parsed.compareTotal),
-      benchmark: String(parsed.benchmark || ""),
+      benchmarks,
       showInvested: parsed.showInvested !== false,
     };
   } catch {
     return {
-      assetId: "", period: "180", compareTotal: false, benchmark: "", showInvested: true,
+      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
     };
   }
 }
@@ -4229,11 +4258,12 @@ function saveHistoryPrefs() {
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
   if (!sel || !periodSel || !compareEl || !benchmarkSel || !investedEl) return;
+  const benchmarks = [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean);
   localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
     assetId: sel.value || "",
     period: periodSel.value || "180",
     compareTotal: compareEl.checked,
-    benchmark: benchmarkSel.value || "",
+    benchmarks,
     showInvested: investedEl.checked,
   }));
 }
@@ -4252,8 +4282,10 @@ function applyHistoryPrefs() {
   }
   if (compareEl) compareEl.checked = !!prefs.compareTotal;
   if (benchmarkSel) {
-    const allowedB = ["", "ibov"];
-    benchmarkSel.value = allowedB.includes(prefs.benchmark) ? prefs.benchmark : "";
+    const allowedB = new Set(["ibov", "cdi", "ipca"]);
+    [...benchmarkSel.options].forEach((opt) => {
+      opt.selected = Array.isArray(prefs.benchmarks) && allowedB.has(opt.value) && prefs.benchmarks.includes(opt.value);
+    });
   }
   if (investedEl) investedEl.checked = prefs.showInvested !== false;
 
@@ -4285,10 +4317,13 @@ async function loadHistoryFromControls() {
   const investedEl = byId("historyShowInvested");
   if (!sel) return;
   saveHistoryPrefs();
+  const benchmarks = benchmarkSel
+    ? [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean)
+    : [];
   await loadHistoryChart(sel.value, {
     compareTotal: !!(compareEl && compareEl.checked),
     rangeDays: _historyRangeDays(),
-    benchmark: (benchmarkSel && benchmarkSel.value) || "",
+    benchmarks,
     showInvested: !(investedEl && investedEl.checked === false),
   });
 }
@@ -4300,7 +4335,9 @@ async function loadHistoryChart(assetId, options = {}) {
   const isTotal = assetId === "__total__";
   const compareTotal = !!options.compareTotal;
   const rangeDays = Number(options.rangeDays || 180);
-  const benchmark = String(options.benchmark || "").trim().toLowerCase();
+  const benchmarkKeys = Array.isArray(options.benchmarks)
+    ? options.benchmarks.map((b) => String(b || "").trim().toLowerCase()).filter((b) => ["ibov", "cdi", "ipca"].includes(b))
+    : [];
   const showInvested = options.showInvested !== false;
   const limit = Math.min(365, Math.max(1, rangeDays));
 
@@ -4328,8 +4365,10 @@ async function loadHistoryChart(assetId, options = {}) {
         : `/api/finance/invested-history?asset_id=${encodeURIComponent(assetId)}&limit=${limit}`;
       reqs.push(finFetch(investedUrl).then((r) => r.json()));
     }
-    if (benchmark) {
-      reqs.push(finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(benchmark)}&limit=${limit}`).then((r) => r.json()));
+    if (benchmarkKeys.length) {
+      reqs.push(Promise.all(benchmarkKeys.map((b) =>
+        finFetch(`/api/finance/benchmark-history?benchmark=${encodeURIComponent(b)}&limit=${limit}`).then((r) => r.json())
+      )));
     }
 
     const results = await Promise.all(reqs);
@@ -4337,7 +4376,7 @@ async function loadHistoryChart(assetId, options = {}) {
     const primaryData = results[resultIdx++] || [];
     const totalData = (!isTotal && compareTotal) ? (results[resultIdx++] || []) : [];
     const investedData = showInvested ? (results[resultIdx++] || []) : [];
-    const benchmarkData = benchmark ? (results[resultIdx++] || []) : [];
+    const benchmarkSeries = benchmarkKeys.length ? (results[resultIdx++] || []) : [];
 
     if (!primaryData.length) {
       canvas.style.display = "none";
@@ -4405,16 +4444,29 @@ async function loadHistoryChart(assetId, options = {}) {
       });
     }
 
-    if (benchmark && Array.isArray(benchmarkData) && benchmarkData.length) {
-      const bMap = new Map();
-      for (const row of benchmarkData) {
-        const d = (row.captured_at || "").slice(0, 10);
-        if (!d) continue;
-        bMap.set(d, Number(row.normalized_pct || 0));
-      }
+    if (benchmarkKeys.length && Array.isArray(benchmarkSeries) && benchmarkSeries.length) {
+      const colorMap = {
+        ibov: { border: "#f59e0b", bg: "rgba(245,158,11,0.08)", label: "IBOV" },
+        cdi: { border: "#22c55e", bg: "rgba(34,197,94,0.08)", label: "CDI" },
+        ipca: { border: "#ef4444", bg: "rgba(239,68,68,0.08)", label: "IPCA" },
+      };
+      const maps = [];
+      benchmarkSeries.forEach((seriesRows, idx) => {
+        const key = benchmarkKeys[idx];
+        const m = new Map();
+        (seriesRows || []).forEach((row) => {
+          const d = (row.captured_at || "").slice(0, 10);
+          if (!d) return;
+          m.set(d, Number(row.normalized_pct || 0));
+        });
+        if (m.size) maps.push({ key, map: m });
+      });
 
-      if (bMap.size) {
-        const mergedLabels = [...new Set([...labels, ...bMap.keys()])].sort();
+      if (maps.length) {
+        const mergedLabels = [...new Set([
+          ...labels,
+          ...maps.flatMap((it) => [...it.map.keys()]),
+        ])].sort();
         datasets = datasets.map((ds) => {
           const map = new Map(labels.map((d, i) => [d, ds.data[i] ?? null]));
           return {
@@ -4423,17 +4475,21 @@ async function loadHistoryChart(assetId, options = {}) {
             spanGaps: true,
           };
         });
-        datasets.push({
-          label: benchmark === "ibov" ? "Benchmark IBOV (%)" : "Benchmark (%)",
-          data: mergedLabels.map((d) => (bMap.has(d) ? bMap.get(d) : null)),
-          yAxisID: "y1",
-          borderColor: "#f59e0b",
-          backgroundColor: "rgba(245,158,11,0.08)",
-          fill: false,
-          tension: 0.3,
-          pointRadius: mergedLabels.length > 60 ? 0 : 2,
-          borderWidth: 2,
-          spanGaps: true,
+
+        maps.forEach((entry) => {
+          const color = colorMap[entry.key] || colorMap.ibov;
+          datasets.push({
+            label: `Benchmark ${color.label} (%)`,
+            data: mergedLabels.map((d) => (entry.map.has(d) ? entry.map.get(d) : null)),
+            yAxisID: "y1",
+            borderColor: color.border,
+            backgroundColor: color.bg,
+            fill: false,
+            tension: 0.3,
+            pointRadius: mergedLabels.length > 60 ? 0 : 2,
+            borderWidth: 2,
+            spanGaps: true,
+          });
         });
         labels = mergedLabels;
       }

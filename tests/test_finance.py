@@ -119,6 +119,14 @@ class TestAssets:
         resp = client.get("/api/finance/benchmark-history?benchmark=foo")
         assert resp.status_code == 400
 
+    def test_benchmark_history_supports_cdi_and_ipca(self, client):
+        cdi = client.get("/api/finance/benchmark-history?benchmark=cdi&limit=30")
+        ipca = client.get("/api/finance/benchmark-history?benchmark=ipca&limit=30")
+        assert cdi.status_code == 200
+        assert ipca.status_code == 200
+        assert isinstance(cdi.get_json(), list)
+        assert isinstance(ipca.get_json(), list)
+
     def test_invested_history_empty(self, client):
         resp = client.get("/api/finance/invested-history")
         assert resp.status_code == 200
