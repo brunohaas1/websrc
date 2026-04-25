@@ -31,6 +31,10 @@ const FIN = {
   _marketStaleNotified: false,
   _perf: { seq: 0, lastRunId: 0, runs: {}, last: null, history: [] },
   flags: {},
+  layoutEditMode: false,
+  layoutObserver: null,
+  layoutSaveTimer: null,
+  defaultCardOrder: [],
 };
 
 const SECONDARY_CACHE_TTL_MS = 25000;
@@ -58,6 +62,9 @@ const FIN_FLAG_LABELS = {
 };
 
 const DIVIDENDS_CHART_PREFS_KEY = "fin_dividends_chart_prefs";
+const FIN_THEME_KEY = "fin-theme";
+const FIN_LAYOUT_KEY = "fin_layout_v1";
+const FIN_THEME_ORDER = ["dark", "light", "ocean"];
 
 const byId = (id) => document.getElementById(id);
 
@@ -194,18 +201,37 @@ function isFinFlagOn(flagName) {
 
 // ── Theme Toggle ─────────────────────────────────────────
 
+function applyFinanceTheme(theme) {
+  const nextTheme = FIN_THEME_ORDER.includes(theme) ? theme : "dark";
+  document.body.classList.remove("light", "theme-ocean");
+  if (nextTheme === "light") {
+    document.body.classList.add("light");
+  } else if (nextTheme === "ocean") {
+    document.body.classList.add("theme-ocean");
+  }
+  localStorage.setItem(FIN_THEME_KEY, nextTheme);
+
+  const btn = byId("themeToggle");
+  if (btn) {
+    const glyphMap = { dark: "◐", light: "◑", ocean: "◒" };
+    btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${glyphMap[nextTheme] || "◐"}</span><span>Tema</span>`;
+    btn.title = `Tema atual: ${nextTheme}`;
+    btn.setAttribute("aria-label", `Tema atual: ${nextTheme}`);
+  }
+}
+
 function initTheme() {
-  const saved = localStorage.getItem("fin-theme");
-  if (saved === "light") document.body.classList.add("light");
+  const saved = localStorage.getItem(FIN_THEME_KEY) || "dark";
+  applyFinanceTheme(saved);
   const btn = byId("themeToggle");
   if (btn) {
     btn.addEventListener("click", () => {
-      document.body.classList.toggle("light");
-      const isLight = document.body.classList.contains("light");
-      localStorage.setItem("fin-theme", isLight ? "light" : "dark");
-      btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${isLight ? "◑" : "◐"}</span><span>Tema</span>`;
+      const current = localStorage.getItem(FIN_THEME_KEY) || "dark";
+      const idx = FIN_THEME_ORDER.indexOf(current);
+      const next = FIN_THEME_ORDER[(idx + 1) % FIN_THEME_ORDER.length];
+      applyFinanceTheme(next);
+      showToast(`Tema alterado: ${next}`, "info");
     });
-    btn.innerHTML = `<span class="btn-glyph" aria-hidden="true">${document.body.classList.contains("light") ? "◑" : "◐"}</span><span>Tema</span>`;
   }
 }
 
@@ -278,6 +304,246 @@ function initA11yEnhancements() {
     updated.setAttribute("aria-live", "polite");
     updated.setAttribute("aria-atomic", "true");
   }
+}
+
+function _getLayoutState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FIN_LAYOUT_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function _saveLayoutState(next) {
+  localStorage.setItem(FIN_LAYOUT_KEY, JSON.stringify(next || {}));
+}
+
+function _captureLayoutState() {
+  const grid = byId("financeMain");
+  if (!grid) return {};
+  const cards = [...grid.querySelectorAll(".fin-card[id]")];
+  const hidden = [];
+  const heights = {};
+  cards.forEach((card) => {
+    const cardId = card.id;
+    const isHidden = card.style.display === "none";
+    if (isHidden) hidden.push(cardId);
+    if (card.style.height && card.style.height.endsWith("px")) {
+      heights[cardId] = card.style.height;
+    }
+  });
+  return {
+    order: cards.map((card) => card.id),
+    hidden,
+    heights,
+  };
+}
+
+function persistFinanceLayout() {
+  _saveLayoutState(_captureLayoutState());
+}
+
+function _scheduleLayoutPersist() {
+  clearTimeout(FIN.layoutSaveTimer);
+  FIN.layoutSaveTimer = setTimeout(persistFinanceLayout, 180);
+}
+
+function applyFinanceLayout() {
+  const grid = byId("financeMain");
+  if (!grid) return;
+  const state = _getLayoutState();
+  const cards = [...grid.querySelectorAll(".fin-card[id]")];
+  if (!cards.length) return;
+
+  const byCardId = new Map(cards.map((card) => [card.id, card]));
+  const used = new Set();
+  const ordered = [];
+  (state.order || []).forEach((id) => {
+    const card = byCardId.get(id);
+    if (!card || used.has(id)) return;
+    used.add(id);
+    ordered.push(card);
+  });
+  cards.forEach((card) => {
+    if (!used.has(card.id)) ordered.push(card);
+  });
+  ordered.forEach((card) => grid.appendChild(card));
+
+  const hidden = new Set(state.hidden || []);
+  const heights = state.heights || {};
+  cards.forEach((card) => {
+    card.style.display = hidden.has(card.id) ? "none" : "";
+    if (heights[card.id]) card.style.height = heights[card.id];
+  });
+}
+
+function setLayoutEditMode(enabled) {
+  const grid = byId("financeMain");
+  if (!grid) return;
+  FIN.layoutEditMode = Boolean(enabled);
+  grid.classList.toggle("fin-layout-edit", FIN.layoutEditMode);
+
+  const btn = byId("btnLayoutMode");
+  if (btn) {
+    if (FIN.layoutEditMode) {
+      btn.classList.add("is-active");
+      btn.innerHTML = '<span class="btn-glyph" aria-hidden="true">✓</span><span>Editando</span>';
+    } else {
+      btn.classList.remove("is-active");
+      btn.innerHTML = '<span class="btn-glyph" aria-hidden="true">⤢</span><span>Layout</span>';
+    }
+  }
+
+  grid.querySelectorAll(".fin-card[id]").forEach((card) => {
+    card.draggable = FIN.layoutEditMode;
+  });
+
+  showToast(
+    FIN.layoutEditMode
+      ? "Modo layout ativado. Arraste os cards para reordenar."
+      : "Modo layout desativado.",
+    "info",
+  );
+}
+
+function toggleLayoutEditMode() {
+  setLayoutEditMode(!FIN.layoutEditMode);
+}
+
+function initFinanceLayoutTools() {
+  const grid = byId("financeMain");
+  if (!grid) return;
+
+  if (!FIN.defaultCardOrder.length) {
+    FIN.defaultCardOrder = [...grid.querySelectorAll(".fin-card[id]")].map((card) => card.id);
+  }
+
+  applyFinanceLayout();
+
+  if (typeof ResizeObserver === "function") {
+    FIN.layoutObserver = new ResizeObserver(() => _scheduleLayoutPersist());
+    grid.querySelectorAll(".fin-card[id]").forEach((card) => FIN.layoutObserver.observe(card));
+  }
+
+  let draggedId = "";
+  grid.querySelectorAll(".fin-card[id]").forEach((card) => {
+    card.addEventListener("dragstart", (e) => {
+      if (!FIN.layoutEditMode) {
+        e.preventDefault();
+        return;
+      }
+      draggedId = card.id;
+      card.classList.add("fin-dragging");
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", card.id);
+      }
+    });
+
+    card.addEventListener("dragend", () => {
+      card.classList.remove("fin-dragging");
+      grid.querySelectorAll(".fin-drop-target").forEach((el) => el.classList.remove("fin-drop-target"));
+      _scheduleLayoutPersist();
+    });
+
+    card.addEventListener("dragover", (e) => {
+      if (!FIN.layoutEditMode) return;
+      e.preventDefault();
+      if (draggedId && draggedId !== card.id) card.classList.add("fin-drop-target");
+    });
+
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("fin-drop-target");
+    });
+
+    card.addEventListener("drop", (e) => {
+      if (!FIN.layoutEditMode) return;
+      e.preventDefault();
+      card.classList.remove("fin-drop-target");
+      const sourceId = draggedId || e.dataTransfer?.getData("text/plain") || "";
+      if (!sourceId || sourceId === card.id) return;
+      const source = byId(sourceId);
+      const target = card;
+      if (!source || !target || source === target) return;
+
+      const targetRect = target.getBoundingClientRect();
+      const placeAfter = e.clientY > (targetRect.top + targetRect.height / 2);
+      if (placeAfter) {
+        target.insertAdjacentElement("afterend", source);
+      } else {
+        target.insertAdjacentElement("beforebegin", source);
+      }
+      _scheduleLayoutPersist();
+    });
+  });
+}
+
+function openLayoutManagerModal() {
+  const grid = byId("financeMain");
+  if (!grid) return;
+  const cards = [...grid.querySelectorAll(".fin-card[id]")];
+  const rows = cards.map((card) => {
+    const title = card.querySelector("h2")?.textContent?.trim() || card.id;
+    const checked = card.style.display === "none" ? "" : "checked";
+    return `
+      <label class="fin-shortcut-row" style="justify-content:space-between;gap:12px;align-items:center;">
+        <span>${escapeHtml(title)}</span>
+        <input type="checkbox" class="fin-layout-card-check" data-card-id="${card.id}" ${checked} />
+      </label>
+    `;
+  }).join("");
+
+  openFinModal("Gerenciar Cards", `
+    <form id="finLayoutManagerForm">
+      <p class="fin-empty" style="text-align:left;margin-bottom:10px;">Ative/desative os cards visíveis e mantenha o layout salvo neste navegador.</p>
+      <div class="fin-shortcuts-list">${rows}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button type="button" id="finLayoutShowAll" class="btn-text">Mostrar todos</button>
+        <button type="submit" class="fin-form-submit">Salvar visibilidade</button>
+      </div>
+    </form>
+  `);
+
+  const form = byId("finLayoutManagerForm");
+  const showAll = byId("finLayoutShowAll");
+  if (showAll) {
+    showAll.addEventListener("click", () => {
+      form?.querySelectorAll(".fin-layout-card-check").forEach((el) => { el.checked = true; });
+    });
+  }
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      form.querySelectorAll(".fin-layout-card-check").forEach((el) => {
+        const cardId = el.dataset.cardId;
+        const card = byId(cardId);
+        if (!card) return;
+        card.style.display = el.checked ? "" : "none";
+      });
+      persistFinanceLayout();
+      closeFinModal();
+      showToast("Visibilidade dos cards atualizada.", "success");
+    });
+  }
+}
+
+function resetFinanceLayout() {
+  localStorage.removeItem(FIN_LAYOUT_KEY);
+  const grid = byId("financeMain");
+  if (!grid) return;
+  const cards = [...grid.querySelectorAll(".fin-card[id]")];
+  cards.forEach((card) => {
+    card.style.display = "";
+    card.style.height = "";
+  });
+  const byCardId = new Map(cards.map((card) => [card.id, card]));
+  FIN.defaultCardOrder.forEach((id) => {
+    const card = byCardId.get(id);
+    if (card) grid.appendChild(card);
+  });
+  setLayoutEditMode(false);
+  showToast("Layout resetado para o padrão.", "success");
 }
 
 function showKeyboardShortcutsHelp() {
@@ -4922,6 +5188,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initTheme();
   initA11yEnhancements();
+  initFinanceLayoutTools();
   initFinanceKeyboardShortcuts();
   initSectionQuickNav();
   if (isFinFlagOn("lazyRebalanceLoad")) {
@@ -4957,6 +5224,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnExportData", openExportModal);
   bind("btnFinanceSettings", openFinanceSettingsModal);
   bind("btnFeatureFlags", openFeatureFlagsModal);
+  bind("btnLayoutMode", toggleLayoutEditMode);
+  bind("btnLayoutManage", openLayoutManagerModal);
+  bind("btnLayoutReset", resetFinanceLayout);
   bind("btnNotifications", setupNotifications);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);

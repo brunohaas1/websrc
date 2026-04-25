@@ -2,6 +2,19 @@
    Finance Dashboard Styles
    ══════════════════════════════════════════════════════════ */
 
+body.theme-ocean {
+  --bg: #02121f;
+  --card-bg: rgba(5, 30, 46, 0.72);
+  --border: rgba(56, 189, 248, 0.2);
+  --text: #d9f4ff;
+  --text-muted: #88c5df;
+}
+
+.btn-icon.is-active {
+  border-color: rgba(56, 189, 248, 0.48);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.22) inset;
+}
+
 /* ── Summary Bar ──────────────────────────────────────── */
 .fin-summary-bar {
   --fin-control-height: 40px;
@@ -115,6 +128,23 @@
 
 .fin-card:hover {
   box-shadow: 0 4px 24px rgba(99, 102, 241, 0.12);
+}
+
+.fin-grid.fin-layout-edit .fin-card {
+  cursor: move;
+}
+
+.fin-grid.fin-layout-edit .fin-card:hover {
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.6), 0 8px 32px rgba(56, 189, 248, 0.15);
+}
+
+.fin-card.fin-dragging {
+  opacity: 0.55;
+}
+
+.fin-card.fin-drop-target {
+  border-style: dashed;
+  border-color: rgba(56, 189, 248, 0.8);
 }
 
 .fin-card.fin-wide {
