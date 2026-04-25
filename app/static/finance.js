@@ -658,6 +658,68 @@ async function refreshImportPanels() {
   updateLastUpdated();
 }
 
+async function refreshByDomains(domains) {
+  const requested = Array.isArray(domains) ? domains : [];
+  const normalized = [...new Set(requested.map((d) => String(d || "").trim()).filter(Boolean))];
+  if (!normalized.length) return;
+
+  if (normalized.includes("full")) {
+    await loadAll();
+    return;
+  }
+
+  if (normalized.includes("import")) {
+    await refreshImportPanels();
+    return;
+  }
+
+  const handlers = {
+    portfolio: refreshPortfolioPanels,
+    watchlist: refreshWatchlistPanel,
+    goals: refreshGoalsPanel,
+    dividends: refreshDividendsPanels,
+  };
+
+  for (const domain of normalized) {
+    const handler = handlers[domain];
+    if (!handler) continue;
+    await handler();
+  }
+}
+
+function inferDomainsFromAiActions(actions) {
+  const list = Array.isArray(actions) ? actions : [];
+  if (!list.length) return [];
+
+  const domains = new Set();
+  for (const act of list) {
+    if (!act || act.ok === false) continue;
+    const action = String(act.action || "").toLowerCase();
+
+    if (["buy", "sell", "add_transaction", "update_transaction", "delete_transaction", "add_asset", "delete_asset"].includes(action)) {
+      domains.add("portfolio");
+      continue;
+    }
+    if (["add_watchlist", "update_watchlist", "delete_watchlist", "remove_watchlist"].includes(action)) {
+      domains.add("watchlist");
+      continue;
+    }
+    if (["add_goal", "update_goal", "delete_goal"].includes(action)) {
+      domains.add("goals");
+      continue;
+    }
+    if (["add_dividend", "update_dividend", "delete_dividend"].includes(action)) {
+      domains.add("dividends");
+      continue;
+    }
+
+    // Unknown action: safer fallback.
+    domains.add("full");
+  }
+
+  return [...domains];
+}
+
 async function _loadSecondaryPanels(options = {}) {
   const started = performance.now();
   const useCache = options.useCache === true && isFinFlagOn("secondaryPanelCache");
@@ -1920,7 +1982,7 @@ async function submitImport() {
         msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
       }
       status.textContent = msg;
-      await refreshImportPanels();
+      await refreshByDomains(["import"]);
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar"}`;
@@ -1966,7 +2028,7 @@ async function submitNotaImport() {
         msg += `\n⚠️ ${data.errors.length} erro(s):\n` + data.errors.join("\n");
       }
       status.textContent = msg;
-      await refreshImportPanels();
+      await refreshByDomains(["import"]);
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar nota"}`;
@@ -2017,7 +2079,7 @@ async function submitB3Import() {
       }
       status.textContent = msg;
       status.style.whiteSpace = "pre-line";
-      await refreshImportPanels();
+      await refreshByDomains(["import"]);
     } else {
       status.className = "fin-import-status error";
       status.textContent = `❌ ${data.error || "Erro ao importar"}`;
@@ -2136,7 +2198,7 @@ async function submitAddAsset(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshPortfolioPanels();
+      await refreshByDomains(["portfolio"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao adicionar ativo");
@@ -2150,7 +2212,7 @@ async function deleteAsset(assetId) {
   if (!confirm("Remover este ativo e todas as transações associadas?")) return;
   try {
     await finFetch(`/api/finance/assets/${assetId}`, { method: "DELETE" });
-    await refreshPortfolioPanels();
+    await refreshByDomains(["portfolio"]);
   } catch {
     showToast("Erro ao remover ativo");
   }
@@ -2319,7 +2381,7 @@ async function submitAddTransaction(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshPortfolioPanels();
+      await refreshByDomains(["portfolio"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao registrar transação");
@@ -2333,7 +2395,7 @@ async function deleteTransaction(txId) {
   if (!confirm("Excluir esta transação?")) return;
   try {
     await finFetch(`/api/finance/transactions/${txId}`, { method: "DELETE" });
-    await refreshPortfolioPanels();
+    await refreshByDomains(["portfolio"]);
   } catch {
     showToast("Erro ao excluir transação");
   }
@@ -2408,7 +2470,7 @@ async function submitEditTransaction(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshPortfolioPanels();
+      await refreshByDomains(["portfolio"]);
       showToast("Transação atualizada!", "success");
     } else {
       const data = await resp.json();
@@ -2502,7 +2564,7 @@ async function submitBatchEditTransactions(e) {
     localStorage.removeItem("fin_tx_selected");
     closeFinModal();
     showToast(`${data.updated || 0} transação(ões) atualizada(s)!`, "success");
-    await refreshPortfolioPanels();
+    await refreshByDomains(["portfolio"]);
   } catch {
     showToast("Erro de rede");
   }
@@ -2567,7 +2629,7 @@ async function submitAddWatchlist(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshWatchlistPanel();
+      await refreshByDomains(["watchlist"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao adicionar à watchlist");
@@ -2581,7 +2643,7 @@ async function deleteWatchlistItem(wlId) {
   if (!confirm("Remover da watchlist?")) return;
   try {
     await finFetch(`/api/finance/watchlist/${wlId}`, { method: "DELETE" });
-    await refreshWatchlistPanel();
+    await refreshByDomains(["watchlist"]);
   } catch {
     showToast("Erro ao remover item");
   }
@@ -2653,7 +2715,7 @@ async function submitEditWatchlist(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshWatchlistPanel();
+      await refreshByDomains(["watchlist"]);
       showToast("Watchlist atualizada!", "success");
     } else {
       const data = await resp.json();
@@ -2728,7 +2790,7 @@ async function submitAddGoal(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshGoalsPanel();
+      await refreshByDomains(["goals"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao criar meta");
@@ -2798,7 +2860,7 @@ async function submitEditGoal(e, goalId) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshGoalsPanel();
+      await refreshByDomains(["goals"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao salvar meta");
@@ -2812,7 +2874,7 @@ async function deleteGoal(goalId) {
   if (!confirm("Excluir esta meta?")) return;
   try {
     await finFetch(`/api/finance/goals/${goalId}`, { method: "DELETE" });
-    await refreshGoalsPanel();
+    await refreshByDomains(["goals"]);
   } catch {
     showToast("Erro ao excluir meta");
   }
@@ -3262,7 +3324,7 @@ async function submitAddDividend(e) {
     });
     if (resp.ok) {
       closeFinModal();
-      await refreshDividendsPanels();
+      await refreshByDomains(["dividends"]);
     } else {
       const data = await resp.json();
       showToast(data.error || "Erro ao registrar dividendo");
@@ -3276,7 +3338,7 @@ async function deleteDividend(divId) {
   if (!confirm("Excluir este dividendo?")) return;
   try {
     await finFetch(`/api/finance/dividends/${divId}`, { method: "DELETE" });
-    await refreshDividendsPanels();
+    await refreshByDomains(["dividends"]);
   } catch {
     showToast("Erro ao excluir dividendo");
   }
@@ -4298,8 +4360,9 @@ async function sendFinAIChat() {
             html += `<div class="fin-ai-action-item ${act.ok ? "success" : "error"}">${icon} ${escapeHtml(desc)}</div>`;
           }
           html += "</div>";
-          // Reload data since actions modified the DB
-          loadAll();
+          // Refresh only impacted sections from AI actions.
+          const domains = inferDomainsFromAiActions(data.actions);
+          await refreshByDomains(domains);
         }
 
         loadingEl.innerHTML = html;
