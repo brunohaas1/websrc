@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050a15" />
+    <title>Registros Financeiros — Personal Web Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ asset_hash('style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='finance.css') }}?v={{ asset_hash('finance.css') }}" />
+    <script src="{{ url_for('static', filename='finance_records.js') }}?v={{ asset_hash('finance_records.js') }}" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#recordsMain">Pular para conteúdo principal</a>
+
+    <header class="topbar">
+      <div class="topbar-top">
+        <div class="brand">
+          <p class="eyebrow">Personal Web Intelligence</p>
+          <h1>📚 Registros Financeiros</h1>
+        </div>
+        <div class="topbar-tools">
+          <a href="/finance" class="btn-icon" title="Voltar à Página de Finanças" aria-label="Voltar à Página de Finanças">💰</a>
+          <a href="/" class="btn-icon" title="Voltar ao Dashboard" aria-label="Voltar ao Dashboard">🏠</a>
+          <button id="recordsRefreshBtn" class="btn-icon" title="Atualizar listas" aria-label="Atualizar listas">⟳</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="recordsMain" class="fin-grid">
+      <section class="fin-card fin-wide" id="recordsTransactionsCard">
+        <h2>🔄 Transações</h2>
+        <div id="recordsTransactionsContent" class="fin-card-body">
+          <p class="fin-empty">Carregando transações...</p>
+        </div>
+      </section>
+
+      <section class="fin-card fin-wide" id="recordsDividendsCard">
+        <h2>💸 Proventos</h2>
+        <div id="recordsDividendsContent" class="fin-card-body">
+          <p class="fin-empty">Carregando proventos...</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

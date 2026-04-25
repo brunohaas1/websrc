@@ -13,6 +13,7 @@ const FIN = {
   assets: [],
   marketData: null,
   dividends: [],
+  passiveIncomeGoal: null,
   allocationTargets: [],
   charts: {},
   // auto-refresh
@@ -345,7 +346,7 @@ async function loadAll(options = {}) {
   }
   try {
     const criticalFetchStart = perfEnabled ? performance.now() : 0;
-    const [summary, transactions, watchlist, goals, assets, dividends, allocTargets] = await Promise.all([
+    const [summary, transactions, watchlist, goals, assets, dividends, allocTargets, passiveGoal] = await Promise.all([
       finFetch("/api/finance/summary").then((r) => r.json()),
       finFetch("/api/finance/transactions").then((r) => r.json()),
       finFetch("/api/finance/watchlist").then((r) => r.json()),
@@ -353,6 +354,7 @@ async function loadAll(options = {}) {
       finFetch("/api/finance/assets").then((r) => r.json()),
       finFetch("/api/finance/dividends").then((r) => r.json()),
       finFetch("/api/finance/allocation-targets").then((r) => r.json()),
+      finFetch("/api/finance/goals/passive-income").then((r) => r.json()),
     ]);
     if (perfEnabled) _setPerfRunPatch(perfRunId, { criticalFetchMs: _ms(performance.now() - criticalFetchStart) });
 
@@ -368,6 +370,7 @@ async function loadAll(options = {}) {
       asset_type: a.asset_type,
     }));
     FIN.dividends = dividends || [];
+    FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
     FIN.allocationTargets = allocTargets || [];
 
     const criticalRenderStart = perfEnabled ? performance.now() : 0;
@@ -381,6 +384,8 @@ async function loadAll(options = {}) {
     if (FIN._rebalanceLoaded) {
       renderRebalance();
       renderProjection();
+      renderDividendCeiling();
+      renderIndependenceScenario();
     }
     populateHistorySelect();
     applyHistoryPrefs();
@@ -582,6 +587,8 @@ async function refreshPortfolioPanels() {
   if (FIN._rebalanceLoaded) {
     renderRebalance();
     renderProjection();
+    renderDividendCeiling();
+    renderIndependenceScenario();
   }
   updateLastUpdated();
 }
@@ -594,7 +601,12 @@ async function refreshWatchlistPanel() {
 }
 
 async function refreshGoalsPanel() {
-  FIN.goals = await finFetch("/api/finance/goals").then((r) => r.json());
+  const [goals, passiveGoal] = await Promise.all([
+    finFetch("/api/finance/goals").then((r) => r.json()),
+    finFetch("/api/finance/goals/passive-income").then((r) => r.json()),
+  ]);
+  FIN.goals = goals;
+  FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
   renderGoals(FIN.goals);
   checkGoalsMilestones(FIN.goals);
   updateLastUpdated();
@@ -609,6 +621,10 @@ async function refreshDividendsPanels() {
   FIN.dividends = dividends || [];
   renderSummary(summary);
   renderDividends(FIN.dividends);
+  renderGoals(FIN.goals || []);
+  if (FIN._rebalanceLoaded) {
+    renderDividendCeiling();
+  }
   checkDividendAlerts();
   updateLastUpdated();
 }
@@ -639,6 +655,7 @@ async function refreshImportPanels() {
   renderPortfolio(FIN.portfolio);
   renderTransactions(FIN.transactions);
   renderDividends(FIN.dividends);
+  renderGoals(FIN.goals || []);
   checkDividendAlerts();
 
   populateHistorySelect();
@@ -654,6 +671,8 @@ async function refreshImportPanels() {
   if (FIN._rebalanceLoaded) {
     renderRebalance();
     renderProjection();
+    renderDividendCeiling();
+    renderIndependenceScenario();
   }
   updateLastUpdated();
 }
@@ -1415,6 +1434,7 @@ function renderWatchlist(watchlist) {
 function renderGoals(goals) {
   const el = byId("finGoalsContent");
   if (!el) return;
+  renderPassiveIncomeGoalSummary();
   if (!goals.length) {
     el.innerHTML = '<p class="fin-empty">Nenhuma meta financeira. Crie uma meta para acompanhar!</p>';
     return;
@@ -1451,6 +1471,176 @@ function renderGoals(goals) {
       `;
     })
     .join("");
+}
+
+function getPassiveIncomeProgress() {
+  const monthTotals = {};
+  (FIN.dividends || []).forEach((d) => {
+    const monthKey = String(d.pay_date || d.ex_date || d.created_at || "").slice(0, 7);
+    if (!monthKey) return;
+    monthTotals[monthKey] = (monthTotals[monthKey] || 0) + (d.total_amount || 0);
+  });
+
+  const monthEntries = Object.entries(monthTotals).sort(([a], [b]) => a.localeCompare(b));
+  const last12 = monthEntries.slice(-12);
+  const last12Total = last12.reduce((sum, [, val]) => sum + val, 0);
+  const averageLast12 = last12.length ? (last12Total / last12.length) : 0;
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentMonthIncome = monthTotals[currentMonthKey] || 0;
+  const targetMonthly = Number(FIN.passiveIncomeGoal?.target_monthly || 0);
+  const progressPct = targetMonthly > 0 ? Math.min(100, (averageLast12 / targetMonthly) * 100) : 0;
+
+  const nowMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const series = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const d = new Date(nowMonthStart.getFullYear(), nowMonthStart.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    series.push({
+      date: d,
+      key,
+      value: Number(monthTotals[key] || 0),
+    });
+  }
+
+  // Linear trend over recent 6 months (including months with zero provents).
+  let slope = 0;
+  if (series.length >= 2) {
+    const n = series.length;
+    const xs = series.map((_, idx) => idx);
+    const ys = series.map((p) => p.value);
+    const sumX = xs.reduce((a, b) => a + b, 0);
+    const sumY = ys.reduce((a, b) => a + b, 0);
+    const sumXY = xs.reduce((acc, x, idx) => acc + x * ys[idx], 0);
+    const sumXX = xs.reduce((acc, x) => acc + (x * x), 0);
+    const den = (n * sumXX) - (sumX * sumX);
+    slope = den !== 0 ? ((n * sumXY) - (sumX * sumY)) / den : 0;
+  }
+
+  const baseline = series.length
+    ? (series.reduce((acc, p) => acc + p.value, 0) / series.length)
+    : averageLast12;
+
+  let projectedDate = null;
+  let monthsToTarget = null;
+  if (targetMonthly > 0 && baseline < targetMonthly && slope > 0.01) {
+    monthsToTarget = Math.max(1, Math.ceil((targetMonthly - baseline) / slope));
+    projectedDate = new Date(nowMonthStart.getFullYear(), nowMonthStart.getMonth() + monthsToTarget, 1);
+  } else if (targetMonthly > 0 && baseline >= targetMonthly) {
+    monthsToTarget = 0;
+    projectedDate = nowMonthStart;
+  }
+
+  return {
+    monthCount: monthEntries.length,
+    averageLast12,
+    currentMonthIncome,
+    targetMonthly,
+    progressPct,
+    trendSlope: slope,
+    projectedDate,
+    monthsToTarget,
+  };
+}
+
+function formatMonthYear(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("pt-BR", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function checkPassiveIncomeGoalMilestone(stats) {
+  if (!stats || !Number.isFinite(stats.targetMonthly) || stats.targetMonthly <= 0) return;
+
+  const targetKey = Number(stats.targetMonthly).toFixed(2);
+  const storeKey = "fin_passive_income_goal_notified_v1";
+  let stored = { target: "", reached: false };
+  try {
+    stored = JSON.parse(localStorage.getItem(storeKey) || "{}") || stored;
+  } catch {
+    stored = { target: "", reached: false };
+  }
+
+  if (stored.target !== targetKey) {
+    stored = { target: targetKey, reached: false };
+  }
+
+  const reachedNow = stats.progressPct >= 100;
+  if (reachedNow && !stored.reached) {
+    showToast("🎉 Meta de renda passiva atingida!", "success");
+    if (Notification.permission === "granted") {
+      new Notification("Meta de renda passiva atingida", {
+        body: `Média mensal: ${formatBRL(stats.averageLast12)} | Meta: ${formatBRL(stats.targetMonthly)}`,
+        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>",
+      });
+    }
+    stored.reached = true;
+  }
+
+  if (!reachedNow && stored.reached) {
+    stored.reached = false;
+  }
+  localStorage.setItem(storeKey, JSON.stringify(stored));
+}
+
+function renderPassiveIncomeGoalSummary() {
+  const el = byId("finPassiveIncomeGoalSummary");
+  if (!el) return;
+
+  const stats = getPassiveIncomeProgress();
+  const targetSet = stats.targetMonthly > 0;
+  const note = String(FIN.passiveIncomeGoal?.note || "").trim();
+
+  if (!targetSet) {
+    el.innerHTML = `
+      <div class="fin-passive-goal-card fin-passive-goal-card--empty">
+        <div>
+          <strong>Meta de renda passiva ainda não definida.</strong>
+          <p>Defina uma meta mensal para acompanhar sua evolução em proventos.</p>
+        </div>
+        <button id="btnSetPassiveIncomeGoalInline" class="btn-text" type="button">Definir meta</button>
+      </div>
+    `;
+    const inlineBtn = byId("btnSetPassiveIncomeGoalInline");
+    if (inlineBtn) inlineBtn.addEventListener("click", openPassiveIncomeGoalModal);
+    return;
+  }
+
+  const remaining = Math.max(0, stats.targetMonthly - stats.averageLast12);
+  const complete = stats.progressPct >= 100;
+  let projectionText = "Sem tendência suficiente para projetar";
+  if (stats.projectedDate && stats.monthsToTarget === 0) {
+    projectionText = "Meta já atingida";
+  } else if (stats.projectedDate && Number.isFinite(stats.monthsToTarget)) {
+    projectionText = `Estimativa: ${formatMonthYear(stats.projectedDate)} (${stats.monthsToTarget} mês(es))`;
+  }
+  el.innerHTML = `
+    <div class="fin-passive-goal-card">
+      <div class="fin-passive-goal-top">
+        <span class="fin-passive-goal-title">💸 Meta de Renda Passiva (média mensal)</span>
+        <button id="btnEditPassiveIncomeGoalInline" class="btn-text" type="button">Editar</button>
+      </div>
+      <div class="fin-passive-goal-values">
+        <strong>${formatBRL(stats.averageLast12)}</strong>
+        <span>/ ${formatBRL(stats.targetMonthly)}</span>
+      </div>
+      <div class="fin-goal-bar">
+        <div class="fin-goal-fill ${complete ? "complete" : ""}" style="width:${stats.progressPct.toFixed(1)}%"></div>
+      </div>
+      <div class="fin-passive-goal-meta">
+        <span>${stats.progressPct.toFixed(1)}% da meta</span>
+        <span>Mês atual: ${formatBRL(stats.currentMonthIncome)}</span>
+        <span>${complete ? "Meta atingida" : `Faltam ${formatBRL(remaining)}/mês`}</span>
+      </div>
+      <div class="fin-passive-goal-projection">${escapeHtml(projectionText)}</div>
+      ${note ? `<p class="fin-passive-goal-note">${escapeHtml(note)}</p>` : ""}
+    </div>
+  `;
+  const editBtn = byId("btnEditPassiveIncomeGoalInline");
+  if (editBtn) editBtn.addEventListener("click", openPassiveIncomeGoalModal);
+  checkPassiveIncomeGoalMilestone(stats);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1688,6 +1878,7 @@ function openFinModal(title, bodyHtml) {
     submitAddDividend,
     submitAllocationTargets,
     submitFinanceSettings,
+    submitPassiveIncomeGoal,
   };
   const form = byId("finModalBody").querySelector("form[data-form-action]");
   if (form) {
@@ -2772,6 +2963,33 @@ function openAddGoalModal() {
   `);
 }
 
+function openPassiveIncomeGoalModal() {
+  const currentTarget = Number(FIN.passiveIncomeGoal?.target_monthly || 0);
+  const currentNote = String(FIN.passiveIncomeGoal?.note || "");
+  const stats = getPassiveIncomeProgress();
+  let projectionText = "Sem tendência suficiente para projetar";
+  if (stats.projectedDate && stats.monthsToTarget === 0) {
+    projectionText = "Meta já atingida";
+  } else if (stats.projectedDate && Number.isFinite(stats.monthsToTarget)) {
+    projectionText = `Estimativa atual: ${formatMonthYear(stats.projectedDate)} (${stats.monthsToTarget} mês(es))`;
+  }
+  openFinModal("Meta de Renda Passiva", `
+    <form data-form-action="submitPassiveIncomeGoal">
+      <div class="fin-form-group">
+        <label>Meta mensal de proventos (R$)</label>
+        <input id="fmPassiveIncomeTarget" type="number" min="0" step="0.01" value="${Number.isFinite(currentTarget) ? currentTarget : 0}" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Observação (opcional)</label>
+        <textarea id="fmPassiveIncomeNote" rows="3" maxlength="500" placeholder="Ex.: Alvo para cobrir custos fixos com dividendos.">${escapeHtml(currentNote)}</textarea>
+      </div>
+      <div class="fin-inline-info">Média últimos 12 meses: <strong>${formatBRL(stats.averageLast12)}</strong></div>
+      <div class="fin-inline-info">${escapeHtml(projectionText)}</div>
+      <button type="submit" class="fin-form-submit">💾 Salvar Meta</button>
+    </form>
+  `);
+}
+
 async function submitAddGoal(e) {
   e.preventDefault();
   const body = {
@@ -2795,6 +3013,33 @@ async function submitAddGoal(e) {
       const data = await resp.json();
       showToast(data.error || "Erro ao criar meta");
     }
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function submitPassiveIncomeGoal(e) {
+  e.preventDefault();
+  const targetMonthly = Number(byId("fmPassiveIncomeTarget")?.value || 0);
+  const note = String(byId("fmPassiveIncomeNote")?.value || "").trim();
+  if (!Number.isFinite(targetMonthly) || targetMonthly < 0) {
+    showToast("Informe um valor de meta mensal válido");
+    return;
+  }
+  try {
+    const resp = await finFetch("/api/finance/goals/passive-income", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_monthly: targetMonthly, note }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao salvar meta de renda passiva");
+      return;
+    }
+    closeFinModal();
+    await refreshGoalsPanel();
+    showToast("Meta de renda passiva atualizada", "success");
   } catch {
     showToast("Erro de rede");
   }
@@ -3812,6 +4057,147 @@ async function renderProjection() {
   }
 }
 
+async function renderDividendCeiling() {
+  const el = byId("finDividendCeilingContent");
+  if (!el) return;
+
+  const targetDyInput = byId("dyTargetInput");
+  const monthsInput = byId("dyMonthsInput");
+  const targetDy = Math.min(30, Math.max(0.1, Number((targetDyInput && targetDyInput.value) || 8)));
+  const months = Math.min(60, Math.max(3, Number((monthsInput && monthsInput.value) || 12)));
+
+  try {
+    const resp = await finFetch(
+      `/api/finance/dividend-ceiling?target_dy=${encodeURIComponent(targetDy)}&months=${months}`,
+    );
+    const data = await resp.json();
+    const rows = data.rows || [];
+    if (!rows.length) {
+      el.innerHTML = `<p class="fin-empty">${escapeHtml(data.message || "Sem dados suficientes para simular.")}</p>`;
+      return;
+    }
+
+    const body = rows.map((r) => {
+      const signal = String(r.signal || "neutro").toLowerCase();
+      const signalClass = signal === "atrativo"
+        ? "fin-badge-buy"
+        : signal === "caro"
+          ? "fin-badge-sell"
+          : "fin-badge-stock";
+      const upsideCls = Number(r.upside_pct || 0) >= 0 ? "fin-up" : "fin-down";
+      return `
+        <tr>
+          <td><strong>${escapeHtml(r.symbol)}</strong></td>
+          <td class="text-right mono">${formatBRL(r.current_price)}</td>
+          <td class="text-right mono">${formatNumber(r.dps_ttm, 4)}</td>
+          <td class="text-right mono">${formatBRL(r.ceiling_price)}</td>
+          <td class="text-right mono">${formatPct(r.implied_dy)}</td>
+          <td class="text-right mono ${upsideCls}">${r.upside_pct == null ? "—" : formatPct(r.upside_pct)}</td>
+          <td><span class="fin-badge ${signalClass}">${escapeHtml(signal)}</span></td>
+        </tr>
+      `;
+    }).join("");
+
+    el.innerHTML = `
+      <div class="fin-mini-summary">
+        <span>DY alvo: <strong>${formatPct(data.target_dy)}</strong></span>
+        <span>Janela: <strong>${Number(data.months)} meses</strong></span>
+      </div>
+      <div class="fin-table-wrap">
+        <table class="fin-table" style="margin-top:0;">
+          <thead>
+            <tr>
+              <th>Ativo</th>
+              <th class="text-right">Preço atual</th>
+              <th class="text-right">DPA TTM</th>
+              <th class="text-right">Preço teto</th>
+              <th class="text-right">DY implícito</th>
+              <th class="text-right">Margem vs teto</th>
+              <th>Sinal</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    console.error("Dividend ceiling error:", err);
+    el.innerHTML = '<p class="fin-empty">Erro ao calcular preço teto por DY.</p>';
+  }
+}
+
+async function renderIndependenceScenario() {
+  const el = byId("finIndependenceContent");
+  if (!el) return;
+
+  const targetInput = byId("indTargetIncomeInput");
+  const yearsInput = byId("indYearsInput");
+  const aporteInput = byId("indAporteInput");
+  const safeInput = byId("indSafeRateInput");
+
+  const targetIncome = Math.max(0, Number((targetInput && targetInput.value) || 5000));
+  const years = Math.min(60, Math.max(1, Number((yearsInput && yearsInput.value) || 20)));
+  const aporteMensal = Math.max(0, Number((aporteInput && aporteInput.value) || 0));
+  const safeRate = Math.min(12, Math.max(1, Number((safeInput && safeInput.value) || 4)));
+
+  try {
+    const resp = await finFetch(
+      "/api/finance/independence-scenario"
+      + `?target_monthly_income=${encodeURIComponent(targetIncome)}`
+      + `&years=${years}`
+      + `&aporte_mensal=${encodeURIComponent(aporteMensal)}`
+      + `&safe_rate_pct=${encodeURIComponent(safeRate)}`,
+    );
+    const data = await resp.json();
+    const scenarios = data.scenarios || {};
+    const rows = [
+      ["conservador", "Conservador"],
+      ["base", "Base"],
+      ["otimista", "Otimista"],
+    ].map(([key, label]) => {
+      const item = scenarios[key] || {};
+      const reached = Boolean(item.reached);
+      const status = reached
+        ? `Atinge em ${item.reached_month || 0} mês(es)`
+        : `Gap ${formatBRL(item.gap || 0)}`;
+      return `
+        <tr>
+          <td>${label}</td>
+          <td>${formatNumber(Number(item.annual_rate || 0) * 100, 1)}% a.a.</td>
+          <td>${formatBRL(item.final_value || 0)}</td>
+          <td><span class="fin-badge ${reached ? "fin-badge-buy" : "fin-badge-sell"}">${reached ? "atinge" : "não atinge"}</span></td>
+          <td>${status}</td>
+        </tr>
+      `;
+    }).join("");
+
+    const chance = Number(data.chance_percent || 0);
+    const chanceClass = chance >= 70 ? "fin-up" : chance >= 40 ? "" : "fin-down";
+    el.innerHTML = `
+      <div class="fin-mini-summary">
+        <span>Patrimônio atual: <strong>${formatBRL(data.current_value || 0)}</strong></span>
+        <span>Patrimônio alvo: <strong>${formatBRL(data.target_patrimony || 0)}</strong></span>
+        <span class="${chanceClass}">Chance estimada: <strong>${formatNumber(chance, 1)}%</strong></span>
+      </div>
+      <table class="fin-table" style="margin-top:0;">
+        <thead>
+          <tr>
+            <th>Cenário</th>
+            <th>Retorno</th>
+            <th>Patrimônio final</th>
+            <th>Status</th>
+            <th>Detalhe</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } catch (err) {
+    console.error("Independence scenario error:", err);
+    el.innerHTML = '<p class="fin-empty">Erro ao calcular independência financeira.</p>';
+  }
+}
+
 function openAllocationModal() {
   const types = ["stock", "fii", "etf", "crypto", "fund", "renda-fixa"];
   const typeLabels = { stock: "Ações", fii: "FIIs", etf: "ETFs", crypto: "Crypto", fund: "Fundos", "renda-fixa": "Renda Fixa" };
@@ -3877,6 +4263,7 @@ async function submitAllocationTargets(e) {
       const tResp = await finFetch("/api/finance/allocation-targets");
       FIN.allocationTargets = await tResp.json();
       renderRebalance();
+      renderDividendCeiling();
     } else {
       showToast("Erro ao salvar metas");
     }
@@ -4447,6 +4834,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddTransaction", openAddTransactionModal);
   bind("btnAddWatchlist", openAddWatchlistModal);
   bind("btnAddGoal", openAddGoalModal);
+  bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseRecords", () => openCadastroBrowserModal("assets"));
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
@@ -4459,6 +4847,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("finModalClose", closeFinModal);
   bind("btnRunRebalanceSim", renderRebalance);
   bind("btnRunProjection", renderProjection);
+  bind("btnRunDividendCeiling", renderDividendCeiling);
+  bind("btnRunIndependence", renderIndependenceScenario);
 
   // Modal overlay: close on background click
   const overlay = byId("finModalOverlay");
@@ -4490,9 +4880,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const rebalAporteInput = byId("rebalAporteInput");
   const projectionMonthsInput = byId("projectionMonthsInput");
   const projectionAporteMensalInput = byId("projectionAporteMensalInput");
+  const dyTargetInput = byId("dyTargetInput");
+  const dyMonthsInput = byId("dyMonthsInput");
+  const indTargetIncomeInput = byId("indTargetIncomeInput");
+  const indYearsInput = byId("indYearsInput");
+  const indAporteInput = byId("indAporteInput");
+  const indSafeRateInput = byId("indSafeRateInput");
   if (rebalAporteInput) rebalAporteInput.addEventListener("change", renderRebalance);
   if (projectionMonthsInput) projectionMonthsInput.addEventListener("change", renderProjection);
   if (projectionAporteMensalInput) projectionAporteMensalInput.addEventListener("change", renderProjection);
+  if (dyTargetInput) dyTargetInput.addEventListener("change", renderDividendCeiling);
+  if (dyMonthsInput) dyMonthsInput.addEventListener("change", renderDividendCeiling);
+  if (indTargetIncomeInput) indTargetIncomeInput.addEventListener("change", renderIndependenceScenario);
+  if (indYearsInput) indYearsInput.addEventListener("change", renderIndependenceScenario);
+  if (indAporteInput) indAporteInput.addEventListener("change", renderIndependenceScenario);
+  if (indSafeRateInput) indSafeRateInput.addEventListener("change", renderIndependenceScenario);
 
   // IR report: year select
   const irSel = byId("irYearSelect");
@@ -4577,6 +4979,8 @@ function initRebalanceLazyLoad() {
     FIN._rebalanceLoaded = true;
     renderRebalance();
     renderProjection();
+    renderDividendCeiling();
+    renderIndependenceScenario();
     io.disconnect();
   }, { rootMargin: "150px 0px" });
 
