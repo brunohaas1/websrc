@@ -67,8 +67,32 @@ const FIN_LAYOUT_KEY = "fin_layout_v1";
 const FIN_THEME_ORDER = ["dark", "light", "ocean", "sunset"];
 const FIN_DENSITY_KEY = "fin-density";
 const FIN_ONBOARDING_SEEN_KEY = "fin_onboarding_seen_v1";
+const FIN_ALERT_PREFS_KEY = "fin_alert_prefs_v1";
 
 const byId = (id) => document.getElementById(id);
+
+function getAlertPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FIN_ALERT_PREFS_KEY) || "{}");
+    return {
+      watchlistCooldownMinutes: Math.max(1, Number(raw.watchlistCooldownMinutes || 60)),
+      goalMilestonesEnabled: raw.goalMilestonesEnabled !== false,
+      dividendMinIncrease: Math.max(0, Number(raw.dividendMinIncrease || 1)),
+    };
+  } catch {
+    return {
+      watchlistCooldownMinutes: 60,
+      goalMilestonesEnabled: true,
+      dividendMinIncrease: 1,
+    };
+  }
+}
+
+function setAlertPrefs(next) {
+  const current = getAlertPrefs();
+  const merged = { ...current, ...(next || {}) };
+  localStorage.setItem(FIN_ALERT_PREFS_KEY, JSON.stringify(merged));
+}
 
 // ── Toast notifications (replaces alert()) ────────────────
 function showToast(message, type = "error", options = {}) {
@@ -1351,10 +1375,12 @@ function renderAuditTrail(entries) {
 }
 
 function checkDividendAlerts() {
+  const prefs = getAlertPrefs();
   const total = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
   const key = "fin_last_dividend_total";
   const prev = Number(localStorage.getItem(key) || "0");
-  if (total > prev && prev > 0) {
+  const increase = total - prev;
+  if (increase >= prefs.dividendMinIncrease && prev > 0) {
     showToast(`Novo provento detectado. Total acumulado: ${formatBRL(total)}`, "info");
   }
   localStorage.setItem(key, String(total));
@@ -5242,6 +5268,8 @@ function renderWatchlistAlertsBanner(triggeredItems) {
 // ── Goals Milestones ─────────────────────────────────────
 
 function checkGoalsMilestones(goals) {
+  const prefs = getAlertPrefs();
+  if (!prefs.goalMilestonesEnabled) return;
   if (!goals || !goals.length) return;
   const MILESTONES = [25, 50, 75, 100];
   const stored = JSON.parse(localStorage.getItem("fin_goal_milestones") || "{}");
@@ -5292,6 +5320,7 @@ function setupNotifications() {
 }
 
 function checkWatchlistAlerts() {
+  const prefs = getAlertPrefs();
   // Always render visual banner regardless of notification permission
   const triggered = FIN.watchlist.filter((w) => {
     if (w.current_price == null || !w.target_price) return false;
@@ -5304,9 +5333,10 @@ function checkWatchlistAlerts() {
   if (Notification.permission !== "granted") return;
   const notified = JSON.parse(localStorage.getItem("fin_notified_alerts") || "{}");
   const now = Date.now();
+  const cooldownMs = Math.max(1, Number(prefs.watchlistCooldownMinutes || 60)) * 60000;
   // Prune entries older than 1 hour
   Object.keys(notified).forEach((k) => {
-    if (now - notified[k] > 3600000) delete notified[k];
+    if (now - notified[k] > cooldownMs) delete notified[k];
   });
   triggered.forEach((w) => {
       const key = `${w.symbol}_${w.target_price}_${w.alert_above}`;
@@ -5337,6 +5367,7 @@ async function openFinanceSettingsModal() {
     const historyPrefs = readHistoryPrefs();
     const divPrefs = getDividendsChartPrefs();
     const autoRefresh = localStorage.getItem("fin_auto_refresh") || "300";
+    const alertPrefs = getAlertPrefs();
 
     openFinModal("Configurações Financeiras", `
       <form data-form-action="submitFinanceSettings">
@@ -5422,6 +5453,25 @@ async function openFinanceSettingsModal() {
           </select>
         </div>
 
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Cooldown alertas watchlist (min)</label>
+            <input type="number" id="finPrefWatchlistCooldown" min="1" max="1440" value="${escapeHtml(alertPrefs.watchlistCooldownMinutes || 60)}" />
+          </div>
+          <div class="fin-form-group">
+            <label>Aumento mínimo proventos (R$)</label>
+            <input type="number" id="finPrefDividendMinIncrease" min="0" step="0.01" value="${escapeHtml(alertPrefs.dividendMinIncrease || 1)}" />
+          </div>
+        </div>
+
+        <div class="fin-form-group">
+          <label>Alertas de marcos de metas</label>
+          <select id="finPrefGoalMilestonesEnabled">
+            <option value="1" ${alertPrefs.goalMilestonesEnabled ? "selected" : ""}>Ativado</option>
+            <option value="0" ${!alertPrefs.goalMilestonesEnabled ? "selected" : ""}>Desativado</option>
+          </select>
+        </div>
+
         <button type="submit" class="fin-form-submit">💾 Salvar configurações</button>
       </form>
 
@@ -5504,6 +5554,9 @@ async function submitFinanceSettings() {
   const prefHistoryPeriod = byId("finPrefHistoryPeriod")?.value || "180";
   const prefDivDensity = byId("finPrefDivDensity")?.value || "smart";
   const prefAutoRefresh = byId("finPrefAutoRefresh")?.value || "300";
+  const prefWatchlistCooldown = Number(byId("finPrefWatchlistCooldown")?.value || 60);
+  const prefDividendMinIncrease = Number(byId("finPrefDividendMinIncrease")?.value || 1);
+  const prefGoalMilestonesEnabled = (byId("finPrefGoalMilestonesEnabled")?.value || "1") === "1";
   if (brapiToken) payload.brapi_token = brapiToken;
   if (financeApiKey) payload.finance_api_key = financeApiKey;
 
@@ -5537,6 +5590,12 @@ async function submitFinanceSettings() {
     const autoSel = byId("autoRefreshSelect");
     if (autoSel) autoSel.value = prefAutoRefresh;
     _startAutoRefresh(Number(prefAutoRefresh));
+
+    setAlertPrefs({
+      watchlistCooldownMinutes: Math.max(1, prefWatchlistCooldown),
+      dividendMinIncrease: Math.max(0, prefDividendMinIncrease),
+      goalMilestonesEnabled: prefGoalMilestonesEnabled,
+    });
 
     showToast("Configurações salvas com sucesso!", "success");
     closeFinModal();
