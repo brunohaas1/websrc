@@ -1,5 +1,5 @@
 /* Cache version – bump on deploy or use build hash */
-const CACHE_VERSION = "v2-" + "20260425h";
+const CACHE_VERSION = "v2-" + "20260425i";
 const CACHE_NAME = "webdash-" + CACHE_VERSION;
 const PRECACHE = [
   "/",

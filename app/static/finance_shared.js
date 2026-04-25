@@ -85,6 +85,20 @@ async function fetchFinanceJson(url, fallbackValue) {
   }
 }
 
+async function fetchWidgetJsonCached(key, url, fallbackValue, options = {}) {
+  const useCache = options.useCache === true;
+  const now = Date.now();
+  const cached = FIN._widgetCache && FIN._widgetCache[key];
+  if (useCache && cached && (now - cached.ts) < WIDGET_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const data = await fetchFinanceJson(url, fallbackValue);
+  if (FIN._widgetCache) {
+    FIN._widgetCache[key] = { ts: now, data };
+  }
+  return data;
+}
+
 function badgeClass(type) {
   const map = {
     stock: "fin-badge-stock",
