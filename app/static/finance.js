@@ -65,6 +65,38 @@ function assetTypeLabelPt(type) {
   return map[key] || (type || "Ativo");
 }
 
+function detectAssetDisplayType(asset) {
+  const rawType = String(asset?.asset_type || "").trim().toLowerCase();
+  const symbol = String(asset?.symbol || "").trim().toUpperCase();
+  const rawName = String(asset?.name || "").trim();
+  const nameNorm = rawName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (["crypto", "fund", "fii", "etf", "renda-fixa", "renda_fixa"].includes(rawType)) {
+    return rawType === "renda_fixa" ? "renda-fixa" : rawType;
+  }
+
+  const looksLikeEtf = symbol.endsWith("11") && (
+    nameNorm.includes("etf")
+    || nameNorm.includes("indice")
+    || nameNorm.includes("index")
+  );
+  if (looksLikeEtf) return "etf";
+
+  const mentionsFii = nameNorm.includes("fii");
+  const mentionsImobFund = nameNorm.includes("fundo") && nameNorm.includes("imobili");
+  const looksLikeFii = symbol.endsWith("11") && (mentionsFii || mentionsImobFund || nameNorm.includes("fundo"));
+  if (mentionsFii || mentionsImobFund || looksLikeFii) return "fii";
+
+  if (["acao", "acoes", "stock"].includes(rawType) || /^[A-Z]{4}\d$/.test(symbol)) {
+    return "stock";
+  }
+
+  return rawType || "stock";
+}
+
 // ── Toast notifications (replaces alert()) ────────────────
 function showToast(message, type = "error", options = {}) {
   let container = byId("finToastContainer");
@@ -1263,7 +1295,8 @@ function renderPortfolio(portfolio) {
       const pnl = currentVal - p.total_invested;
       const pnlPct = p.total_invested ? (pnl / p.total_invested * 100) : 0;
       const pnlCls = changeClass(pnl);
-      const typeCls = badgeClass(p.asset_type);
+      const displayType = detectAssetDisplayType(p);
+      const typeCls = badgeClass(displayType);
       const weightPct = totalValue > 0 ? (currentVal / totalValue * 100) : 0;
 
       // Dividend yield for this asset
@@ -1290,7 +1323,7 @@ function renderPortfolio(portfolio) {
         <tr>
           <td>
             <strong>${escapeHtml(p.symbol)}</strong>
-            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(p.asset_type))}</span>
+            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(displayType))}</span>
             ${rfInfo}
           </td>
           <td>${escapeHtml(p.name)}</td>
@@ -1623,7 +1656,8 @@ function renderWatchlist(watchlist) {
     .map((w) => {
       const targetStr = w.target_price ? `Alvo: ${formatBRL(w.target_price)}` : "";
       const dir = w.alert_above ? "↑" : "↓";
-      const typeCls = badgeClass(w.asset_type);
+      const displayType = detectAssetDisplayType(w);
+      const typeCls = badgeClass(displayType);
       const hasPrice = w.current_price != null;
       const priceStr = hasPrice ? formatBRL(w.current_price) : "—";
 
@@ -1650,7 +1684,7 @@ function renderWatchlist(watchlist) {
         <div class="fin-wl-item">
           <div class="fin-wl-info">
             <span class="fin-wl-symbol">${escapeHtml(w.symbol)}</span>
-            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(w.asset_type))}</span>
+            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(displayType))}</span>
             <span class="fin-wl-name">${escapeHtml(w.name)}</span>
           </div>
           <div class="fin-wl-prices">
@@ -1901,40 +1935,14 @@ function chartColors(count) {
 }
 
 function allocationBucketLabel(asset) {
-  const rawType = String(asset?.asset_type || "").trim().toLowerCase();
-  const symbol = String(asset?.symbol || "").trim().toUpperCase();
-  const rawName = String(asset?.name || "").trim();
-  const name = rawName.toLowerCase();
-  const nameNorm = rawName
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-
-  const explicitEtf = rawType === "etf";
-  const looksLikeEtf = symbol.endsWith("11") && (
-    nameNorm.includes("etf")
-    || nameNorm.includes("indice")
-    || nameNorm.includes("index")
-  );
-  if (explicitEtf || looksLikeEtf) return "ETF";
-
-  const explicitFii = rawType === "fii"
-    || rawType === "fundo_imobiliario"
-    || rawType === "fundo-imobiliario";
-  const mentionsFii = nameNorm.includes("fii");
-  const mentionsImobFund = nameNorm.includes("fundo") && nameNorm.includes("imobili");
-  const looksLikeFii = symbol.endsWith("11") && (mentionsFii || mentionsImobFund || name.includes("fundo"));
-  if (explicitFii || mentionsFii || mentionsImobFund || looksLikeFii) return "Fundos Imobiliarios";
-
-  if (rawType === "stock" || rawType === "acao" || rawType === "acoes") {
-    return "Acoes";
-  }
-
-  if (rawType === "crypto") return "Cripto";
-  if (rawType === "fund" || rawType === "fundo") return "Fundos";
-  if (rawType === "renda-fixa" || rawType === "renda_fixa") return "Renda Fixa";
-
-  return assetTypeLabelPt(rawType || "Ativo");
+  const displayType = detectAssetDisplayType(asset);
+  if (displayType === "fii") return "Fundos Imobiliarios";
+  if (displayType === "stock") return "Acoes";
+  if (displayType === "etf") return "ETF";
+  if (displayType === "crypto") return "Cripto";
+  if (displayType === "fund" || displayType === "fundo") return "Fundos";
+  if (displayType === "renda-fixa") return "Renda Fixa";
+  return assetTypeLabelPt(displayType || "Ativo");
 }
 
 function buildAllocationByBucket(summary) {
