@@ -1900,19 +1900,69 @@ function chartColors(count) {
   return Array.from({ length: count }, (_, i) => palette[i % palette.length]);
 }
 
+function allocationBucketLabel(asset) {
+  const rawType = String(asset?.asset_type || "").trim().toLowerCase();
+  const symbol = String(asset?.symbol || "").trim().toUpperCase();
+  const name = String(asset?.name || "").trim().toLowerCase();
+
+  const explicitFii = rawType === "fii"
+    || rawType === "fundo_imobiliario"
+    || rawType === "fundo-imobiliario";
+  const looksLikeFii = symbol.endsWith("11")
+    && (name.includes("fundo de investimento imobili") || name.includes("fii"));
+  if (explicitFii || looksLikeFii) return "Fundos Imobiliarios";
+
+  if (rawType === "stock" || rawType === "acao" || rawType === "acoes") {
+    return "Acoes";
+  }
+
+  if (rawType === "etf") return "ETF";
+  if (rawType === "crypto") return "Cripto";
+  if (rawType === "fund" || rawType === "fundo") return "Fundos";
+  if (rawType === "renda-fixa" || rawType === "renda_fixa") return "Renda Fixa";
+
+  return assetTypeLabelPt(rawType || "Ativo");
+}
+
+function buildAllocationByBucket(summary) {
+  const byBucket = new Map();
+  const portfolio = Array.isArray(summary?.portfolio) ? summary.portfolio : [];
+
+  if (portfolio.length) {
+    for (const asset of portfolio) {
+      const value = Number(asset?.current_price || 0) * Number(asset?.quantity || 0);
+      if (!(value > 0)) continue;
+      const bucket = allocationBucketLabel(asset);
+      byBucket.set(bucket, Number(byBucket.get(bucket) || 0) + value);
+    }
+  }
+
+  // Fallback for payloads without portfolio details.
+  if (!byBucket.size) {
+    const alloc = summary?.allocation || {};
+    for (const [type, value] of Object.entries(alloc)) {
+      const num = Number(value || 0);
+      if (!(num > 0)) continue;
+      const bucket = allocationBucketLabel({ asset_type: type });
+      byBucket.set(bucket, Number(byBucket.get(bucket) || 0) + num);
+    }
+  }
+
+  return [...byBucket.entries()].filter(([_, value]) => value > 0);
+}
+
 function renderAllocationChart(summary) {
   if (typeof Chart === "undefined") return;
   const canvas = byId("allocationChart");
   if (!canvas) return;
-  const alloc = summary.allocation || {};
-  const entries = Object.entries(alloc).filter(([_, v]) => v > 0);
+  const entries = buildAllocationByBucket(summary);
 
   if (!entries.length) {
     canvas.parentElement.innerHTML = '<p class="fin-empty">Sem dados de alocação.</p>';
     return;
   }
 
-  const labels = entries.map(([k]) => k.charAt(0).toUpperCase() + k.slice(1));
+  const labels = entries.map(([k]) => k);
   const data = entries.map(([_, v]) => v);
   const colors = chartColors(data.length);
 
