@@ -142,6 +142,114 @@ class TestAssets:
         assert len(data) >= 1
         assert data[-1]["price"] == pytest.approx(40.0, rel=1e-2)
 
+    def test_asset_history_uses_historical_quantity(self, client, app):
+        from app.db import get_connection
+
+        asset = _add_asset(client).get_json()
+        aid = asset["id"]
+
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 10,
+            "price": 10,
+            "tx_type": "buy",
+            "tx_date": "2025-01-01",
+        })
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 5,
+            "price": 11,
+            "tx_type": "sell",
+            "tx_date": "2025-01-03",
+        })
+
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 10.0, "2025-01-01 10:00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 12.0, "2025-01-02 10:00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 11.0, "2025-01-03 10:00:00"),
+            )
+            conn.commit()
+
+        resp = client.get(f"/api/finance/asset-history/{aid}?limit=10")
+        assert resp.status_code == 200
+        data = list(reversed(resp.get_json()))
+        by_day = {item["captured_at"][:10]: float(item["price"]) for item in data}
+
+        assert by_day["2025-01-01"] == pytest.approx(100.0, rel=1e-6)
+        assert by_day["2025-01-02"] == pytest.approx(120.0, rel=1e-6)
+        assert by_day["2025-01-03"] == pytest.approx(55.0, rel=1e-6)
+
+    def test_portfolio_history_uses_historical_quantity(self, client, app):
+        from app.db import get_connection
+
+        asset = _add_asset(client, symbol="VALE3", name="Vale SA").get_json()
+        aid = asset["id"]
+
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 10,
+            "price": 10,
+            "tx_type": "buy",
+            "tx_date": "2025-01-01",
+        })
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 5,
+            "price": 11,
+            "tx_type": "sell",
+            "tx_date": "2025-01-03",
+        })
+
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 10.0, "2025-01-01 10:00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 12.0, "2025-01-02 10:00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 11.0, "2025-01-03 10:00:00"),
+            )
+            conn.commit()
+
+        resp = client.get("/api/finance/portfolio-history?limit=10")
+        assert resp.status_code == 200
+        data = list(reversed(resp.get_json()))
+        by_day = {item["captured_at"][:10]: float(item["price"]) for item in data}
+
+        assert by_day["2025-01-01"] == pytest.approx(100.0, rel=1e-6)
+        assert by_day["2025-01-02"] == pytest.approx(120.0, rel=1e-6)
+        assert by_day["2025-01-03"] == pytest.approx(55.0, rel=1e-6)
+
 
 # ══════════════════════════════════════════════════════════
 #                 PORTFOLIO

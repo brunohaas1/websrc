@@ -1867,41 +1867,169 @@ class Repository:
         self, asset_id: int, limit: int = 90,
     ) -> list[dict[str, Any]]:
         with get_connection(self.database_target) as conn:
-            rows = conn.execute(
+            # Latest price snapshot per day for this asset.
+            price_rows = conn.execute(
                 self._sql("""
-                    SELECT asset_id, price, volume, captured_at
-                    FROM fin_asset_history
-                    WHERE asset_id = ?
-                    ORDER BY captured_at DESC LIMIT ?
+                    SELECT DATE(h.captured_at) AS captured_at, h.price
+                    FROM fin_asset_history h
+                    JOIN (
+                        SELECT DATE(captured_at) AS d, MAX(captured_at) AS max_captured_at
+                        FROM fin_asset_history
+                        WHERE asset_id = ?
+                        GROUP BY DATE(captured_at)
+                    ) latest
+                      ON latest.d = DATE(h.captured_at)
+                     AND latest.max_captured_at = h.captured_at
+                    WHERE h.asset_id = ?
+                    ORDER BY DATE(h.captured_at) DESC
+                    LIMIT ?
                 """),
-                (asset_id, limit),
+                (asset_id, asset_id, limit),
             ).fetchall()
-            return [dict(r) for r in rows]
+            if not price_rows:
+                return []
+
+            tx_rows = conn.execute(
+                self._sql("""
+                    SELECT
+                        DATE(tx_date) AS tx_day,
+                        SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN quantity
+                                ELSE -quantity
+                            END
+                        ) AS delta_qty
+                    FROM fin_transactions
+                    WHERE asset_id = ?
+                    GROUP BY DATE(tx_date)
+                    ORDER BY DATE(tx_date) ASC
+                """),
+                (asset_id,),
+            ).fetchall()
+
+            tx_points = [
+                (str(row["tx_day"]), float(row["delta_qty"] or 0))
+                for row in tx_rows
+                if row["tx_day"]
+            ]
+
+            # Compute historical position value (price * quantity-at-date).
+            qty = 0.0
+            tx_idx = 0
+            timeline = []
+            for row in sorted(price_rows, key=lambda r: str(r["captured_at"])):
+                date_key = str(row["captured_at"] or "")
+                if not date_key:
+                    continue
+                while tx_idx < len(tx_points) and tx_points[tx_idx][0] <= date_key:
+                    qty += float(tx_points[tx_idx][1])
+                    tx_idx += 1
+                price = float(row["price"] or 0)
+                value = price * max(0.0, qty)
+                timeline.append({
+                    "asset_id": asset_id,
+                    "price": round(value, 6),
+                    "captured_at": date_key,
+                })
+
+            timeline.sort(key=lambda r: str(r["captured_at"]), reverse=True)
+            return timeline[:limit]
 
     def get_fin_total_history(self, limit: int = 90) -> list[dict[str, Any]]:
         with get_connection(self.database_target) as conn:
-            rows = conn.execute(
+            price_rows = conn.execute(
                 self._sql("""
                     SELECT
+                        h.asset_id,
                         DATE(h.captured_at) AS captured_at,
-                        SUM(h.price * p.quantity) AS price
+                        h.price
                     FROM fin_asset_history h
-                    JOIN fin_portfolio p ON p.asset_id = h.asset_id
                     JOIN (
                         SELECT asset_id, DATE(captured_at) AS d, MAX(captured_at) AS max_captured_at
                         FROM fin_asset_history
                         GROUP BY asset_id, DATE(captured_at)
                     ) latest
                       ON latest.asset_id = h.asset_id
+                     AND latest.d = DATE(h.captured_at)
                      AND latest.max_captured_at = h.captured_at
-                    WHERE p.quantity > 0
-                    GROUP BY DATE(h.captured_at)
-                    ORDER BY DATE(h.captured_at) DESC
-                    LIMIT ?
+                    ORDER BY DATE(h.captured_at) ASC, h.asset_id ASC
                 """),
-                (limit,),
             ).fetchall()
-            return [dict(r) for r in rows]
+            if not price_rows:
+                return []
+
+            tx_rows = conn.execute(
+                self._sql("""
+                    SELECT
+                        asset_id,
+                        DATE(tx_date) AS tx_day,
+                        SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN quantity
+                                ELSE -quantity
+                            END
+                        ) AS delta_qty
+                    FROM fin_transactions
+                    GROUP BY asset_id, DATE(tx_date)
+                    ORDER BY asset_id ASC, DATE(tx_date) ASC
+                """),
+            ).fetchall()
+
+            prices_by_date: dict[str, dict[int, float]] = {}
+            for row in price_rows:
+                date_key = str(row["captured_at"] or "")
+                if not date_key:
+                    continue
+                asset_prices = prices_by_date.setdefault(date_key, {})
+                asset_prices[int(row["asset_id"])] = float(row["price"] or 0)
+
+            tx_by_asset: dict[int, list[tuple[str, float]]] = {}
+            for row in tx_rows:
+                day = str(row["tx_day"] or "")
+                if not day:
+                    continue
+                aid = int(row["asset_id"])
+                tx_by_asset.setdefault(aid, []).append((day, float(row["delta_qty"] or 0)))
+
+            all_assets = set()
+            for per_date in prices_by_date.values():
+                all_assets.update(per_date.keys())
+            all_assets.update(tx_by_asset.keys())
+
+            tx_indices = {aid: 0 for aid in all_assets}
+            qty_state = {aid: 0.0 for aid in all_assets}
+            last_price = {aid: None for aid in all_assets}
+
+            rows: list[dict[str, Any]] = []
+            for date_key in sorted(prices_by_date.keys()):
+                # Apply all transactions up to this date.
+                for aid in all_assets:
+                    tx_points = tx_by_asset.get(aid, [])
+                    idx = tx_indices[aid]
+                    while idx < len(tx_points) and tx_points[idx][0] <= date_key:
+                        qty_state[aid] += float(tx_points[idx][1])
+                        idx += 1
+                    tx_indices[aid] = idx
+
+                # Update known prices for this date.
+                for aid, price in prices_by_date[date_key].items():
+                    last_price[aid] = float(price)
+
+                total_value = 0.0
+                for aid in all_assets:
+                    qty = max(0.0, float(qty_state.get(aid, 0.0)))
+                    price = last_price.get(aid)
+                    if qty <= 0.0 or price is None:
+                        continue
+                    total_value += qty * float(price)
+
+                rows.append({
+                    "captured_at": date_key,
+                    "price": round(total_value, 6),
+                })
+
+            rows.sort(key=lambda r: str(r["captured_at"]), reverse=True)
+            return rows[:limit]
 
     # ── Portfolio ───────────────────────────────────────────
 

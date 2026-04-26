@@ -315,7 +315,7 @@ function _buildHistoryChartDataLocal(payload) {
   } else {
     const prices = primary.map((d) => Number(d.price || 0));
     datasets.push({
-      label: isTotal ? "Total da carteira (R$)" : "Preço (R$)",
+      label: isTotal ? "Total da carteira (R$)" : "Patrimônio do ativo (R$)",
       data: prices,
       yAxisID: "y",
       borderColor: "#6366f1",

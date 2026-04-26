@@ -1610,7 +1610,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_asset_history_alt(asset_id: int):
         limit = min(3650, max(1, int(request.args.get("limit", "90"))))
-        cache_key = f"finance:asset-history:{asset_id}:{limit}"
+        cache_key = f"finance:asset-history:v2:{asset_id}:{limit}"
         cached = cache.get(cache_key)
         if cached:
             return jsonify(cached)
@@ -1622,7 +1622,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_portfolio_history():
         limit = min(3650, max(1, int(request.args.get("limit", "90"))))
-        cache_key = f"finance:portfolio-history:{limit}"
+        cache_key = f"finance:portfolio-history:v2:{limit}"
         cached = cache.get(cache_key)
         if cached:
             return jsonify(cached)
