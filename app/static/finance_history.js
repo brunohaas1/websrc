@@ -4,6 +4,223 @@
 
 const HISTORY_WORKER_URL = "/static/finance_worker.js";
 const HISTORY_PREFS_KEY = "fin-history-prefs";
+const HISTORY_DEFAULT_PERIOD = "180";
+const HISTORY_QUICK_RANGES = new Set(["30", "90", "180", "365", "ytd", "max"]);
+const HISTORY_DOWNSAMPLE_MAX_POINTS = 240;
+let FIN_HISTORY_QUICK_RANGE = "";
+
+function _downsampleHistory(labels, datasets, maxPoints = HISTORY_DOWNSAMPLE_MAX_POINTS) {
+  const safeLabels = Array.isArray(labels) ? labels : [];
+  const safeDatasets = Array.isArray(datasets) ? datasets : [];
+  if (safeLabels.length <= maxPoints) {
+    return { labels: safeLabels, datasets: safeDatasets };
+  }
+
+  const step = Math.ceil(safeLabels.length / maxPoints);
+  const indices = [];
+  for (let i = 0; i < safeLabels.length; i += step) {
+    indices.push(i);
+  }
+  if (indices[indices.length - 1] !== safeLabels.length - 1) {
+    indices.push(safeLabels.length - 1);
+  }
+
+  const nextLabels = indices.map((idx) => safeLabels[idx]);
+  const nextDatasets = safeDatasets.map((dataset) => ({
+    ...dataset,
+    data: indices.map((idx) => (Array.isArray(dataset.data) ? dataset.data[idx] ?? null : null)),
+  }));
+
+  return {
+    labels: nextLabels,
+    datasets: nextDatasets,
+  };
+}
+
+function _primaryValueDataset(rawDatasets) {
+  const series = (rawDatasets || []).filter((ds) => ds?.yAxisID === "y");
+  if (!series.length) return null;
+  const preferred = series.find((ds) => String(ds.label || "").includes("Preço") || String(ds.label || "").includes("Total da carteira"));
+  return preferred || series[0] || null;
+}
+
+function _buildDrawdownSeries(series) {
+  let peak = null;
+  return (series || []).map((value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    if (peak == null || num > peak) peak = num;
+    if (!peak) return null;
+    return ((num - peak) / peak) * 100;
+  });
+}
+
+function _renderHistoryHeatmap(labels, primarySeries) {
+  const heatmapEl = byId("historyHeatmap");
+  if (!heatmapEl) return;
+
+  const monthLastValue = new Map();
+  (labels || []).forEach((label, idx) => {
+    const month = String(label || "").slice(0, 7);
+    const value = Number(primarySeries?.[idx]);
+    if (!month || !Number.isFinite(value) || value <= 0) return;
+    monthLastValue.set(month, value);
+  });
+
+  const entries = [...monthLastValue.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length < 2) {
+    heatmapEl.innerHTML = '<p class="fin-empty">Sem dados suficientes para heatmap.</p>';
+    return;
+  }
+
+  const monthlyReturns = [];
+  for (let i = 1; i < entries.length; i += 1) {
+    const [month, value] = entries[i];
+    const prev = Number(entries[i - 1][1]);
+    if (!(prev > 0)) continue;
+    monthlyReturns.push({
+      month,
+      ret: ((Number(value) / prev) - 1) * 100,
+    });
+  }
+
+  if (!monthlyReturns.length) {
+    heatmapEl.innerHTML = '<p class="fin-empty">Sem dados suficientes para heatmap.</p>';
+    return;
+  }
+
+  const byYear = new Map();
+  monthlyReturns.forEach((item) => {
+    const year = item.month.slice(0, 4);
+    const mm = Number(item.month.slice(5, 7));
+    if (!byYear.has(year)) byYear.set(year, new Array(12).fill(null));
+    byYear.get(year)[mm - 1] = item.ret;
+  });
+
+  const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const years = [...byYear.keys()].sort((a, b) => Number(b) - Number(a));
+
+  const cells = years.map((year) => {
+    const values = byYear.get(year) || [];
+    return `
+      <div class="fin-heatmap-row">
+        <span class="fin-heatmap-year">${escapeHtml(year)}</span>
+        ${values.map((ret, idx) => {
+          if (ret == null) {
+            return `<span class="fin-heatmap-cell is-empty" title="${monthNames[idx]}/${year}: sem dado">-</span>`;
+          }
+          const cls = ret >= 0 ? "is-pos" : "is-neg";
+          const alpha = Math.min(0.9, Math.max(0.15, Math.abs(ret) / 8));
+          const color = ret >= 0
+            ? `rgba(34, 197, 94, ${alpha})`
+            : `rgba(239, 68, 68, ${alpha})`;
+          return `<span class="fin-heatmap-cell ${cls}" style="background:${color}" title="${monthNames[idx]}/${year}: ${formatPct(ret)}">${formatPct(ret)}</span>`;
+        }).join("")}
+      </div>
+    `;
+  }).join("");
+
+  heatmapEl.innerHTML = `
+    <div class="fin-heatmap-head">
+      <span class="fin-heatmap-year">Ano</span>
+      ${monthNames.map((m) => `<span class="fin-heatmap-month">${m}</span>`).join("")}
+    </div>
+    ${cells}
+  `;
+}
+
+function _syncChartCrosshair(sourceKey, targetKey, index) {
+  const targetChart = FIN?.charts?.[targetKey];
+  if (!targetChart) return;
+  if (!(index >= 0)) {
+    targetChart.setActiveElements([]);
+    if (targetChart.tooltip) targetChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    targetChart.update("none");
+    return;
+  }
+
+  const dsCount = Array.isArray(targetChart.data?.datasets) ? targetChart.data.datasets.length : 0;
+  const active = Array.from({ length: dsCount }, (_, datasetIndex) => ({ datasetIndex, index }));
+  targetChart.setActiveElements(active);
+  if (targetChart.tooltip) {
+    const x = targetChart.scales?.x?.getPixelForValue(index) ?? 0;
+    const y = targetChart.chartArea ? (targetChart.chartArea.top + 8) : 0;
+    targetChart.tooltip.setActiveElements(active, { x, y });
+  }
+  targetChart.update("none");
+}
+
+function _renderHistoryDrawdown(labels, rawDatasets) {
+  const canvas = byId("historyDrawdownChart");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  const primary = _primaryValueDataset(rawDatasets);
+  if (!primary || !Array.isArray(primary.data) || !primary.data.length) {
+    if (FIN.charts.historyDrawdown) {
+      FIN.charts.historyDrawdown.destroy();
+      FIN.charts.historyDrawdown = null;
+    }
+    return;
+  }
+
+  const drawdown = _buildDrawdownSeries(primary.data);
+  const sampled = _downsampleHistory(labels, [{ label: "Drawdown", data: drawdown }]);
+  const ddLabels = sampled.labels;
+  const ddSeries = sampled.datasets[0]?.data || [];
+
+  if (FIN.charts.historyDrawdown) FIN.charts.historyDrawdown.destroy();
+
+  FIN.charts.historyDrawdown = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: ddLabels,
+      datasets: [{
+        label: "Drawdown (%)",
+        data: ddSeries,
+        borderColor: "#ef4444",
+        backgroundColor: "rgba(239, 68, 68, 0.18)",
+        fill: true,
+        pointRadius: ddLabels.length > 80 ? 0 : 1.5,
+        borderWidth: 2,
+        tension: 0.2,
+        spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: "index" },
+      onHover: (_evt, elements) => {
+        const idx = elements?.[0]?.index;
+        _syncChartCrosshair("historyDrawdown", "history", Number.isInteger(idx) ? idx : -1);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const raw = String(items?.[0]?.label || "");
+              if (!raw || raw.length < 10) return raw;
+              return `${raw.slice(8, 10)}/${raw.slice(5, 7)}/${raw.slice(0, 4)}`;
+            },
+            label: (ctx) => ` Drawdown: ${formatPct(Number(ctx.raw || 0))}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: "#8b92a5", font: { size: 10 }, maxTicksLimit: 10 },
+        },
+        y: {
+          max: 0,
+          grid: { color: "rgba(255,255,255,0.05)" },
+          ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => formatPct(v) },
+        },
+      },
+    },
+  });
+}
 
 function populateHistorySelect() {
   const sel = byId("historyAssetSelect");
@@ -22,7 +239,13 @@ function readHistoryPrefs() {
   try {
     const raw = localStorage.getItem(HISTORY_PREFS_KEY);
     if (!raw) return {
-      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
+      assetId: "",
+      period: HISTORY_DEFAULT_PERIOD,
+      compareTotal: false,
+      benchmarks: [],
+      showInvested: true,
+      viewMode: "value",
+      quickRange: "",
     };
     const parsed = JSON.parse(raw);
     const benchmarks = Array.isArray(parsed.benchmarks)
@@ -30,14 +253,24 @@ function readHistoryPrefs() {
       : (parsed.benchmark ? [String(parsed.benchmark)] : []);
     return {
       assetId: String(parsed.assetId || ""),
-      period: String(parsed.period || "180"),
+      period: String(parsed.period || HISTORY_DEFAULT_PERIOD),
       compareTotal: Boolean(parsed.compareTotal),
       benchmarks,
       showInvested: parsed.showInvested !== false,
+      viewMode: parsed.viewMode === "base100" ? "base100" : "value",
+      quickRange: HISTORY_QUICK_RANGES.has(String(parsed.quickRange || "").toLowerCase())
+        ? String(parsed.quickRange || "").toLowerCase()
+        : "",
     };
   } catch {
     return {
-      assetId: "", period: "180", compareTotal: false, benchmarks: [], showInvested: true,
+      assetId: "",
+      period: HISTORY_DEFAULT_PERIOD,
+      compareTotal: false,
+      benchmarks: [],
+      showInvested: true,
+      viewMode: "value",
+      quickRange: "",
     };
   }
 }
@@ -48,14 +281,17 @@ function saveHistoryPrefs() {
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
+  const viewModeEl = byId("historyViewMode");
   if (!sel || !periodSel || !compareEl || !benchmarkSel || !investedEl) return;
   const benchmarks = [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean);
   localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
     assetId: sel.value || "",
-    period: periodSel.value || "180",
+    period: periodSel.value || HISTORY_DEFAULT_PERIOD,
     compareTotal: compareEl.checked,
     benchmarks,
     showInvested: investedEl.checked,
+    viewMode: viewModeEl?.value === "base100" ? "base100" : "value",
+    quickRange: FIN_HISTORY_QUICK_RANGE || "",
   }));
 }
 
@@ -66,10 +302,11 @@ function applyHistoryPrefs() {
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
+  const viewModeEl = byId("historyViewMode");
 
   if (periodSel) {
     const allowed = ["30", "90", "180", "365"];
-    periodSel.value = allowed.includes(prefs.period) ? prefs.period : "180";
+    periodSel.value = allowed.includes(prefs.period) ? prefs.period : HISTORY_DEFAULT_PERIOD;
   }
   if (compareEl) compareEl.checked = !!prefs.compareTotal;
   if (benchmarkSel) {
@@ -79,6 +316,9 @@ function applyHistoryPrefs() {
     });
   }
   if (investedEl) investedEl.checked = prefs.showInvested !== false;
+  if (viewModeEl) viewModeEl.value = prefs.viewMode === "base100" ? "base100" : "value";
+  FIN_HISTORY_QUICK_RANGE = HISTORY_QUICK_RANGES.has(prefs.quickRange) ? prefs.quickRange : "";
+  _refreshHistoryQuickRangeUi();
 
   if (sel) {
     const validValues = new Set(["", "__total__", ...FIN.assets.map((a) => String(a.id))]);
@@ -97,8 +337,83 @@ function _historySeriesMap(rows) {
 }
 
 function _historyRangeDays() {
+  if (FIN_HISTORY_QUICK_RANGE === "ytd") {
+    const now = new Date();
+    const ytdStart = new Date(now.getFullYear(), 0, 1);
+    return Math.max(1, Math.ceil((now - ytdStart) / 86400000) + 1);
+  }
+  if (FIN_HISTORY_QUICK_RANGE === "max") {
+    return 3650;
+  }
+  if (["30", "90", "180", "365"].includes(FIN_HISTORY_QUICK_RANGE)) {
+    return Number(FIN_HISTORY_QUICK_RANGE);
+  }
   const periodSel = byId("historyPeriodSelect");
   return Number(periodSel?.value || 180);
+}
+
+function _refreshHistoryQuickRangeUi() {
+  document.querySelectorAll(".fin-history-range-btn[data-history-range]").forEach((btn) => {
+    const key = String(btn.dataset.historyRange || "").trim().toLowerCase();
+    const isActive = key && key === FIN_HISTORY_QUICK_RANGE;
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function setHistoryQuickRange(rangeKey) {
+  const next = String(rangeKey || "").trim().toLowerCase();
+  FIN_HISTORY_QUICK_RANGE = HISTORY_QUICK_RANGES.has(next) ? next : "";
+  _refreshHistoryQuickRangeUi();
+}
+
+function _normalizeDatasetToBase100(data) {
+  const numeric = (data || []).map((value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  });
+  const base = numeric.find((value) => value != null && value > 0);
+  if (!base) return numeric.map(() => null);
+  return numeric.map((value) => {
+    if (value == null) return null;
+    return (value / base) * 100;
+  });
+}
+
+function _applyHistoryViewMode(datasets, viewMode) {
+  if (viewMode !== "base100") {
+    return {
+      datasets,
+      usesBase100: false,
+    };
+  }
+
+  const nextDatasets = (datasets || []).map((dataset) => {
+    const label = String(dataset.label || "");
+    if (dataset.yAxisID === "y1") {
+      return {
+        ...dataset,
+        yAxisID: "yBase",
+        data: (dataset.data || []).map((value) => {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? (100 + parsed) : null;
+        }),
+      };
+    }
+
+    return {
+      ...dataset,
+      yAxisID: "yBase",
+      fill: false,
+      label: label.replace("(R$)", "(Base 100)").replace("Preço", "Índice"),
+      data: _normalizeDatasetToBase100(dataset.data || []),
+    };
+  });
+
+  return {
+    datasets: nextDatasets,
+    usesBase100: true,
+  };
 }
 
 function _buildHistoryChartDataLocal(payload) {
@@ -287,6 +602,7 @@ async function loadHistoryFromControls() {
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
+  const viewModeEl = byId("historyViewMode");
   if (!sel) return;
   saveHistoryPrefs();
   const benchmarks = benchmarkSel
@@ -297,6 +613,7 @@ async function loadHistoryFromControls() {
     rangeDays: _historyRangeDays(),
     benchmarks,
     showInvested: !(investedEl && investedEl.checked === false),
+    viewMode: viewModeEl?.value === "base100" ? "base100" : "value",
   });
 }
 
@@ -311,7 +628,8 @@ async function loadHistoryChart(assetId, options = {}) {
     ? options.benchmarks.map((b) => String(b || "").trim().toLowerCase()).filter((b) => ["ibov", "cdi", "ipca"].includes(b))
     : [];
   const showInvested = options.showInvested !== false;
-  const limit = Math.min(365, Math.max(1, rangeDays));
+  const viewMode = options.viewMode === "base100" ? "base100" : "value";
+  const limit = Math.min(3650, Math.max(1, rangeDays));
 
   if (!assetId) {
     if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
@@ -376,20 +694,34 @@ async function loadHistoryChart(assetId, options = {}) {
       benchmarkSeries,
     });
     const labels = Array.isArray(built?.labels) ? built.labels : [];
-    const datasets = Array.isArray(built?.datasets) ? built.datasets : [];
+    const rawDatasets = Array.isArray(built?.datasets) ? built.datasets : [];
+    const transformed = _applyHistoryViewMode(rawDatasets, viewMode);
+    const sampledMain = _downsampleHistory(labels, transformed.datasets);
+    const sampledRaw = _downsampleHistory(labels, rawDatasets);
+    const datasets = sampledMain.datasets;
+    const chartLabels = sampledMain.labels;
+    const usesBase100 = transformed.usesBase100;
+
+    _renderHistoryDrawdown(sampledRaw.labels, sampledRaw.datasets);
+    const heatSeries = _primaryValueDataset(sampledRaw.datasets);
+    _renderHistoryHeatmap(sampledRaw.labels, heatSeries?.data || []);
 
     if (FIN.charts.history) FIN.charts.history.destroy();
 
     FIN.charts.history = new Chart(canvas, {
       type: "line",
       data: {
-        labels,
+        labels: chartLabels,
         datasets,
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { intersect: false, mode: "index" },
+        onHover: (_evt, elements) => {
+          const idx = elements?.[0]?.index;
+          _syncChartCrosshair("history", "historyDrawdown", Number.isInteger(idx) ? idx : -1);
+        },
         onClick: (_evt, elements, chart) => {
           if (!elements || !elements.length) return;
           const idx = elements[0].index;
@@ -401,12 +733,39 @@ async function loadHistoryChart(assetId, options = {}) {
           legend: { display: datasets.length > 1 },
           tooltip: {
             callbacks: {
+              title: (items) => {
+                const raw = String(items?.[0]?.label || "");
+                if (!raw || raw.length < 10) return raw;
+                const yyyy = raw.slice(0, 4);
+                const mm = raw.slice(5, 7);
+                const dd = raw.slice(8, 10);
+                return `${dd}/${mm}/${yyyy}`;
+              },
               label: (ctx) => {
                 const raw = Number(ctx.raw || 0);
+                const idx = Number(ctx.dataIndex || 0);
+                const series = Array.isArray(ctx.dataset.data) ? ctx.dataset.data : [];
+                let prev = null;
+                for (let i = idx - 1; i >= 0; i -= 1) {
+                  const n = Number(series[i]);
+                  if (Number.isFinite(n)) {
+                    prev = n;
+                    break;
+                  }
+                }
+
+                if (usesBase100) {
+                  const delta = prev && prev !== 0 ? ((raw / prev) - 1) * 100 : null;
+                  const deltaText = delta == null ? "" : ` | Δ ${formatPct(delta)}`;
+                  return ` ${ctx.dataset.label}: ${formatNumber(raw, 2)} pts${deltaText}`;
+                }
+
                 if (ctx.dataset.yAxisID === "y1") {
                   return ` ${ctx.dataset.label}: ${formatPct(raw)}`;
                 }
-                return ` ${ctx.dataset.label}: ${formatBRL(raw)}`;
+                const delta = prev && prev !== 0 ? ((raw / prev) - 1) * 100 : null;
+                const deltaText = delta == null ? "" : ` | Δ ${formatPct(delta)}`;
+                return ` ${ctx.dataset.label}: ${formatBRL(raw)}${deltaText}`;
               },
             },
           },
@@ -417,20 +776,38 @@ async function loadHistoryChart(assetId, options = {}) {
             ticks: { color: "#8b92a5", font: { size: 10 }, maxTicksLimit: 12 },
           },
           y: {
+            display: !usesBase100,
             grid: { color: "rgba(255,255,255,0.05)" },
             ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => formatBRL(v) },
           },
           y1: {
-            display: datasets.some((d) => d.yAxisID === "y1"),
+            display: !usesBase100 && datasets.some((d) => d.yAxisID === "y1"),
             position: "right",
             grid: { drawOnChartArea: false },
             ticks: { color: "#f59e0b", font: { size: 10 }, callback: (v) => formatPct(v) },
+          },
+          yBase: {
+            display: usesBase100,
+            position: "right",
+            grid: { color: "rgba(255,255,255,0.05)" },
+            ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => `${formatNumber(v, 1)} pts` },
           },
         },
       },
     });
   } catch (err) {
     console.error("History chart error:", err);
+    if (FIN.charts.historyDrawdown) {
+      FIN.charts.historyDrawdown.destroy();
+      FIN.charts.historyDrawdown = null;
+    }
+    const heatmapEl = byId("historyHeatmap");
+    if (heatmapEl) heatmapEl.innerHTML = '<p class="fin-empty">Erro ao carregar heatmap.</p>';
+    if (emptyEl) {
+      emptyEl.style.display = "";
+      emptyEl.textContent = "Erro ao carregar histórico. Tente novamente em alguns segundos.";
+    }
+    canvas.style.display = "none";
   }
 }
 

@@ -214,6 +214,10 @@
             <input id="dividendsShowValues" type="checkbox" checked />
             Mostrar valores nas barras
           </label>
+          <label class="fin-div-control-item" for="dividendsShowMA">
+            <input id="dividendsShowMA" type="checkbox" checked />
+            Exibir média móvel (3 meses)
+          </label>
           <label class="fin-div-control-item" for="dividendsLabelDensity">
             Densidade:
             <select id="dividendsLabelDensity" class="fin-inline-select" title="Densidade dos rótulos">
@@ -264,18 +268,40 @@
             <option value="cdi">CDI</option>
             <option value="ipca">IPCA</option>
           </select>
-          <label style="font-size:0.78rem;margin-left:8px;display:inline-flex;align-items:center;gap:6px;">
+          <select id="historyViewMode" class="fin-inline-select" title="Modo de visualização">
+            <option value="value" selected>Valores (R$)</option>
+            <option value="base100">Base 100</option>
+          </select>
+          <label class="fin-history-check">
             <input type="checkbox" id="historyShowInvested" checked />
             Aporte acumulado
           </label>
-          <label style="font-size:0.78rem;margin-left:8px;display:inline-flex;align-items:center;gap:6px;">
+          <label class="fin-history-check">
             <input type="checkbox" id="historyCompareTotal" />
             Comparar com total
           </label>
         </h2>
+        <div class="fin-history-quick-range" role="group" aria-label="Atalhos de período">
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="30">1M</button>
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="90">3M</button>
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="180">6M</button>
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="365">1A</button>
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="ytd">YTD</button>
+          <button type="button" class="btn-text fin-history-range-btn" data-history-range="max">MAX</button>
+        </div>
         <div class="fin-card-body fin-chart-container">
           <canvas id="historyChart" height="300"></canvas>
           <p id="historyEmpty" class="fin-empty">Selecione um ativo ou o total da carteira para ver a evolução.</p>
+        </div>
+        <div class="fin-card-body fin-chart-container fin-subchart-container">
+          <h3 class="fin-subchart-title">Drawdown</h3>
+          <canvas id="historyDrawdownChart" height="180"></canvas>
+        </div>
+        <div class="fin-card-body fin-history-heatmap-wrap">
+          <h3 class="fin-subchart-title">Heatmap Mensal (%)</h3>
+          <div id="historyHeatmap" class="fin-history-heatmap">
+            <p class="fin-empty">Sem dados suficientes para heatmap.</p>
+          </div>
         </div>
       </section>
 

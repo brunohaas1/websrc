@@ -99,15 +99,31 @@ document.addEventListener("DOMContentLoaded", () => {
   const histSel = byId("historyAssetSelect");
   const histPeriodSel = byId("historyPeriodSelect");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
+  const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
   const histCompare = byId("historyCompareTotal");
   if (histSel) {
     histSel.addEventListener("change", loadHistoryFromControls);
   }
-  if (histPeriodSel) histPeriodSel.addEventListener("change", loadHistoryFromControls);
+  if (histPeriodSel) {
+    histPeriodSel.addEventListener("change", () => {
+      if (typeof setHistoryQuickRange === "function") setHistoryQuickRange("");
+      loadHistoryFromControls();
+    });
+  }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
+  if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);
   if (histInvested) histInvested.addEventListener("change", loadHistoryFromControls);
   if (histCompare) histCompare.addEventListener("change", loadHistoryFromControls);
+  document.querySelectorAll(".fin-history-range-btn[data-history-range]").forEach((btn) => {
+    if (btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => {
+      const key = String(btn.dataset.historyRange || "").trim().toLowerCase();
+      if (typeof setHistoryQuickRange === "function") setHistoryQuickRange(key);
+      loadHistoryFromControls();
+    });
+  });
 
   const rebalAporteInput = byId("rebalAporteInput");
   const projectionMonthsInput = byId("projectionMonthsInput");

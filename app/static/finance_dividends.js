@@ -113,10 +113,11 @@ function getDividendsChartPrefs() {
     const raw = localStorage.getItem(DIVIDENDS_CHART_PREFS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const showValues = parsed?.showValues !== false;
+    const showMA = parsed?.showMA !== false;
     const density = ["smart", "all", "sparse"].includes(parsed?.density) ? parsed.density : "smart";
-    return { showValues, density };
+    return { showValues, showMA, density };
   } catch {
-    return { showValues: true, density: "smart" };
+    return { showValues: true, showMA: true, density: "smart" };
   }
 }
 
@@ -130,19 +131,31 @@ function setDividendsChartPrefs(nextPrefs) {
 
 function applyDividendsChartControls(prefs) {
   const showValuesInput = byId("dividendsShowValues");
+  const showMAInput = byId("dividendsShowMA");
   const densitySelect = byId("dividendsLabelDensity");
   if (showValuesInput) showValuesInput.checked = prefs.showValues !== false;
+  if (showMAInput) showMAInput.checked = prefs.showMA !== false;
   if (densitySelect) densitySelect.value = prefs.density || "smart";
 }
 
 function bindDividendsChartControls() {
   const showValuesInput = byId("dividendsShowValues");
+  const showMAInput = byId("dividendsShowMA");
   const densitySelect = byId("dividendsLabelDensity");
   if (showValuesInput && !showValuesInput.dataset.bound) {
     showValuesInput.dataset.bound = "1";
     showValuesInput.addEventListener("change", () => {
       const prefs = getDividendsChartPrefs();
       const next = { ...prefs, showValues: showValuesInput.checked };
+      setDividendsChartPrefs(next);
+      renderDividendsChart(FIN.dividends || [], next);
+    });
+  }
+  if (showMAInput && !showMAInput.dataset.bound) {
+    showMAInput.dataset.bound = "1";
+    showMAInput.addEventListener("change", () => {
+      const prefs = getDividendsChartPrefs();
+      const next = { ...prefs, showMA: showMAInput.checked };
       setDividendsChartPrefs(next);
       renderDividendsChart(FIN.dividends || [], next);
     });
@@ -166,7 +179,7 @@ function formatCompactBRL(value) {
   return formatBRL(num);
 }
 
-function renderDividendsChart(divs, prefs = { showValues: true, density: "smart" }) {
+function renderDividendsChart(divs, prefs = { showValues: true, showMA: true, density: "smart" }) {
   const canvas = byId("dividendsChart");
   if (!canvas || !window.Chart) return;
 
@@ -180,6 +193,12 @@ function renderDividendsChart(divs, prefs = { showValues: true, density: "smart"
 
   const labels = Object.keys(monthly).sort();
   const data = labels.map((k) => monthly[k]);
+  const ma3 = data.map((_, idx) => {
+    const start = Math.max(0, idx - 2);
+    const sample = data.slice(start, idx + 1);
+    if (!sample.length) return null;
+    return sample.reduce((sum, value) => sum + Number(value || 0), 0) / sample.length;
+  });
   const maxVisibleLabels = prefs.density === "all" ? Number.POSITIVE_INFINITY : prefs.density === "sparse" ? 6 : 12;
   const step = maxVisibleLabels === Number.POSITIVE_INFINITY ? 1 : Math.max(1, Math.ceil(labels.length / maxVisibleLabels));
   const shouldCompactLabels = labels.length > 10;
@@ -227,6 +246,22 @@ function renderDividendsChart(divs, prefs = { showValues: true, density: "smart"
           borderWidth: 1,
           borderRadius: 4,
         },
+        ...(prefs.showMA === false
+          ? []
+          : [{
+            type: "line",
+            label: "MM3",
+            data: ma3,
+            borderColor: "#f59e0b",
+            backgroundColor: "rgba(245, 158, 11, 0.14)",
+            borderWidth: 2,
+            pointRadius: labels.length > 24 ? 0 : 2,
+            pointHoverRadius: 4,
+            tension: 0.25,
+            fill: false,
+            spanGaps: true,
+            yAxisID: "y",
+          }]),
       ],
     },
     options: {
@@ -250,7 +285,21 @@ function renderDividendsChart(divs, prefs = { showValues: true, density: "smart"
         },
         tooltip: {
           callbacks: {
-            label: (ctx) => ` ${formatBRL(ctx.parsed.y)}`,
+            label: (ctx) => {
+              const value = Number(ctx.parsed.y || 0);
+              if (ctx.dataset.label === "MM3") return ` Média móvel (3m): ${formatBRL(value)}`;
+              return ` ${formatBRL(value)}`;
+            },
+            footer: (items) => {
+              const barItem = (items || []).find((item) => item.dataset?.label === "Dividendos por mês (R$)");
+              if (!barItem) return "";
+              const idx = Number(barItem.dataIndex || 0);
+              if (idx <= 0) return "";
+              const prev = Number(data[idx - 1] || 0);
+              const curr = Number(data[idx] || 0);
+              if (!(prev > 0)) return "";
+              return `MoM: ${formatPct(((curr / prev) - 1) * 100)}`;
+            },
           },
         },
       },

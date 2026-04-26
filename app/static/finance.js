@@ -1968,6 +1968,7 @@ function renderPnLChart(portfolio) {
   });
 
   const labels = sorted.map((p) => p.symbol);
+  const investedBySymbol = new Map(sorted.map((p) => [String(p.symbol || ""), Number(p.total_invested || 0)]));
   const data = sorted.map((p) => {
     const val = (p.current_price || 0) * p.quantity;
     return Math.round((val - p.total_invested) * 100) / 100;
@@ -1998,6 +1999,16 @@ function renderPnLChart(portfolio) {
         tooltip: {
           callbacks: {
             label: (ctx) => ` P&L: ${formatBRL(ctx.raw)}`,
+            footer: (items) => {
+              const item = items?.[0];
+              if (!item) return "";
+              const symbol = String(item.label || "");
+              const invested = Number(investedBySymbol.get(symbol) || 0);
+              if (!(invested > 0)) return "";
+              const pnl = Number(item.raw || 0);
+              const pct = (pnl / invested) * 100;
+              return `Rentabilidade: ${formatPct(pct)}`;
+            },
           },
         },
       },
@@ -2075,6 +2086,17 @@ function renderPerformanceChart(portfolio) {
         tooltip: {
           callbacks: {
             label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
+            footer: (items) => {
+              const investedItem = (items || []).find((it) => it.dataset?.label === "Investido");
+              const currentItem = (items || []).find((it) => it.dataset?.label === "Valor Atual");
+              if (!investedItem || !currentItem) return "";
+              const invested = Number(investedItem.raw || 0);
+              const currentValue = Number(currentItem.raw || 0);
+              if (!(invested > 0)) return "";
+              const pnl = currentValue - invested;
+              const pct = (pnl / invested) * 100;
+              return `P&L: ${formatBRL(pnl)} (${formatPct(pct)})`;
+            },
           },
         },
       },
