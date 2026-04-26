@@ -185,6 +185,42 @@ function _trimHistoryBeforeDate(labels, datasets, startDate) {
   };
 }
 
+function _trimHistoryToFirstMainDataPoint(labels, datasets) {
+  if (!Array.isArray(labels) || !labels.length || !Array.isArray(datasets) || !datasets.length) {
+    return { labels, datasets };
+  }
+
+  const mainDatasets = datasets.filter((dataset) => dataset?.yAxisID !== "y1");
+  if (!mainDatasets.length) {
+    return { labels, datasets };
+  }
+
+  let firstIdx = -1;
+  for (let i = 0; i < labels.length; i += 1) {
+    const hasMainValue = mainDatasets.some((dataset) => {
+      const value = Array.isArray(dataset?.data) ? dataset.data[i] : null;
+      const num = Number(value);
+      return Number.isFinite(num) && num > 0;
+    });
+    if (hasMainValue) {
+      firstIdx = i;
+      break;
+    }
+  }
+
+  if (firstIdx <= 0) {
+    return { labels, datasets };
+  }
+
+  return {
+    labels: labels.slice(firstIdx),
+    datasets: datasets.map((dataset) => ({
+      ...dataset,
+      data: Array.isArray(dataset?.data) ? dataset.data.slice(firstIdx) : [],
+    })),
+  };
+}
+
 function _historyRangeDays() {
   if (FIN_HISTORY_QUICK_RANGE === "ytd") {
     const now = new Date();
@@ -544,9 +580,10 @@ async function loadHistoryChart(assetId, options = {}) {
     const rawLabels = Array.isArray(built?.labels) ? built.labels : [];
     const rawDatasets = Array.isArray(built?.datasets) ? built.datasets : [];
     const firstBuyDate = _historyFirstBuyDate(assetId);
-    const trimmed = _trimHistoryBeforeDate(rawLabels, rawDatasets, firstBuyDate);
-    const transformed = _applyHistoryViewMode(trimmed.datasets, viewMode);
-    const sampledMain = _downsampleHistory(trimmed.labels, transformed.datasets);
+    const dateTrimmed = _trimHistoryBeforeDate(rawLabels, rawDatasets, firstBuyDate);
+    const dataTrimmed = _trimHistoryToFirstMainDataPoint(dateTrimmed.labels, dateTrimmed.datasets);
+    const transformed = _applyHistoryViewMode(dataTrimmed.datasets, viewMode);
+    const sampledMain = _downsampleHistory(dataTrimmed.labels, transformed.datasets);
     const datasets = sampledMain.datasets;
     const chartLabels = sampledMain.labels;
     const usesBase100 = transformed.usesBase100;
