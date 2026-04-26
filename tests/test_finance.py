@@ -250,6 +250,70 @@ class TestAssets:
         assert by_day["2025-01-02"] == pytest.approx(120.0, rel=1e-6)
         assert by_day["2025-01-03"] == pytest.approx(55.0, rel=1e-6)
 
+    def test_asset_history_includes_tx_only_period_before_market_snapshots(self, client, app):
+        from app.db import get_connection
+
+        asset = _add_asset(client, symbol="ITSA4", name="Itausa").get_json()
+        aid = asset["id"]
+
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 10,
+            "price": 10,
+            "tx_type": "buy",
+            "tx_date": "2025-01-01",
+        })
+
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 12.0, "2025-01-10 10:00:00"),
+            )
+            conn.commit()
+
+        resp = client.get(f"/api/finance/asset-history/{aid}?limit=30")
+        assert resp.status_code == 200
+        data = list(reversed(resp.get_json()))
+        by_day = {item["captured_at"][:10]: float(item["price"]) for item in data}
+
+        assert by_day["2025-01-01"] == pytest.approx(100.0, rel=1e-6)
+        assert by_day["2025-01-10"] == pytest.approx(120.0, rel=1e-6)
+
+    def test_portfolio_history_includes_tx_only_period_before_market_snapshots(self, client, app):
+        from app.db import get_connection
+
+        asset = _add_asset(client, symbol="ABEV3", name="Ambev").get_json()
+        aid = asset["id"]
+
+        jpost(client, "/api/finance/transactions", {
+            "asset_id": aid,
+            "quantity": 20,
+            "price": 10,
+            "tx_type": "buy",
+            "tx_date": "2025-02-01",
+        })
+
+        with get_connection(app.config["DATABASE_TARGET"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO fin_asset_history (asset_id, price, captured_at)
+                VALUES (?, ?, ?)
+                """,
+                (aid, 11.0, "2025-02-20 10:00:00"),
+            )
+            conn.commit()
+
+        resp = client.get("/api/finance/portfolio-history?limit=30")
+        assert resp.status_code == 200
+        data = list(reversed(resp.get_json()))
+        by_day = {item["captured_at"][:10]: float(item["price"]) for item in data}
+
+        assert by_day["2025-02-01"] == pytest.approx(200.0, rel=1e-6)
+        assert by_day["2025-02-20"] == pytest.approx(220.0, rel=1e-6)
+
 
 # ══════════════════════════════════════════════════════════
 #                 PORTFOLIO

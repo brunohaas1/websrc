@@ -1886,9 +1886,6 @@ class Repository:
                 """),
                 (asset_id, asset_id, limit),
             ).fetchall()
-            if not price_rows:
-                return []
-
             tx_rows = conn.execute(
                 self._sql("""
                     SELECT
@@ -1899,6 +1896,18 @@ class Repository:
                                 ELSE -quantity
                             END
                         ) AS delta_qty
+                        ,SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN quantity
+                                ELSE 0
+                            END
+                        ) AS buy_qty
+                        ,SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN (quantity * price)
+                                ELSE 0
+                            END
+                        ) AS buy_notional
                     FROM fin_transactions
                     WHERE asset_id = ?
                     GROUP BY DATE(tx_date)
@@ -1907,25 +1916,51 @@ class Repository:
                 (asset_id,),
             ).fetchall()
 
-            tx_points = [
-                (str(row["tx_day"]), float(row["delta_qty"] or 0))
-                for row in tx_rows
-                if row["tx_day"]
-            ]
-
-            # Compute historical position value (price * quantity-at-date).
-            qty = 0.0
-            tx_idx = 0
-            timeline = []
-            for row in sorted(price_rows, key=lambda r: str(r["captured_at"])):
-                date_key = str(row["captured_at"] or "")
-                if not date_key:
+            price_map = {
+                str(row["captured_at"]): float(row["price"] or 0)
+                for row in price_rows
+                if row["captured_at"]
+            }
+            tx_map: dict[str, dict[str, float | None]] = {}
+            for row in tx_rows:
+                day = str(row["tx_day"] or "")
+                if not day:
                     continue
-                while tx_idx < len(tx_points) and tx_points[tx_idx][0] <= date_key:
-                    qty += float(tx_points[tx_idx][1])
-                    tx_idx += 1
-                price = float(row["price"] or 0)
-                value = price * max(0.0, qty)
+                buy_qty = float(row["buy_qty"] or 0)
+                buy_notional = float(row["buy_notional"] or 0)
+                tx_map[day] = {
+                    "delta_qty": float(row["delta_qty"] or 0),
+                    "fallback_price": (
+                        (buy_notional / buy_qty)
+                        if buy_qty > 0
+                        else None
+                    ),
+                }
+
+            all_dates = sorted(set(price_map.keys()) | set(tx_map.keys()))
+            if not all_dates:
+                return []
+
+            # Compute historical position value (price * quantity-at-date),
+            # including early transaction-only dates before market snapshots.
+            qty = 0.0
+            last_price = None
+            timeline = []
+            for date_key in all_dates:
+                tx_info = tx_map.get(date_key)
+                if tx_info:
+                    qty += float(tx_info.get("delta_qty") or 0)
+                    fallback_price = tx_info.get("fallback_price")
+                    if date_key not in price_map and fallback_price is not None:
+                        last_price = float(fallback_price)
+
+                if date_key in price_map:
+                    last_price = float(price_map[date_key])
+
+                if last_price is None:
+                    continue
+
+                value = float(last_price) * max(0.0, qty)
                 timeline.append({
                     "asset_id": asset_id,
                     "price": round(value, 6),
@@ -1955,9 +1990,6 @@ class Repository:
                     ORDER BY DATE(h.captured_at) ASC, h.asset_id ASC
                 """),
             ).fetchall()
-            if not price_rows:
-                return []
-
             tx_rows = conn.execute(
                 self._sql("""
                     SELECT
@@ -1969,6 +2001,18 @@ class Repository:
                                 ELSE -quantity
                             END
                         ) AS delta_qty
+                        ,SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN quantity
+                                ELSE 0
+                            END
+                        ) AS buy_qty
+                        ,SUM(
+                            CASE
+                                WHEN LOWER(COALESCE(tx_type, 'buy')) = 'buy' THEN (quantity * price)
+                                ELSE 0
+                            END
+                        ) AS buy_notional
                     FROM fin_transactions
                     GROUP BY asset_id, DATE(tx_date)
                     ORDER BY asset_id ASC, DATE(tx_date) ASC
@@ -1983,36 +2027,57 @@ class Repository:
                 asset_prices = prices_by_date.setdefault(date_key, {})
                 asset_prices[int(row["asset_id"])] = float(row["price"] or 0)
 
-            tx_by_asset: dict[int, list[tuple[str, float]]] = {}
+            tx_by_asset: dict[int, list[tuple[str, float, float | None]]] = {}
             for row in tx_rows:
                 day = str(row["tx_day"] or "")
                 if not day:
                     continue
                 aid = int(row["asset_id"])
-                tx_by_asset.setdefault(aid, []).append((day, float(row["delta_qty"] or 0)))
+                buy_qty = float(row["buy_qty"] or 0)
+                buy_notional = float(row["buy_notional"] or 0)
+                fallback_price = (buy_notional / buy_qty) if buy_qty > 0 else None
+                tx_by_asset.setdefault(aid, []).append((
+                    day,
+                    float(row["delta_qty"] or 0),
+                    fallback_price,
+                ))
 
             all_assets = set()
             for per_date in prices_by_date.values():
                 all_assets.update(per_date.keys())
             all_assets.update(tx_by_asset.keys())
 
+            all_dates = sorted(
+                set(prices_by_date.keys())
+                | {
+                    day
+                    for points in tx_by_asset.values()
+                    for (day, _delta, _fallback_price) in points
+                }
+            )
+            if not all_dates:
+                return []
+
             tx_indices = {aid: 0 for aid in all_assets}
             qty_state = {aid: 0.0 for aid in all_assets}
             last_price = {aid: None for aid in all_assets}
 
             rows: list[dict[str, Any]] = []
-            for date_key in sorted(prices_by_date.keys()):
+            for date_key in all_dates:
                 # Apply all transactions up to this date.
                 for aid in all_assets:
                     tx_points = tx_by_asset.get(aid, [])
                     idx = tx_indices[aid]
                     while idx < len(tx_points) and tx_points[idx][0] <= date_key:
-                        qty_state[aid] += float(tx_points[idx][1])
+                        _day, delta_qty, fallback_price = tx_points[idx]
+                        qty_state[aid] += float(delta_qty)
+                        if aid not in prices_by_date.get(date_key, {}) and fallback_price is not None:
+                            last_price[aid] = float(fallback_price)
                         idx += 1
                     tx_indices[aid] = idx
 
                 # Update known prices for this date.
-                for aid, price in prices_by_date[date_key].items():
+                for aid, price in prices_by_date.get(date_key, {}).items():
                     last_price[aid] = float(price)
 
                 total_value = 0.0
