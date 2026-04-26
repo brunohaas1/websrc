@@ -93,19 +93,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const histSel = byId("historyAssetSelect");
-  const histPeriodSel = byId("historyPeriodSelect");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
   const histCompare = byId("historyCompareTotal");
   if (histSel) {
     histSel.addEventListener("change", loadHistoryFromControls);
-  }
-  if (histPeriodSel) {
-    histPeriodSel.addEventListener("change", () => {
-      if (typeof setHistoryQuickRange === "function") setHistoryQuickRange("");
-      loadHistoryFromControls();
-    });
   }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);

@@ -256,12 +256,6 @@
           <select id="historyAssetSelect" class="fin-inline-select">
             <option value="">Selecione...</option>
           </select>
-          <select id="historyPeriodSelect" class="fin-inline-select" title="Período">
-            <option value="30">30d</option>
-            <option value="90">90d</option>
-            <option value="180" selected>6m</option>
-            <option value="365">1 ano</option>
-          </select>
           <select id="historyBenchmarkSelect" class="fin-inline-select" title="Benchmark (múltiplo)" multiple size="3">
             <option value="ibov">IBOV</option>
             <option value="cdi">CDI</option>
@@ -291,10 +285,6 @@
         <div class="fin-card-body fin-chart-container">
           <canvas id="historyChart" height="300"></canvas>
           <p id="historyEmpty" class="fin-empty">Selecione um ativo ou o total da carteira para ver a evolução.</p>
-        </div>
-        <div class="fin-card-body fin-chart-container fin-subchart-container">
-          <h3 class="fin-subchart-title">Drawdown</h3>
-          <canvas id="historyDrawdownChart" height="180"></canvas>
         </div>
       </section>
 

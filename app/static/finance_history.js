@@ -92,16 +92,15 @@ function readHistoryPrefs() {
 
 function saveHistoryPrefs() {
   const sel = byId("historyAssetSelect");
-  const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
   const viewModeEl = byId("historyViewMode");
-  if (!sel || !periodSel || !compareEl || !benchmarkSel || !investedEl) return;
+  if (!sel || !compareEl || !benchmarkSel || !investedEl) return;
   const benchmarks = [...benchmarkSel.selectedOptions].map((o) => o.value).filter(Boolean);
   localStorage.setItem(HISTORY_PREFS_KEY, JSON.stringify({
     assetId: sel.value || "",
-    period: periodSel.value || HISTORY_DEFAULT_PERIOD,
+    period: HISTORY_DEFAULT_PERIOD,
     compareTotal: compareEl.checked,
     benchmarks,
     showInvested: investedEl.checked,
@@ -113,16 +112,11 @@ function saveHistoryPrefs() {
 function applyHistoryPrefs() {
   const prefs = readHistoryPrefs();
   const sel = byId("historyAssetSelect");
-  const periodSel = byId("historyPeriodSelect");
   const compareEl = byId("historyCompareTotal");
   const benchmarkSel = byId("historyBenchmarkSelect");
   const investedEl = byId("historyShowInvested");
   const viewModeEl = byId("historyViewMode");
 
-  if (periodSel) {
-    const allowed = ["30", "90", "180", "365"];
-    periodSel.value = allowed.includes(prefs.period) ? prefs.period : HISTORY_DEFAULT_PERIOD;
-  }
   if (compareEl) compareEl.checked = !!prefs.compareTotal;
   if (benchmarkSel) {
     const allowedB = new Set(["ibov", "cdi", "ipca"]);
@@ -203,8 +197,7 @@ function _historyRangeDays() {
   if (["30", "90", "180", "365"].includes(FIN_HISTORY_QUICK_RANGE)) {
     return Number(FIN_HISTORY_QUICK_RANGE);
   }
-  const periodSel = byId("historyPeriodSelect");
-  return Number(periodSel?.value || 180);
+  return Number(HISTORY_DEFAULT_PERIOD);
 }
 
 function _refreshHistoryQuickRangeUi() {
