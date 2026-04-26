@@ -542,7 +542,7 @@ async function loadAll(options = {}) {
     const criticalFetchStart = perfEnabled ? performance.now() : 0;
     const [summary, transactions] = await Promise.all([
       fetchFinanceJson("/api/finance/summary", { portfolio: [], currency_rates: [] }),
-      fetchFinanceJson("/api/finance/transactions", []),
+      fetchFinanceJson("/api/finance/transactions?limit=5000", []),
     ]);
     if (perfEnabled) _setPerfRunPatch(perfRunId, { criticalFetchMs: _ms(performance.now() - criticalFetchStart) });
 
@@ -796,7 +796,7 @@ function renderMarketDataHealth(meta = {}) {
 async function refreshPortfolioPanels() {
   const [summary, transactions, assets, allocTargets] = await Promise.all([
     finFetch("/api/finance/summary").then((r) => r.json()),
-    finFetch("/api/finance/transactions").then((r) => r.json()),
+    finFetch("/api/finance/transactions?limit=5000").then((r) => r.json()),
     finFetch("/api/finance/assets").then((r) => r.json()),
     finFetch("/api/finance/allocation-targets").then((r) => r.json()),
   ]);
@@ -874,7 +874,7 @@ async function refreshDividendsPanels() {
 async function refreshImportPanels() {
   const [summary, transactions, assets, allocTargets, dividends] = await Promise.all([
     finFetch("/api/finance/summary").then((r) => r.json()),
-    finFetch("/api/finance/transactions").then((r) => r.json()),
+    finFetch("/api/finance/transactions?limit=5000").then((r) => r.json()),
     finFetch("/api/finance/assets").then((r) => r.json()),
     finFetch("/api/finance/allocation-targets").then((r) => r.json()),
     finFetch("/api/finance/dividends").then((r) => r.json()),
