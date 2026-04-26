@@ -40,7 +40,6 @@ const FIN = {
 };
 
 const SECONDARY_CACHE_TTL_MS = 25000;
-      hide: ["finAICard"],
 const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
 const MARKET_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
