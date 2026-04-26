@@ -1903,20 +1903,33 @@ function chartColors(count) {
 function allocationBucketLabel(asset) {
   const rawType = String(asset?.asset_type || "").trim().toLowerCase();
   const symbol = String(asset?.symbol || "").trim().toUpperCase();
-  const name = String(asset?.name || "").trim().toLowerCase();
+  const rawName = String(asset?.name || "").trim();
+  const name = rawName.toLowerCase();
+  const nameNorm = rawName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  const explicitEtf = rawType === "etf";
+  const looksLikeEtf = symbol.endsWith("11") && (
+    nameNorm.includes("etf")
+    || nameNorm.includes("indice")
+    || nameNorm.includes("index")
+  );
+  if (explicitEtf || looksLikeEtf) return "ETF";
 
   const explicitFii = rawType === "fii"
     || rawType === "fundo_imobiliario"
     || rawType === "fundo-imobiliario";
-  const looksLikeFii = symbol.endsWith("11")
-    && (name.includes("fundo de investimento imobili") || name.includes("fii"));
-  if (explicitFii || looksLikeFii) return "Fundos Imobiliarios";
+  const mentionsFii = nameNorm.includes("fii");
+  const mentionsImobFund = nameNorm.includes("fundo") && nameNorm.includes("imobili");
+  const looksLikeFii = symbol.endsWith("11") && (mentionsFii || mentionsImobFund || name.includes("fundo"));
+  if (explicitFii || mentionsFii || mentionsImobFund || looksLikeFii) return "Fundos Imobiliarios";
 
   if (rawType === "stock" || rawType === "acao" || rawType === "acoes") {
     return "Acoes";
   }
 
-  if (rawType === "etf") return "ETF";
   if (rawType === "crypto") return "Cripto";
   if (rawType === "fund" || rawType === "fundo") return "Fundos";
   if (rawType === "renda-fixa" || rawType === "renda_fixa") return "Renda Fixa";
