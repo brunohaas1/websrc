@@ -221,6 +221,88 @@ function _trimHistoryToFirstMainDataPoint(labels, datasets) {
   };
 }
 
+function _historyFindMainDataset(datasets) {
+  const list = Array.isArray(datasets) ? datasets : [];
+  const valueSeries = list.filter((dataset) => dataset?.yAxisID === "y");
+  if (!valueSeries.length) return null;
+  const preferred = valueSeries.find((dataset) => {
+    const label = String(dataset?.label || "").toLowerCase();
+    return label.includes("patrim") || label.includes("total da carteira") || label.includes("ativo (r$");
+  });
+  return preferred || valueSeries[0] || null;
+}
+
+function _historySeriesStats(series) {
+  const numeric = (series || []).map((value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  });
+  const firstIdx = numeric.findIndex((value) => value != null);
+  if (firstIdx < 0) return null;
+
+  let lastIdx = -1;
+  for (let i = numeric.length - 1; i >= 0; i -= 1) {
+    if (numeric[i] != null) {
+      lastIdx = i;
+      break;
+    }
+  }
+  if (lastIdx < firstIdx) return null;
+
+  const first = Number(numeric[firstIdx]);
+  const last = Number(numeric[lastIdx]);
+  const valid = numeric.filter((value) => value != null).map((value) => Number(value));
+  if (!valid.length) return null;
+
+  return {
+    first,
+    last,
+    firstIdx,
+    lastIdx,
+    min: Math.min(...valid),
+    max: Math.max(...valid),
+    delta: last - first,
+    pct: first > 0 ? ((last / first) - 1) * 100 : null,
+  };
+}
+
+function _renderHistoryMetrics(labels, rawDatasets, usesBase100) {
+  const host = byId("finHistoryMetrics");
+  if (!host) return;
+
+  if (usesBase100) {
+    host.innerHTML = '<span class="fin-history-metric">Métricas detalhadas disponíveis no modo Valores (R$).</span>';
+    return;
+  }
+
+  const main = _historyFindMainDataset(rawDatasets);
+  const stats = _historySeriesStats(main?.data || []);
+  if (!main || !stats) {
+    host.innerHTML = '<span class="fin-history-metric">Sem métricas para o período atual.</span>';
+    return;
+  }
+
+  const labelStart = String(labels?.[stats.firstIdx] || "");
+  const labelEnd = String(labels?.[stats.lastIdx] || "");
+  const investedDs = (rawDatasets || []).find((dataset) => String(dataset?.label || "").includes("Aporte acumulado"));
+  const investedStart = Number(investedDs?.data?.[stats.firstIdx]);
+  const investedEnd = Number(investedDs?.data?.[stats.lastIdx]);
+  const investedDelta = (Number.isFinite(investedStart) && Number.isFinite(investedEnd))
+    ? (investedEnd - investedStart)
+    : null;
+
+  const chips = [
+    `Período: ${labelStart || "—"} → ${labelEnd || "—"}`,
+    `Variação: ${formatBRL(stats.delta)}${stats.pct == null ? "" : ` (${formatPct(stats.pct)})`}`,
+    `Faixa: ${formatBRL(stats.min)} a ${formatBRL(stats.max)}`,
+  ];
+  if (investedDelta != null) {
+    chips.push(`Aporte no período: ${formatBRL(investedDelta)}`);
+  }
+
+  host.innerHTML = chips.map((text) => `<span class="fin-history-metric">${escapeHtml(text)}</span>`).join("");
+}
+
 function _historyRangeDays() {
   if (FIN_HISTORY_QUICK_RANGE === "ytd") {
     const now = new Date();
@@ -517,6 +599,8 @@ async function loadHistoryChart(assetId, options = {}) {
 
   if (!assetId) {
     if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
+    const metricsEl = byId("finHistoryMetrics");
+    if (metricsEl) metricsEl.innerHTML = "";
     canvas.style.display = "none";
     if (emptyEl) emptyEl.style.display = "";
     return;
@@ -553,6 +637,8 @@ async function loadHistoryChart(assetId, options = {}) {
     const benchmarkSeries = benchmarkKeys.length ? (results[resultIdx++] || []) : [];
 
     if (!primaryData.length) {
+      const metricsEl = byId("finHistoryMetrics");
+      if (metricsEl) metricsEl.innerHTML = "";
       canvas.style.display = "none";
       if (emptyEl) {
         emptyEl.style.display = "";
@@ -584,12 +670,17 @@ async function loadHistoryChart(assetId, options = {}) {
     const dataTrimmed = _trimHistoryToFirstMainDataPoint(dateTrimmed.labels, dateTrimmed.datasets);
     const transformed = _applyHistoryViewMode(dataTrimmed.datasets, viewMode);
     const sampledMain = _downsampleHistory(dataTrimmed.labels, transformed.datasets);
+    const sampledRaw = _downsampleHistory(dataTrimmed.labels, dataTrimmed.datasets);
     const datasets = sampledMain.datasets;
     const chartLabels = sampledMain.labels;
     const usesBase100 = transformed.usesBase100;
 
+    _renderHistoryMetrics(sampledRaw.labels, sampledRaw.datasets, usesBase100);
+
     if (!chartLabels.length || !datasets.length) {
       if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
+      const metricsEl = byId("finHistoryMetrics");
+      if (metricsEl) metricsEl.innerHTML = "";
       canvas.style.display = "none";
       if (emptyEl) {
         emptyEl.style.display = "";
@@ -653,7 +744,21 @@ async function loadHistoryChart(assetId, options = {}) {
                 }
                 const delta = prev && prev !== 0 ? ((raw / prev) - 1) * 100 : null;
                 const deltaText = delta == null ? "" : ` | Δ ${formatPct(delta)}`;
-                return ` ${ctx.dataset.label}: ${formatBRL(raw)}${deltaText}`;
+                const firstVal = series.find((value) => Number.isFinite(Number(value)));
+                const periodDelta = Number.isFinite(Number(firstVal)) && Number(firstVal) !== 0
+                  ? ((raw / Number(firstVal)) - 1) * 100
+                  : null;
+                const periodText = periodDelta == null ? "" : ` | Período ${formatPct(periodDelta)}`;
+                return ` ${ctx.dataset.label}: ${formatBRL(raw)}${deltaText}${periodText}`;
+              },
+              footer: (items) => {
+                const idx = Number(items?.[0]?.dataIndex || -1);
+                if (idx < 0) return "";
+                const investedDs = (items?.[0]?.chart?.data?.datasets || []).find((dataset) => String(dataset?.label || "").includes("Aporte acumulado"));
+                if (!investedDs || !Array.isArray(investedDs.data)) return "";
+                const investedRaw = Number(investedDs.data[idx]);
+                if (!Number.isFinite(investedRaw)) return "";
+                return `Aporte acumulado: ${formatBRL(investedRaw)}`;
               },
             },
           },
@@ -685,6 +790,8 @@ async function loadHistoryChart(assetId, options = {}) {
     });
   } catch (err) {
     console.error("History chart error:", err);
+    const metricsEl = byId("finHistoryMetrics");
+    if (metricsEl) metricsEl.innerHTML = "";
     if (emptyEl) {
       emptyEl.style.display = "";
       emptyEl.textContent = "Erro ao carregar histórico. Tente novamente em alguns segundos.";
