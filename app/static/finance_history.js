@@ -37,117 +37,6 @@ function _downsampleHistory(labels, datasets, maxPoints = HISTORY_DOWNSAMPLE_MAX
   };
 }
 
-function _primaryValueDataset(rawDatasets) {
-  const series = (rawDatasets || []).filter((ds) => ds?.yAxisID === "y");
-  if (!series.length) return null;
-  const preferred = series.find((ds) => String(ds.label || "").includes("Preço") || String(ds.label || "").includes("Total da carteira"));
-  return preferred || series[0] || null;
-}
-
-function _buildDrawdownSeries(series) {
-  let peak = null;
-  return (series || []).map((value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num) || num <= 0) return null;
-    if (peak == null || num > peak) peak = num;
-    if (!peak) return null;
-    return ((num - peak) / peak) * 100;
-  });
-}
-
-function _syncChartCrosshair(sourceKey, targetKey, index) {
-  const targetChart = FIN?.charts?.[targetKey];
-  if (!targetChart) return;
-  if (!(index >= 0)) {
-    targetChart.setActiveElements([]);
-    if (targetChart.tooltip) targetChart.tooltip.setActiveElements([], { x: 0, y: 0 });
-    targetChart.update("none");
-    return;
-  }
-
-  const dsCount = Array.isArray(targetChart.data?.datasets) ? targetChart.data.datasets.length : 0;
-  const active = Array.from({ length: dsCount }, (_, datasetIndex) => ({ datasetIndex, index }));
-  targetChart.setActiveElements(active);
-  if (targetChart.tooltip) {
-    const x = targetChart.scales?.x?.getPixelForValue(index) ?? 0;
-    const y = targetChart.chartArea ? (targetChart.chartArea.top + 8) : 0;
-    targetChart.tooltip.setActiveElements(active, { x, y });
-  }
-  targetChart.update("none");
-}
-
-function _renderHistoryDrawdown(labels, rawDatasets) {
-  const canvas = byId("historyDrawdownChart");
-  if (!canvas || typeof Chart === "undefined") return;
-
-  const primary = _primaryValueDataset(rawDatasets);
-  if (!primary || !Array.isArray(primary.data) || !primary.data.length) {
-    if (FIN.charts.historyDrawdown) {
-      FIN.charts.historyDrawdown.destroy();
-      FIN.charts.historyDrawdown = null;
-    }
-    return;
-  }
-
-  const drawdown = _buildDrawdownSeries(primary.data);
-  const sampled = _downsampleHistory(labels, [{ label: "Drawdown", data: drawdown }]);
-  const ddLabels = sampled.labels;
-  const ddSeries = sampled.datasets[0]?.data || [];
-
-  if (FIN.charts.historyDrawdown) FIN.charts.historyDrawdown.destroy();
-
-  FIN.charts.historyDrawdown = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels: ddLabels,
-      datasets: [{
-        label: "Drawdown (%)",
-        data: ddSeries,
-        borderColor: "#ef4444",
-        backgroundColor: "rgba(239, 68, 68, 0.18)",
-        fill: true,
-        pointRadius: ddLabels.length > 80 ? 0 : 1.5,
-        borderWidth: 2,
-        tension: 0.2,
-        spanGaps: true,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { intersect: false, mode: "index" },
-      onHover: (_evt, elements) => {
-        const idx = elements?.[0]?.index;
-        _syncChartCrosshair("historyDrawdown", "history", Number.isInteger(idx) ? idx : -1);
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const raw = String(items?.[0]?.label || "");
-              if (!raw || raw.length < 10) return raw;
-              return `${raw.slice(8, 10)}/${raw.slice(5, 7)}/${raw.slice(0, 4)}`;
-            },
-            label: (ctx) => ` Drawdown: ${formatPct(Number(ctx.raw || 0))}`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          grid: { display: false },
-          ticks: { color: "#8b92a5", font: { size: 10 }, maxTicksLimit: 10 },
-        },
-        y: {
-          max: 0,
-          grid: { color: "rgba(255,255,255,0.05)" },
-          ticks: { color: "#8b92a5", font: { size: 10 }, callback: (v) => formatPct(v) },
-        },
-      },
-    },
-  });
-}
-
 function populateHistorySelect() {
   const sel = byId("historyAssetSelect");
   if (!sel) return;
@@ -260,6 +149,46 @@ function _historySeriesMap(rows) {
     map.set(date, Number(row.price || 0));
   }
   return map;
+}
+
+function _historyFirstBuyDate(assetId) {
+  const isTotal = assetId === "__total__";
+  const normalizedAssetId = String(assetId || "");
+  const dates = (FIN.transactions || [])
+    .filter((tx) => {
+      const txType = String(tx?.tx_type || "").trim().toLowerCase();
+      if (txType !== "buy") return false;
+      if (isTotal) return true;
+      return String(tx?.asset_id || "") === normalizedAssetId;
+    })
+    .map((tx) => String(tx?.tx_date || "").slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date));
+
+  if (!dates.length) return null;
+  dates.sort();
+  return dates[0] || null;
+}
+
+function _trimHistoryBeforeDate(labels, datasets, startDate) {
+  if (!startDate || !Array.isArray(labels) || !labels.length) {
+    return { labels, datasets };
+  }
+
+  let firstValidIdx = labels.findIndex((label) => String(label) >= startDate);
+  if (firstValidIdx < 0) {
+    firstValidIdx = labels.length;
+  }
+
+  const nextLabels = labels.slice(firstValidIdx);
+  const nextDatasets = (datasets || []).map((dataset) => ({
+    ...dataset,
+    data: Array.isArray(dataset?.data) ? dataset.data.slice(firstValidIdx) : [],
+  }));
+
+  return {
+    labels: nextLabels,
+    datasets: nextDatasets,
+  };
 }
 
 function _historyRangeDays() {
@@ -619,16 +548,25 @@ async function loadHistoryChart(assetId, options = {}) {
       investedData,
       benchmarkSeries,
     });
-    const labels = Array.isArray(built?.labels) ? built.labels : [];
+    const rawLabels = Array.isArray(built?.labels) ? built.labels : [];
     const rawDatasets = Array.isArray(built?.datasets) ? built.datasets : [];
-    const transformed = _applyHistoryViewMode(rawDatasets, viewMode);
-    const sampledMain = _downsampleHistory(labels, transformed.datasets);
-    const sampledRaw = _downsampleHistory(labels, rawDatasets);
+    const firstBuyDate = _historyFirstBuyDate(assetId);
+    const trimmed = _trimHistoryBeforeDate(rawLabels, rawDatasets, firstBuyDate);
+    const transformed = _applyHistoryViewMode(trimmed.datasets, viewMode);
+    const sampledMain = _downsampleHistory(trimmed.labels, transformed.datasets);
     const datasets = sampledMain.datasets;
     const chartLabels = sampledMain.labels;
     const usesBase100 = transformed.usesBase100;
 
-    _renderHistoryDrawdown(sampledRaw.labels, sampledRaw.datasets);
+    if (!chartLabels.length || !datasets.length) {
+      if (FIN.charts.history) { FIN.charts.history.destroy(); FIN.charts.history = null; }
+      canvas.style.display = "none";
+      if (emptyEl) {
+        emptyEl.style.display = "";
+        emptyEl.textContent = "Sem dados suficientes para montar a evolução patrimonial neste período.";
+      }
+      return;
+    }
 
     if (FIN.charts.history) FIN.charts.history.destroy();
 
@@ -642,10 +580,6 @@ async function loadHistoryChart(assetId, options = {}) {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { intersect: false, mode: "index" },
-        onHover: (_evt, elements) => {
-          const idx = elements?.[0]?.index;
-          _syncChartCrosshair("history", "historyDrawdown", Number.isInteger(idx) ? idx : -1);
-        },
         onClick: (_evt, elements, chart) => {
           if (!elements || !elements.length) return;
           const idx = elements[0].index;
@@ -721,10 +655,6 @@ async function loadHistoryChart(assetId, options = {}) {
     });
   } catch (err) {
     console.error("History chart error:", err);
-    if (FIN.charts.historyDrawdown) {
-      FIN.charts.historyDrawdown.destroy();
-      FIN.charts.historyDrawdown = null;
-    }
     if (emptyEl) {
       emptyEl.style.display = "";
       emptyEl.textContent = "Erro ao carregar histórico. Tente novamente em alguns segundos.";
