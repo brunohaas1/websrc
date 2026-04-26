@@ -40,7 +40,7 @@ const FIN = {
 };
 
 const SECONDARY_CACHE_TTL_MS = 25000;
-const WIDGET_CACHE_TTL_MS = 20000;
+      hide: ["finAICard"],
 const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
 const MARKET_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -52,6 +52,19 @@ const FIN_ONBOARDING_SEEN_KEY = "fin_onboarding_seen_v1";
 
 const byId = (id) => document.getElementById(id);
 let _deferredInstallPrompt = null;
+
+function assetTypeLabelPt(type) {
+  const key = String(type || "").trim().toLowerCase();
+  const map = {
+    stock: "Ação",
+    fii: "FII",
+    etf: "ETF",
+    crypto: "Cripto",
+    fund: "Fundo",
+    "renda-fixa": "Renda Fixa",
+  };
+  return map[key] || (type || "Ativo");
+}
 
 // ── Toast notifications (replaces alert()) ────────────────
 function showToast(message, type = "error", options = {}) {
@@ -390,7 +403,7 @@ function resetFinanceLayout() {
 function applyLayoutPreset(presetId) {
   const presets = {
     conservador: {
-      hide: ["finAICard", "finAuditCard"],
+      hide: ["finAICard"],
       promote: ["finHistoryCard", "finPortfolioCard", "finGoalsCard", "finDividendsCard"],
     },
     dividendos: {
@@ -617,7 +630,6 @@ async function loadAll(options = {}) {
       populateHistorySelect();
       applyHistoryPrefs();
       loadHistoryFromControls();
-      populateIRYears();
       checkWatchlistAlerts();
       checkDividendAlerts();
       checkGoalsMilestones(FIN.goals);
@@ -991,11 +1003,10 @@ async function _loadSecondaryPanels(options = {}) {
       snapshotExpired: !!cached.marketSnapshotExpired,
     });
     renderPerformanceMetrics(FIN.performanceMetrics);
-    renderAuditTrail(Array.isArray(cached.audit) ? cached.audit : []);
     return { cacheHit: true, durationMs: _ms(performance.now() - started) };
   }
 
-  const [marketMeta, metrics, audit] = await Promise.all([
+  const [marketMeta, metrics] = await Promise.all([
     (async () => {
       try {
         const resp = await finFetch("/api/finance/market-data");
@@ -1030,7 +1041,6 @@ async function _loadSecondaryPanels(options = {}) {
       }
     })(),
     finFetch("/api/finance/metrics/performance").then((r) => r.json()).catch(() => null),
-    finFetch("/api/finance/audit?limit=15").then((r) => r.json()).catch(() => []),
   ]);
 
   FIN.marketData = marketMeta.market || {};
@@ -1044,14 +1054,12 @@ async function _loadSecondaryPanels(options = {}) {
       marketSnapshotAgeMs: marketMeta.snapshotAgeMs || 0,
       marketSnapshotExpired: !!marketMeta.snapshotExpired,
       metrics,
-      audit,
     },
   };
 
   renderIndices((FIN.marketData && FIN.marketData.indices) || {});
   renderMarketDataHealth(marketMeta);
   renderPerformanceMetrics(FIN.performanceMetrics);
-  renderAuditTrail(Array.isArray(audit) ? audit : []);
   return { cacheHit: false, durationMs: _ms(performance.now() - started) };
 }
 
@@ -1283,7 +1291,7 @@ function renderPortfolio(portfolio) {
         <tr>
           <td>
             <strong>${escapeHtml(p.symbol)}</strong>
-            <span class="fin-badge ${typeCls}">${escapeHtml(p.asset_type)}</span>
+            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(p.asset_type))}</span>
             ${rfInfo}
           </td>
           <td>${escapeHtml(p.name)}</td>
@@ -1643,7 +1651,7 @@ function renderWatchlist(watchlist) {
         <div class="fin-wl-item">
           <div class="fin-wl-info">
             <span class="fin-wl-symbol">${escapeHtml(w.symbol)}</span>
-            <span class="fin-badge ${typeCls}">${escapeHtml(w.asset_type)}</span>
+            <span class="fin-badge ${typeCls}">${escapeHtml(assetTypeLabelPt(w.asset_type))}</span>
             <span class="fin-wl-name">${escapeHtml(w.name)}</span>
           </div>
           <div class="fin-wl-prices">
@@ -3390,10 +3398,10 @@ function getCadastroCollections() {
   return {
     assets: FIN.assets.map((a) => ({
       title: `${a.symbol} — ${a.name || a.symbol}`,
-      subtitle: a.asset_type || "ativo",
+      subtitle: assetTypeLabelPt(a.asset_type),
       meta: [
         `ID ${a.id}`,
-        a.asset_type || "sem tipo",
+        assetTypeLabelPt(a.asset_type || "sem tipo"),
       ],
       search: `${a.symbol} ${a.name || ""} ${a.asset_type || ""}`.toLowerCase(),
     })),
@@ -3401,7 +3409,7 @@ function getCadastroCollections() {
       title: `${w.symbol} — ${w.name || w.symbol}`,
       subtitle: "watchlist",
       meta: [
-        w.asset_type || "sem tipo",
+        assetTypeLabelPt(w.asset_type || "sem tipo"),
         w.target_price ? `Alvo ${formatBRL(w.target_price)}` : "sem alvo",
         w.alert_above ? "alerta acima" : "alerta abaixo",
       ],
@@ -3635,7 +3643,7 @@ async function renderRebalance() {
       return `
         <div class="fin-rebal-row">
           <div class="fin-rebal-type">
-            <strong>${escapeHtml(s.asset_type)}</strong>
+            <strong>${escapeHtml(assetTypeLabelPt(s.asset_type))}</strong>
           </div>
           <div class="fin-rebal-bars">
             <div class="fin-rebal-bar-container">
@@ -3932,108 +3940,6 @@ async function submitAllocationTargets(e) {
     }
   } catch {
     showToast("Erro de rede");
-  }
-}
-
-// ══════════════════════════════════════════════════════════
-// IR Report
-// ══════════════════════════════════════════════════════════
-
-function populateIRYears() {
-  const sel = byId("irYearSelect");
-  if (!sel) return;
-  const currentYear = new Date().getFullYear();
-  let html = "";
-  for (let y = currentYear; y >= currentYear - 5; y--) {
-    html += `<option value="${y}">${y}</option>`;
-  }
-  sel.innerHTML = html;
-}
-
-async function loadIRReport(year) {
-  const el = byId("finIRContent");
-  if (!el || !year) return;
-
-  el.innerHTML = '<div class="fin-ai-loading">Gerando relatório IR...</div>';
-
-  try {
-    const resp = await finFetch(`/api/finance/ir-report?year=${year}`);
-    const data = await resp.json();
-
-    if (data.error) {
-      el.innerHTML = `<p class="fin-empty">${escapeHtml(data.error)}</p>`;
-      return;
-    }
-
-    let html = "";
-
-    // Monthly sells summary
-    const months = data.monthly_sells || [];
-    if (months.length) {
-      html += '<div class="fin-ir-section"><h4>📊 Vendas Mensais</h4>';
-      html += '<div class="fin-ir-months">';
-      const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-      months.forEach((m) => {
-        const overLimit = m.total_sell > 20000;
-        const cls = overLimit ? "fin-ir-month over" : "fin-ir-month";
-        // m.month is string like "2026-01" — extract month number
-        const monthIdx = typeof m.month === "string" ? parseInt(m.month.split("-")[1], 10) - 1 : (m.month - 1);
-        html += `
-          <div class="${cls}">
-            <span class="fin-ir-month-name">${monthNames[monthIdx] || m.month}</span>
-            <span class="fin-ir-month-sell">${formatBRL(m.total_sell)}</span>
-            <span class="fin-ir-month-pnl ${changeClass(m.profit)}">${formatBRL(m.profit)}</span>
-            ${overLimit ? '<span class="fin-ir-darf">DARF</span>' : ""}
-          </div>
-        `;
-      });
-      html += "</div></div>";
-    }
-
-    // Dividend totals
-    const totalDiv = data.total_dividends;
-    const dividends = data.dividends || [];
-    if (totalDiv || dividends.length) {
-      html += '<div class="fin-ir-section"><h4>💸 Proventos no Ano</h4>';
-      html += '<div class="fin-ir-divs">';
-      if (totalDiv) {
-        html += `<div class="fin-ir-div-row"><span>Total</span><strong>${formatBRL(totalDiv)}</strong></div>`;
-      }
-      // Group dividends by type
-      const byType = {};
-      dividends.forEach((d) => {
-        const t = d.dividend_type || "dividendo";
-        byType[t] = (byType[t] || 0) + (d.amount || 0);
-      });
-      Object.entries(byType).forEach(([type, val]) => {
-        html += `<div class="fin-ir-div-row"><span>${escapeHtml(type)}</span><strong>${formatBRL(val)}</strong></div>`;
-      });
-      html += "</div></div>";
-    }
-
-    // Year-end positions
-    const positions = data.positions_dec31 || [];
-    if (positions.length) {
-      html += '<div class="fin-ir-section"><h4>📋 Posição em 31/12</h4>';
-      html += '<div class="fin-table-wrap"><table class="fin-table"><thead><tr><th>Ativo</th><th class="text-right">Qtd</th><th class="text-right">Custo Médio</th><th class="text-right">Total</th></tr></thead><tbody>';
-      positions.forEach((p) => {
-        html += `<tr>
-          <td><strong>${escapeHtml(p.symbol)}</strong></td>
-          <td class="text-right mono">${formatNumber(p.quantity)}</td>
-          <td class="text-right mono">${formatBRL(p.avg_cost)}</td>
-          <td class="text-right mono">${formatBRL(p.total_cost)}</td>
-        </tr>`;
-      });
-      html += "</tbody></table></div></div>";
-    }
-
-    if (!html) {
-      html = '<p class="fin-empty">Nenhuma movimentação encontrada para este ano.</p>';
-    }
-
-    el.innerHTML = html;
-  } catch {
-    el.innerHTML = '<p class="fin-empty">Erro ao gerar relatório IR.</p>';
   }
 }
 

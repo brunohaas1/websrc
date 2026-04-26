@@ -16,7 +16,6 @@
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_shared.js') }}?v={{ asset_hash('finance_shared.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_flags.js') }}?v={{ asset_hash('finance_flags.js') }}" defer></script>
-    <script src="{{ url_for('static', filename='finance_audit.js') }}?v={{ asset_hash('finance_audit.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_history.js') }}?v={{ asset_hash('finance_history.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_dividends.js') }}?v={{ asset_hash('finance_dividends.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_settings.js') }}?v={{ asset_hash('finance_settings.js') }}" defer></script>
@@ -297,12 +296,6 @@
           <h3 class="fin-subchart-title">Drawdown</h3>
           <canvas id="historyDrawdownChart" height="180"></canvas>
         </div>
-        <div class="fin-card-body fin-history-heatmap-wrap">
-          <h3 class="fin-subchart-title">Heatmap Mensal (%)</h3>
-          <div id="historyHeatmap" class="fin-history-heatmap">
-            <p class="fin-empty">Sem dados suficientes para heatmap.</p>
-          </div>
-        </div>
       </section>
 
       <!-- ── Rebalanceamento ──────────────────────────── -->
@@ -373,33 +366,6 @@
         </div>
       </section>
 
-      <!-- ── Relatório IR ─────────────────────────────── -->
-      <section class="fin-card" id="finIRCard">
-        <h2>
-          🧾 Relatório IR
-          <select id="irYearSelect" class="fin-inline-select">
-          </select>
-        </h2>
-        <div id="finIRContent" class="fin-card-body">
-          <p class="fin-empty">Selecione o ano para gerar o relatório.</p>
-        </div>
-      </section>
-
-      <section class="fin-card" id="finAuditCard">
-        <h2>🧾 Auditoria
-          <select id="auditActionFilter" class="fin-inline-select" title="Filtrar ação">
-            <option value="">Todas ações</option>
-            <option value="add">Add</option>
-            <option value="update">Update</option>
-            <option value="delete">Delete</option>
-            <option value="cleanup">Cleanup</option>
-            <option value="batch_update">Batch update</option>
-          </select>
-        </h2>
-        <div id="finAuditContent" class="fin-card-body">
-          <p class="fin-empty">Sem eventos recentes.</p>
-        </div>
-      </section>
       <!-- ── AI Analysis ──────────────────────────────── -->
       <section class="fin-card fin-wide" id="finAICard">
         <h2>🧠 Análise IA <span class="fin-ai-hint">💡 Dica: peça para a IA cadastrar ativos, transações, metas — ex: "comprei 100 PETR4 a R$35"</span></h2>

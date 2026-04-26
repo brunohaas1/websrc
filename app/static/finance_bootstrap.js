@@ -68,10 +68,6 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("finModalClose", closeFinModal);
   bind("btnRunRebalanceSim", renderRebalance);
 
-  const auditFilter = byId("auditActionFilter");
-  if (auditFilter) {
-    auditFilter.addEventListener("change", () => renderAuditTrail(FIN.auditEntries));
-  }
   bind("btnRunProjection", renderProjection);
   bind("btnRunDividendCeiling", renderDividendCeiling);
   bind("btnRunIndependence", renderIndependenceScenario);
@@ -143,11 +139,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (indYearsInput) indYearsInput.addEventListener("change", renderIndependenceScenario);
   if (indAporteInput) indAporteInput.addEventListener("change", renderIndependenceScenario);
   if (indSafeRateInput) indSafeRateInput.addEventListener("change", renderIndependenceScenario);
-
-  const irSel = byId("irYearSelect");
-  if (irSel) {
-    irSel.addEventListener("change", () => loadIRReport(irSel.value));
-  }
 
   const actionMap = {
     deleteAsset,

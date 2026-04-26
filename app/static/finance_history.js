@@ -55,80 +55,6 @@ function _buildDrawdownSeries(series) {
   });
 }
 
-function _renderHistoryHeatmap(labels, primarySeries) {
-  const heatmapEl = byId("historyHeatmap");
-  if (!heatmapEl) return;
-
-  const monthLastValue = new Map();
-  (labels || []).forEach((label, idx) => {
-    const month = String(label || "").slice(0, 7);
-    const value = Number(primarySeries?.[idx]);
-    if (!month || !Number.isFinite(value) || value <= 0) return;
-    monthLastValue.set(month, value);
-  });
-
-  const entries = [...monthLastValue.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  if (entries.length < 2) {
-    heatmapEl.innerHTML = '<p class="fin-empty">Sem dados suficientes para heatmap.</p>';
-    return;
-  }
-
-  const monthlyReturns = [];
-  for (let i = 1; i < entries.length; i += 1) {
-    const [month, value] = entries[i];
-    const prev = Number(entries[i - 1][1]);
-    if (!(prev > 0)) continue;
-    monthlyReturns.push({
-      month,
-      ret: ((Number(value) / prev) - 1) * 100,
-    });
-  }
-
-  if (!monthlyReturns.length) {
-    heatmapEl.innerHTML = '<p class="fin-empty">Sem dados suficientes para heatmap.</p>';
-    return;
-  }
-
-  const byYear = new Map();
-  monthlyReturns.forEach((item) => {
-    const year = item.month.slice(0, 4);
-    const mm = Number(item.month.slice(5, 7));
-    if (!byYear.has(year)) byYear.set(year, new Array(12).fill(null));
-    byYear.get(year)[mm - 1] = item.ret;
-  });
-
-  const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-  const years = [...byYear.keys()].sort((a, b) => Number(b) - Number(a));
-
-  const cells = years.map((year) => {
-    const values = byYear.get(year) || [];
-    return `
-      <div class="fin-heatmap-row">
-        <span class="fin-heatmap-year">${escapeHtml(year)}</span>
-        ${values.map((ret, idx) => {
-          if (ret == null) {
-            return `<span class="fin-heatmap-cell is-empty" title="${monthNames[idx]}/${year}: sem dado">-</span>`;
-          }
-          const cls = ret >= 0 ? "is-pos" : "is-neg";
-          const alpha = Math.min(0.9, Math.max(0.15, Math.abs(ret) / 8));
-          const color = ret >= 0
-            ? `rgba(34, 197, 94, ${alpha})`
-            : `rgba(239, 68, 68, ${alpha})`;
-          return `<span class="fin-heatmap-cell ${cls}" style="background:${color}" title="${monthNames[idx]}/${year}: ${formatPct(ret)}">${formatPct(ret)}</span>`;
-        }).join("")}
-      </div>
-    `;
-  }).join("");
-
-  heatmapEl.innerHTML = `
-    <div class="fin-heatmap-head">
-      <span class="fin-heatmap-year">Ano</span>
-      ${monthNames.map((m) => `<span class="fin-heatmap-month">${m}</span>`).join("")}
-    </div>
-    ${cells}
-  `;
-}
-
 function _syncChartCrosshair(sourceKey, targetKey, index) {
   const targetChart = FIN?.charts?.[targetKey];
   if (!targetChart) return;
@@ -703,8 +629,6 @@ async function loadHistoryChart(assetId, options = {}) {
     const usesBase100 = transformed.usesBase100;
 
     _renderHistoryDrawdown(sampledRaw.labels, sampledRaw.datasets);
-    const heatSeries = _primaryValueDataset(sampledRaw.datasets);
-    _renderHistoryHeatmap(sampledRaw.labels, heatSeries?.data || []);
 
     if (FIN.charts.history) FIN.charts.history.destroy();
 
@@ -801,8 +725,6 @@ async function loadHistoryChart(assetId, options = {}) {
       FIN.charts.historyDrawdown.destroy();
       FIN.charts.historyDrawdown = null;
     }
-    const heatmapEl = byId("historyHeatmap");
-    if (heatmapEl) heatmapEl.innerHTML = '<p class="fin-empty">Erro ao carregar heatmap.</p>';
     if (emptyEl) {
       emptyEl.style.display = "";
       emptyEl.textContent = "Erro ao carregar histórico. Tente novamente em alguns segundos.";

@@ -1609,7 +1609,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @app.get("/api/finance/asset-history/<int:asset_id>")
     @limiter.limit("30/minute")
     def finance_asset_history_alt(asset_id: int):
-        limit = min(365, max(1, int(request.args.get("limit", "90"))))
+        limit = min(3650, max(1, int(request.args.get("limit", "90"))))
         cache_key = f"finance:asset-history:{asset_id}:{limit}"
         cached = cache.get(cache_key)
         if cached:
@@ -1621,7 +1621,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @app.get("/api/finance/portfolio-history")
     @limiter.limit("30/minute")
     def finance_portfolio_history():
-        limit = min(365, max(1, int(request.args.get("limit", "90"))))
+        limit = min(3650, max(1, int(request.args.get("limit", "90"))))
         cache_key = f"finance:portfolio-history:{limit}"
         cached = cache.get(cache_key)
         if cached:
@@ -1634,7 +1634,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("20/minute")
     def finance_benchmark_history():
         benchmark = str(request.args.get("benchmark", "ibov")).strip().lower()
-        limit = min(365, max(1, int(request.args.get("limit", "180"))))
+        limit = min(3650, max(1, int(request.args.get("limit", "180"))))
 
         benchmark_yahoo_map = {
             "ibov": "%5EBVSP",
@@ -1662,8 +1662,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     rng = "3mo"
                 elif limit <= 180:
                     rng = "6mo"
-                else:
+                elif limit <= 365:
                     rng = "1y"
+                elif limit <= 1825:
+                    rng = "5y"
+                else:
+                    rng = "10y"
 
                 resp = http_requests.get(
                     f"https://query1.finance.yahoo.com/v8/finance/chart/{benchmark_yahoo_map[benchmark]}",
@@ -1737,7 +1741,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @app.get("/api/finance/invested-history")
     @limiter.limit("30/minute")
     def finance_invested_history():
-        limit = min(365, max(1, int(request.args.get("limit", "180"))))
+        limit = min(3650, max(1, int(request.args.get("limit", "180"))))
         asset_id = request.args.get("asset_id", type=int)
         cache_key = f"finance:invested-history:{asset_id or 'all'}:{limit}"
         cached = cache.get(cache_key)

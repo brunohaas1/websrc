@@ -1,5 +1,5 @@
 /* Cache version – bump on deploy or use build hash */
-const CACHE_VERSION = "v2-" + "20260426c";
+const CACHE_VERSION = "v2-" + "20260426e";
 const CACHE_NAME = "webdash-" + CACHE_VERSION;
 const PRECACHE = [
   "/",
@@ -11,7 +11,6 @@ const PRECACHE = [
   "/static/finance.js",
   "/static/finance_shared.js",
   "/static/finance_flags.js",
-  "/static/finance_audit.js",
   "/static/finance_history.js",
   "/static/finance_dividends.js",
   "/static/finance_settings.js",
