@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -17,6 +18,42 @@ from flask_limiter import Limiter
 from .cache import get_cache
 from .repository import Repository
 from .security import require_finance_key, sanitize_text
+
+_RETRY_EXCEPTIONS = (
+    http_requests.exceptions.ConnectionError,
+    http_requests.exceptions.Timeout,
+    http_requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _http_get_with_retry(
+    url: str,
+    *,
+    params: dict | None = None,
+    headers: dict | None = None,
+    timeout: int = 10,
+    max_retries: int = 2,
+) -> http_requests.Response:
+    """GET with exponential-backoff retry on transient network errors.
+
+    Only retries on connection/timeout failures — never on 4xx/5xx responses.
+    """
+    delay = 0.5
+    for attempt in range(max_retries + 1):
+        try:
+            return http_requests.get(
+                url, params=params, headers=headers, timeout=timeout,
+            )
+        except _RETRY_EXCEPTIONS as exc:
+            if attempt >= max_retries:
+                raise
+            logging.getLogger(__name__).debug(
+                "Retry %d/%d for %s after error: %s",
+                attempt + 1, max_retries, url, exc,
+            )
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError("unreachable")
 
 
 def register_finance_routes(app: Flask, limiter: Limiter) -> None:
@@ -2533,7 +2570,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
                 # 1) Yahoo first to preserve brapi monthly quota.
                 try:
-                    yresp = http_requests.get(
+                    yresp = _http_get_with_retry(
                         "https://query1.finance.yahoo.com/v7/finance/quote",
                         params={"symbols": f"{sym}.SA"},
                         timeout=10,
@@ -2578,7 +2615,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     continue
                 try:
                     params = {"fundamental": "true", "token": brapi_token}
-                    resp = http_requests.get(
+                    resp = _http_get_with_retry(
                         f"https://brapi.dev/api/quote/{sym}",
                         params=params,
                         timeout=10,
@@ -2610,13 +2647,39 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     _track_api_provider_usage("brapi", False, "market-data")
                     logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
 
+                if loaded:
+                    continue
+
+                # 3) DB fallback — use last known price saved in fin_assets.
+                db_asset = repo.get_fin_asset_by_symbol(sym)
+                if db_asset and db_asset.get("current_price") is not None:
+                    stale_price = float(db_asset["current_price"])
+                    results["stocks"][sym] = {
+                        "symbol": sym,
+                        "name": db_asset.get("name") or sym,
+                        "price": stale_price,
+                        "previous_close": db_asset.get("previous_close"),
+                        "change": db_asset.get("day_change"),
+                        "change_pct": db_asset.get("day_change_pct"),
+                        "volume": db_asset.get("volume"),
+                        "market_cap": db_asset.get("market_cap"),
+                        "high": None,
+                        "low": None,
+                        "updated": None,
+                        "stale": True,
+                    }
+                    logger.info(
+                        "DB fallback price used for %s: %.4f (stale)",
+                        sym, stale_price,
+                    )
+
         def _fetch_crypto():
             """Fetch crypto from CoinGecko."""
             if not crypto_ids:
                 return
             try:
                 ids_param = ",".join(crypto_ids)
-                resp = http_requests.get(
+                resp = _http_get_with_retry(
                     "https://api.coingecko.com/api/v3/simple/price",
                     params={
                         "ids": ids_param,
@@ -2671,7 +2734,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             # Yahoo Finance v8 chart fallback — fetch all in parallel
             def _yahoo_index(yahoo_sym: str, default_name: str) -> None:
                 try:
-                    yresp = http_requests.get(
+                    yresp = _http_get_with_retry(
                         f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}",
                         params={"interval": "1d", "range": "1d"},
                         headers={"User-Agent": "Mozilla/5.0"},
@@ -2731,7 +2794,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             if not _try_reserve_brapi_call():
                 return
             try:
-                resp = http_requests.get(
+                resp = _http_get_with_retry(
                     "https://brapi.dev/api/quote/%5EBVSP",
                     params={"token": brapi_token},
                     timeout=8,
