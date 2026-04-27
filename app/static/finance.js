@@ -693,10 +693,14 @@ async function loadAll(options = {}) {
       const selectedMonth = String(byId("finCashflowMonth")?.value || "").trim();
       const effectiveMonth = selectedMonth || currentMonthKey();
       const selectedType = String(byId("finCashflowType")?.value || "").trim();
+      const selectedStatus = String(byId("finCashflowStatus")?.value || "").trim();
+      const selectedQ = String(byId("finCashflowQ")?.value || "").trim();
+      const selectedCostCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
+      const selectedTag = String(byId("finCashflowTag")?.value || "").trim();
       const [cashflowEntries, cashflowSummary, cashflowAnalytics, cashflowBudgetPayload] = await Promise.all([
         fetchWidgetJsonCached(
-          `cashflow-entries:${selectedMonth || "all"}:${selectedType || "all"}`,
-          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}${selectedType ? `&type=${encodeURIComponent(selectedType)}` : ""}`,
+          `cashflow-entries:${selectedMonth || "all"}:${selectedType || "all"}:${selectedStatus || "all"}:${selectedQ || "all"}:${selectedCostCenter || "all"}:${selectedTag || "all"}`,
+          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}${selectedType ? `&type=${encodeURIComponent(selectedType)}` : ""}${selectedStatus ? `&status=${encodeURIComponent(selectedStatus)}` : ""}${selectedQ ? `&q=${encodeURIComponent(selectedQ)}` : ""}${selectedCostCenter ? `&cost_center=${encodeURIComponent(selectedCostCenter)}` : ""}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`,
           [],
           { useCache: useWidgetCache },
         ),
@@ -762,6 +766,8 @@ async function loadAll(options = {}) {
       renderCashflowAnalytics(FIN.cashflowAnalytics);
       renderCashflowBudgetStatus(FIN.cashflowAnalytics);
       syncCashflowMonthFilter(FIN.cashflowSummary);
+      loadCashflowKpis();
+      loadCashflowBudgetAlerts();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();
@@ -1023,8 +1029,12 @@ async function refreshCashflowPanel() {
   const month = String(byId("finCashflowMonth")?.value || "").trim();
   const effectiveMonth = month || currentMonthKey();
   const entryType = String(byId("finCashflowType")?.value || "").trim();
+  const paymentStatus = String(byId("finCashflowStatus")?.value || "").trim();
+  const q = String(byId("finCashflowQ")?.value || "").trim();
+  const costCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
+  const tag = String(byId("finCashflowTag")?.value || "").trim();
   const [entries, summary, analytics, budgetPayload] = await Promise.all([
-    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}`).then((r) => r.json()),
+    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`).then((r) => r.json()),
     finFetch("/api/finance/cashflow/summary?months=12").then((r) => r.json()),
     finFetch(`/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
     finFetch(`/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
@@ -2001,6 +2011,22 @@ function currentMonthKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function parseTagsInput(raw) {
+  const src = String(raw || "").trim();
+  if (!src) return [];
+  const seen = new Set();
+  return src
+    .split(",")
+    .map((x) => x.trim().toLowerCase())
+    .filter((x) => x)
+    .filter((x) => {
+      if (seen.has(x)) return false;
+      seen.add(x);
+      return true;
+    })
+    .slice(0, 12);
+}
+
 function prevMonthKey(monthKey) {
   const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
   if (!match) return currentMonthKey();
@@ -2068,6 +2094,34 @@ function renderCashflowSummary(summary) {
       <div class="fin-cashflow-kpi">
         <span>Saldo projetado no mês</span>
         <strong class="${Number(projection.projected_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(projection.projected_balance || 0)}</strong>
+      </div>
+    </div>
+  `;
+}
+
+function renderCashflowKpis(kpis) {
+  const el = byId("finCashflowKpis");
+  if (!el) return;
+  if (!kpis) { el.innerHTML = ""; return; }
+  const burnRate = Number(kpis.burn_rate || 0);
+  const runway = kpis.runway_months;
+  const runwayTxt = runway !== null && runway !== undefined
+    ? `${formatNumber(runway, 1)} meses`
+    : "—";
+  const runwayCls = (runway === null || runway === undefined || runway < 3) ? "fin-down" : runway < 6 ? "fin-warn" : "fin-up";
+  el.innerHTML = `
+    <div class="fin-cashflow-kpis">
+      <div class="fin-cashflow-kpi">
+        <span>Burn rate (3m)</span>
+        <strong class="fin-down">${formatBRL(burnRate)}/mês</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Runway</span>
+        <strong class="${runwayCls}">${runwayTxt}</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Taxa de poupança</span>
+        <strong class="${Number(kpis.savings_rate_pct || 0) >= 0 ? "fin-up" : "fin-down"}">${formatNumber(kpis.savings_rate_pct || 0, 1)}%</strong>
       </div>
     </div>
   `;
@@ -2203,6 +2257,19 @@ function renderCashflowBudgetStatus(analytics) {
   `;
 }
 
+function renderCashflowBudgetAlerts(items) {
+  // items from /api/finance/cashflow/budget/alerts
+  const el = byId("finCashflowBudgetAlerts");
+  if (!el) return;
+  const alerts = Array.isArray(items) ? items.filter((a) => a.status !== "ok") : [];
+  if (!alerts.length) { el.innerHTML = ""; return; }
+  el.innerHTML = alerts.map((a) => {
+    const cls = a.status === "over" ? "fin-alert-over" : "fin-alert-warn";
+    const icon = a.status === "over" ? "🔴" : "🟡";
+    return `<span class="fin-budget-alert-badge ${cls}">${icon} ${escapeHtml(a.category)}: ${formatNumber(a.usage_pct, 1)}% (${formatBRL(a.spent)}/${formatBRL(a.limit)})</span>`;
+  }).join("");
+}
+
 function renderCashflowChart(summary) {
   const canvas = byId("cashflowChart");
   if (!canvas || typeof Chart === "undefined") return;
@@ -2327,21 +2394,45 @@ function renderCashflow(entries) {
     return;
   }
 
+  const statusMeta = (entry) => {
+    const raw = String(entry.payment_status || "").trim().toLowerCase();
+    if (raw === "paid") {
+      return {
+        label: "PAGO",
+        badge: "fin-badge-buy",
+        nextStatus: "pending",
+        actionLabel: "Marcar pendente",
+      };
+    }
+    return {
+      label: "PENDENTE",
+      badge: "fin-badge-sell",
+      nextStatus: "paid",
+      actionLabel: "Marcar pago",
+    };
+  };
+
   const html = rows.map((entry) => {
     const type = String(entry.entry_type || "");
     const isIncome = type === "income";
     const badge = isIncome ? "fin-badge-buy" : "fin-badge-sell";
     const label = isIncome ? "GANHO" : "GASTO";
     const amountCls = isIncome ? "fin-up" : "fin-down";
+    const status = statusMeta(entry);
     return `
       <tr>
         <td>${escapeHtml(String(entry.entry_date || "").slice(0, 10))}</td>
         <td><span class="fin-badge ${badge}">${label}</span></td>
+        <td><span class="fin-badge ${status.badge}">${status.label}</span></td>
         <td>${escapeHtml(entry.category || "—")}</td>
+        <td>${escapeHtml(entry.subcategory || "—")}</td>
+        <td>${escapeHtml(entry.cost_center || "—")}</td>
+        <td>${escapeHtml(Array.isArray(entry.tags) ? entry.tags.join(", ") : "")}</td>
         <td>${escapeHtml(entry.description || "—")}</td>
         <td class="text-right mono ${amountCls}">${formatBRL(entry.amount || 0)}</td>
         <td>${escapeHtml(entry.notes || "")}</td>
         <td class="text-center">
+          <button class="fin-del-btn" data-action="toggleCashflowStatus" data-id="${entry.id}" data-status="${status.nextStatus}" title="${status.actionLabel}">✓</button>
           <button class="fin-del-btn" data-action="openEditCashflowModal" data-id="${entry.id}" title="Editar">✎</button>
           <button class="fin-del-btn" data-action="deleteCashflowEntry" data-id="${entry.id}" title="Excluir">✕</button>
         </td>
@@ -2356,7 +2447,11 @@ function renderCashflow(entries) {
           <tr>
             <th>Data</th>
             <th>Tipo</th>
+            <th>Status</th>
             <th>Categoria</th>
+            <th>Subcategoria</th>
+            <th>Centro de custo</th>
+            <th>Tags</th>
             <th>Descrição</th>
             <th class="text-right">Valor</th>
             <th>Notas</th>
@@ -4085,6 +4180,7 @@ async function deleteGoal(goalId) {
 }
 
 function openAddCashflowModal() {
+  const today = new Date().toISOString().slice(0, 10);
   openFinModal("Novo Lançamento (Ganho/Gasto)", `
     <form data-form-action="submitAddCashflow">
       <div class="fin-form-row">
@@ -4097,7 +4193,20 @@ function openAddCashflowModal() {
         </div>
         <div class="fin-form-group">
           <label>Data</label>
-          <input id="fmCfDate" type="date" value="${new Date().toISOString().slice(0, 10)}" required />
+          <input id="fmCfDate" type="date" value="${today}" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Status</label>
+          <select id="fmCfStatus">
+            <option value="pending">Pendente</option>
+            <option value="paid">Pago</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Data da baixa</label>
+          <input id="fmCfSettledAt" type="date" value="${today}" />
         </div>
       </div>
       <div class="fin-form-row">
@@ -4110,9 +4219,23 @@ function openAddCashflowModal() {
           <input id="fmCfCategory" placeholder="Ex.: Salário, Moradia, Alimentação" />
         </div>
       </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Subcategoria</label>
+          <input id="fmCfSubcategory" placeholder="Ex.: Condomínio" />
+        </div>
+        <div class="fin-form-group">
+          <label>Centro de custo</label>
+          <input id="fmCfCostCenter" placeholder="Ex.: Casa" />
+        </div>
+      </div>
       <div class="fin-form-group">
         <label>Descrição</label>
         <input id="fmCfDescription" placeholder="Resumo do lançamento" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Tags</label>
+        <input id="fmCfTags" placeholder="Ex.: fixo, essencial" />
       </div>
       <div class="fin-form-group">
         <label>Notas</label>
@@ -4220,13 +4343,20 @@ function openCashflowRolloverModal() {
 
 async function submitAddCashflow(e) {
   e.preventDefault();
+  const paymentStatus = String(byId("fmCfStatus")?.value || "pending").trim();
+  const settledAt = String(byId("fmCfSettledAt")?.value || "").trim();
   const body = {
     entry_type: String(byId("fmCfType")?.value || "expense"),
     amount: Number(byId("fmCfAmount")?.value || 0),
     category: String(byId("fmCfCategory")?.value || "").trim(),
+    subcategory: String(byId("fmCfSubcategory")?.value || "").trim(),
+    cost_center: String(byId("fmCfCostCenter")?.value || "").trim(),
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    tags: parseTagsInput(byId("fmCfTags")?.value || ""),
+    payment_status: paymentStatus,
+    settled_at: paymentStatus === "paid" ? settledAt : null,
   };
   try {
     const resp = await finFetch("/api/finance/cashflow", {
@@ -4236,7 +4366,164 @@ async function submitAddCashflow(e) {
     });
     if (!resp.ok) {
       const data = await resp.json();
+
+    function openCashflowScenarioModal() {
+      const month = getSelectedCashflowMonth();
+      const analytics = FIN.cashflowAnalytics || {};
+      const expenseCats = Array.isArray(analytics.categories?.expense) ? analytics.categories.expense : [];
+
+      const rows = expenseCats.map((row, idx) => `
+        <div class="fin-form-row" data-scenario-row="${idx}">
+          <div class="fin-form-group" style="flex:2">
+            <label>Categoria</label>
+            <input data-sc-cat value="${escapeHtml(row.category || "")}" readonly />
+          </div>
+          <div class="fin-form-group">
+            <label>Gasto atual</label>
+            <input value="${formatBRL(row.amount || 0)}" readonly style="opacity:.6" />
+          </div>
+          <div class="fin-form-group">
+            <label>Redução %</label>
+            <input data-sc-pct type="number" min="0" max="100" step="1" value="0" placeholder="0" />
+          </div>
+        </div>
+      `).join("");
       showToast(data.error || "Erro ao salvar lançamento");
+      openFinModal("🔮 Simulador de Cenários", `
+        <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">Simule o impacto de reduzir gastos em cada categoria.</div>
+        <div class="fin-form-group">
+          <label>Mês base</label>
+          <input id="fmScMonth" type="month" value="${escapeHtml(month)}" required />
+        </div>
+        <div id="fmScRows">${rows || '<p class="fin-empty">Sem gastos no mês selecionado.</p>'}</div>
+        <button id="btnRunScenario" class="fin-form-submit" type="button">▶ Simular</button>
+        <div id="fmScResult" style="margin-top:12px"></div>
+      `);
+
+      byId("btnRunScenario")?.addEventListener("click", async () => {
+        const scenarioMonth = String(byId("fmScMonth")?.value || "").trim();
+        const scRows = document.querySelectorAll("[data-scenario-row]");
+        const adjustments = [];
+        scRows.forEach((r) => {
+          const cat = r.querySelector("[data-sc-cat]")?.value?.trim();
+          const pct = parseFloat(r.querySelector("[data-sc-pct]")?.value || "0");
+          if (cat && pct > 0) adjustments.push({ category: cat, reduction_pct: pct });
+        });
+        try {
+          const resp = await finFetch("/api/finance/cashflow/scenario", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ month: scenarioMonth, adjustments }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) { showToast(data.error || "Erro"); return; }
+          const resultEl = byId("fmScResult");
+          if (resultEl) {
+            const impact = data.impact || {};
+            const sim = data.simulated || {};
+            const cur = data.current || {};
+            resultEl.innerHTML = `
+              <div class="fin-cashflow-kpis" style="margin-top:0">
+                <div class="fin-cashflow-kpi">
+                  <span>Gasto atual</span><strong class="fin-down">${formatBRL(cur.expense || 0)}</strong>
+                </div>
+                <div class="fin-cashflow-kpi">
+                  <span>Gasto simulado</span><strong class="fin-down">${formatBRL(sim.expense || 0)}</strong>
+                </div>
+                <div class="fin-cashflow-kpi">
+                  <span>Economia mensal</span><strong class="fin-up">${formatBRL(impact.monthly_saving || 0)}</strong>
+                </div>
+                <div class="fin-cashflow-kpi">
+                  <span>Economia anual</span><strong class="fin-up">${formatBRL(impact.yearly_saving || 0)}</strong>
+                </div>
+              </div>
+            `;
+          }
+        } catch { showToast("Erro de rede"); }
+      });
+    }
+
+    function openCashflowImportModal() {
+      const month = getSelectedCashflowMonth();
+      openFinModal("📥 Importar Extratos (CSV / OFX)", `
+        <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">
+          CSV: colunas <code>date, amount, type, category, description</code>.<br>
+          OFX: extrato bancário padrão OFX/QFX.<br>
+          Tamanho máximo: 2 MB.
+        </div>
+        <div class="fin-form-group">
+          <label>Mês alvo</label>
+          <input id="fmImportMonth" type="month" value="${escapeHtml(month)}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Arquivo (.csv ou .ofx)</label>
+          <input id="fmImportFile" type="file" accept=".csv,.ofx,.qfx" />
+        </div>
+        <button id="btnDoImport" class="fin-form-submit" type="button">📥 Importar</button>
+        <div id="fmImportResult" style="margin-top:12px"></div>
+      `);
+
+      byId("btnDoImport")?.addEventListener("click", async () => {
+        const importMonth = String(byId("fmImportMonth")?.value || "").trim();
+        const fileEl = byId("fmImportFile");
+        if (!fileEl?.files?.length) { showToast("Selecione um arquivo"); return; }
+        const formData = new FormData();
+        formData.append("file", fileEl.files[0]);
+        try {
+          const resp = await finFetch(`/api/finance/cashflow/import?month=${encodeURIComponent(importMonth)}`, {
+            method: "POST",
+            body: formData,
+          });
+          const data = await resp.json();
+          const resultEl = byId("fmImportResult");
+          if (!resp.ok) { if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Erro")}</span>`; return; }
+          if (resultEl) {
+            const errHtml = data.errors?.length
+              ? `<ul>${data.errors.map((e) => `<li>Linha ${e.row || e.transaction || "?"}: ${escapeHtml(e.error)}</li>`).join("")}</ul>`
+              : "";
+            resultEl.innerHTML = `
+              <span class="fin-up">✓ ${data.imported} lançamento(s) importado(s).</span>
+              ${data.errors?.length ? `<span class="fin-down"> ${data.errors.length} erro(s):</span>${errHtml}` : ""}
+            `;
+          }
+          if (data.imported > 0) await refreshByDomains(["cashflow"]);
+        } catch { showToast("Erro de rede"); }
+      });
+    }
+
+    async function runCashflowAutoClassify() {
+      const month = getSelectedCashflowMonth();
+      try {
+        const resp = await finFetch("/api/finance/cashflow/auto-classify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ month }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showToast(data.error || "Erro"); return; }
+        showToast(`${data.updated} lançamento(s) classificado(s) automaticamente`, "success");
+        if (data.updated > 0) await refreshByDomains(["cashflow"]);
+      } catch { showToast("Erro de rede"); }
+    }
+
+    async function loadCashflowKpis() {
+      const month = getSelectedCashflowMonth();
+      try {
+        const resp = await fetch(`/api/finance/cashflow/kpis?month=${encodeURIComponent(month)}`);
+        if (resp.ok) renderCashflowKpis(await resp.json());
+      } catch { /* non-critical */ }
+    }
+
+    async function loadCashflowBudgetAlerts() {
+      const month = getSelectedCashflowMonth();
+      try {
+        const resp = await fetch(`/api/finance/cashflow/budget/alerts?month=${encodeURIComponent(month)}&threshold=80`);
+        if (resp.ok) {
+          const data = await resp.json();
+          renderCashflowBudgetAlerts(data.alerts || []);
+        }
+      } catch { /* non-critical */ }
+    }
       return;
     }
     closeFinModal();
@@ -4270,6 +4557,19 @@ function openEditCashflowModal(entryId) {
       </div>
       <div class="fin-form-row">
         <div class="fin-form-group">
+          <label>Status</label>
+          <select id="fmCfStatus">
+            <option value="pending" ${String(entry.payment_status || "").toLowerCase() === "pending" ? "selected" : ""}>Pendente</option>
+            <option value="paid" ${String(entry.payment_status || "").toLowerCase() === "paid" ? "selected" : ""}>Pago</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Data da baixa</label>
+          <input id="fmCfSettledAt" type="date" value="${escapeHtml(String(entry.settled_at || "").slice(0, 10))}" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
           <label>Valor (R$)</label>
           <input id="fmCfAmount" type="number" min="0.01" step="0.01" value="${Number(entry.amount || 0)}" required />
         </div>
@@ -4278,9 +4578,23 @@ function openEditCashflowModal(entryId) {
           <input id="fmCfCategory" value="${escapeHtml(entry.category || "")}" />
         </div>
       </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Subcategoria</label>
+          <input id="fmCfSubcategory" value="${escapeHtml(entry.subcategory || "")}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Centro de custo</label>
+          <input id="fmCfCostCenter" value="${escapeHtml(entry.cost_center || "")}" />
+        </div>
+      </div>
       <div class="fin-form-group">
         <label>Descrição</label>
         <input id="fmCfDescription" value="${escapeHtml(entry.description || "")}" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Tags</label>
+        <input id="fmCfTags" value="${escapeHtml(Array.isArray(entry.tags) ? entry.tags.join(", ") : "")}" placeholder="Ex.: fixo, essencial" />
       </div>
       <div class="fin-form-group">
         <label>Notas</label>
@@ -4293,13 +4607,20 @@ function openEditCashflowModal(entryId) {
 
 async function submitEditCashflow(e, entryId) {
   e.preventDefault();
+  const paymentStatus = String(byId("fmCfStatus")?.value || "pending").trim();
+  const settledAt = String(byId("fmCfSettledAt")?.value || "").trim();
   const body = {
     entry_type: String(byId("fmCfType")?.value || "expense"),
     amount: Number(byId("fmCfAmount")?.value || 0),
     category: String(byId("fmCfCategory")?.value || "").trim(),
+    subcategory: String(byId("fmCfSubcategory")?.value || "").trim(),
+    cost_center: String(byId("fmCfCostCenter")?.value || "").trim(),
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    tags: parseTagsInput(byId("fmCfTags")?.value || ""),
+    payment_status: paymentStatus,
+    settled_at: paymentStatus === "paid" ? settledAt : null,
   };
   try {
     const resp = await finFetch(`/api/finance/cashflow/${entryId}`, {
@@ -4395,6 +4716,35 @@ async function deleteCashflowEntry(entryId) {
     }
     await refreshByDomains(["cashflow"]);
     showToast("Lançamento removido.", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function toggleCashflowStatus(entryId, btnEl) {
+  const nextStatus = String(btnEl?.dataset?.status || "").trim().toLowerCase();
+  if (!nextStatus || !["pending", "paid"].includes(nextStatus)) {
+    showToast("Status inválido para conciliação");
+    return;
+  }
+  const payload = { status: nextStatus };
+  if (nextStatus === "paid") {
+    payload.settled_at = new Date().toISOString().slice(0, 10);
+  }
+
+  try {
+    const resp = await finFetch(`/api/finance/cashflow/${entryId}/status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao conciliar lançamento");
+      return;
+    }
+    await refreshByDomains(["cashflow"]);
+    showToast(`Lançamento marcado como ${data.status === "paid" ? "pago" : "pendente"}.`, "success");
   } catch {
     showToast("Erro de rede");
   }

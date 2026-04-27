@@ -2932,3 +2932,30 @@ body.light .fin-ai-btn.active {
     padding: 10px 14px;
   }
 }
+
+/* ── Budget Alert Badges ─────────────────────────────── */
+.fin-cashflow-budget-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+.fin-cashflow-budget-alerts:empty { display: none; }
+.fin-budget-alert-badge {
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fin-alert-over { background: rgba(239,68,68,.18); color: #f87171; border: 1px solid rgba(239,68,68,.35); }
+.fin-alert-warn { background: rgba(251,191,36,.15); color: #fbbf24; border: 1px solid rgba(251,191,36,.3); }
+
+/* ── KPIs advanced (burn rate / runway) ─────────────── */
+.fin-cashflow-kpis-advanced {
+  padding: 0 16px 4px;
+}
+.fin-cashflow-kpis-advanced:empty { display: none; }
+
+/* ── Warn color ──────────────────────────────────────── */
+.fin-warn { color: #fbbf24; }

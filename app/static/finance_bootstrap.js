@@ -55,6 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddCashflow", openAddCashflowModal);
   bind("btnCashflowRollover", openCashflowRolloverModal);
   bind("btnCashflowBudget", openCashflowBudgetModal);
+  bind("btnCashflowScenario", openCashflowScenarioModal);
+  bind("btnCashflowImport", openCashflowImportModal);
+  bind("btnCashflowAutoClassify", runCashflowAutoClassify);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
@@ -99,6 +102,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const histSel = byId("historyAssetSelect");
   const cashflowMonthSel = byId("finCashflowMonth");
   const cashflowTypeSel = byId("finCashflowType");
+  const cashflowStatusSel = byId("finCashflowStatus");
+  const cashflowQ = byId("finCashflowQ");
+  const cashflowCostCenter = byId("finCashflowCostCenter");
+  const cashflowTag = byId("finCashflowTag");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
@@ -111,6 +118,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (cashflowTypeSel) {
     cashflowTypeSel.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowStatusSel) {
+    cashflowStatusSel.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowQ) {
+    cashflowQ.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowCostCenter) {
+    cashflowCostCenter.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowTag) {
+    cashflowTag.addEventListener("change", () => refreshByDomains(["cashflow"]));
   }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);
@@ -150,6 +169,7 @@ document.addEventListener("DOMContentLoaded", () => {
     deleteTransaction,
     openEditCashflowModal,
     deleteCashflowEntry,
+    toggleCashflowStatus,
     deleteWatchlistItem,
     deleteGoal,
     openEditGoalModal,
@@ -169,7 +189,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (action === "portfolioPageNext") { FIN._portfolioPage++; renderPortfolio(FIN.portfolio); return; }
 
     const fn = actionMap[action];
-    if (fn) fn(Number(btn.dataset.id));
+    if (fn) fn(Number(btn.dataset.id), btn);
   });
 
   const formMap = {

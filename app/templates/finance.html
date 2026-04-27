@@ -406,11 +406,24 @@
             <option value="income">Somente ganhos</option>
             <option value="expense">Somente gastos</option>
           </select>
-            <button id="btnCashflowRollover" class="btn-text" title="Copiar lançamentos recorrentes de outro mês">↻ Virada de mês</button>
+          <select id="finCashflowStatus" class="fin-inline-select" title="Filtrar por conciliação">
+            <option value="">Pago e pendente</option>
+            <option value="paid">Somente pagos</option>
+            <option value="pending">Somente pendentes</option>
+          </select>
+          <input id="finCashflowQ" class="fin-inline-select" placeholder="Buscar descrição/categoria" title="Busca avançada" />
+          <input id="finCashflowCostCenter" class="fin-inline-select" placeholder="Centro de custo" title="Filtrar por centro de custo" />
+          <input id="finCashflowTag" class="fin-inline-select" placeholder="Tag" title="Filtrar por tag" />
+          <button id="btnCashflowRollover" class="btn-text" title="Copiar lançamentos recorrentes de outro mês">↻ Virada de mês</button>
           <button id="btnCashflowBudget" class="btn-text" title="Configurar orçamento por categoria">⚙ Orçamento</button>
           <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button>
+          <button id="btnCashflowScenario" class="btn-text" title="Simular redução de gastos">🔮 Cenários</button>
+          <button id="btnCashflowImport" class="btn-text" title="Importar extrato CSV ou OFX">📥 Importar</button>
+          <button id="btnCashflowAutoClassify" class="btn-text" title="Classificar automaticamente lançamentos sem categoria">🏷 Auto-classificar</button>
         </h2>
+        <div id="finCashflowBudgetAlerts" class="fin-cashflow-budget-alerts"></div>
         <div id="finCashflowSummary" class="fin-cashflow-summary"></div>
+        <div id="finCashflowKpis" class="fin-cashflow-kpis-advanced"></div>
         <div class="fin-card-body fin-chart-container fin-cashflow-chart-wrap">
           <canvas id="cashflowChart" height="220"></canvas>
         </div>

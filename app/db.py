@@ -294,14 +294,50 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     entry_type TEXT NOT NULL,
     amount REAL NOT NULL,
     category TEXT,
+    subcategory TEXT,
+    cost_center TEXT,
     description TEXT,
     entry_date TEXT NOT NULL,
     notes TEXT,
+    tags_json TEXT DEFAULT '[]',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    active INTEGER NOT NULL DEFAULT 1,
+    entry_type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT,
+    subcategory TEXT,
+    cost_center TEXT,
+    description TEXT,
+    notes TEXT,
+    tags_json TEXT DEFAULT '[]',
+    frequency TEXT NOT NULL DEFAULT 'monthly',
+    day_of_month INTEGER NOT NULL DEFAULT 1,
+    start_date TEXT,
+    end_date TEXT,
+    last_generated_month TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active
+ON fin_cashflow_recurring(active, frequency, day_of_month);
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    settled_at TEXT,
+    reconciled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (entry_id) REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status
+ON fin_cashflow_reconcile(status, settled_at DESC);
 
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -600,14 +636,49 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     entry_type TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL,
     category TEXT,
+    subcategory TEXT,
+    cost_center TEXT,
     description TEXT,
     entry_date DATE NOT NULL,
     notes TEXT,
+    tags_json TEXT DEFAULT '[]',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
+    id BIGSERIAL PRIMARY KEY,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    entry_type TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL,
+    category TEXT,
+    subcategory TEXT,
+    cost_center TEXT,
+    description TEXT,
+    notes TEXT,
+    tags_json TEXT DEFAULT '[]',
+    frequency TEXT NOT NULL DEFAULT 'monthly',
+    day_of_month INTEGER NOT NULL DEFAULT 1,
+    start_date DATE,
+    end_date DATE,
+    last_generated_month TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active
+ON fin_cashflow_recurring(active, frequency, day_of_month);
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
+    id BIGSERIAL PRIMARY KEY,
+    entry_id BIGINT NOT NULL UNIQUE REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    settled_at DATE,
+    reconciled_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status
+ON fin_cashflow_reconcile(status, settled_at DESC);
 
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id BIGSERIAL PRIMARY KEY,

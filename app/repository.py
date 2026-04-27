@@ -55,6 +55,75 @@ class Repository:
     def __init__(self, database_target: str):
         self.database_target = database_target
         self.is_postgres = is_postgres_target(database_target)
+        self._ensure_fin_cashflow_schema_evolution()
+
+    def _ensure_fin_cashflow_schema_evolution(self) -> None:
+        statements: list[str] = []
+        if self.is_postgres:
+            statements = [
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS subcategory TEXT",
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS cost_center TEXT",
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS tags_json TEXT DEFAULT '[]'",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
+                    id BIGSERIAL PRIMARY KEY,
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    entry_type TEXT NOT NULL,
+                    amount DOUBLE PRECISION NOT NULL,
+                    category TEXT,
+                    subcategory TEXT,
+                    cost_center TEXT,
+                    description TEXT,
+                    notes TEXT,
+                    tags_json TEXT DEFAULT '[]',
+                    frequency TEXT NOT NULL DEFAULT 'monthly',
+                    day_of_month INTEGER NOT NULL DEFAULT 1,
+                    start_date DATE,
+                    end_date DATE,
+                    last_generated_month TEXT,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+            ]
+        else:
+            statements = [
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN subcategory TEXT",
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN cost_center TEXT",
+                "ALTER TABLE fin_cashflow_entries ADD COLUMN tags_json TEXT DEFAULT '[]'",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    entry_type TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    category TEXT,
+                    subcategory TEXT,
+                    cost_center TEXT,
+                    description TEXT,
+                    notes TEXT,
+                    tags_json TEXT DEFAULT '[]',
+                    frequency TEXT NOT NULL DEFAULT 'monthly',
+                    day_of_month INTEGER NOT NULL DEFAULT 1,
+                    start_date TEXT,
+                    end_date TEXT,
+                    last_generated_month TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+            ]
+
+        with get_connection(self.database_target) as conn:
+            for stmt in statements:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    # SQLite raises duplicate-column errors on repeated ALTER TABLE.
+                    pass
+            conn.commit()
 
     def _sql(self, query: str) -> str:
         if not self.is_postgres:
@@ -2629,8 +2698,8 @@ class Repository:
             q = self._sql(
                 """
                 INSERT INTO fin_cashflow_entries
-                    (entry_type, amount, category, description, entry_date, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (entry_type, amount, category, subcategory, cost_center, description, entry_date, notes, tags_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             )
             if self.is_postgres:
@@ -2641,9 +2710,12 @@ class Repository:
                     data["entry_type"],
                     data["amount"],
                     data.get("category"),
+                    data.get("subcategory"),
+                    data.get("cost_center"),
                     data.get("description"),
                     data["entry_date"],
                     data.get("notes"),
+                    json_dumps(data.get("tags") or []),
                 ),
             )
             conn.commit()
@@ -2656,25 +2728,77 @@ class Repository:
         self,
         month: str | None = None,
         entry_type: str | None = None,
+        payment_status: str | None = None,
+        q: str | None = None,
+        cost_center: str | None = None,
+        subcategory: str | None = None,
+        tag: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        query = "SELECT * FROM fin_cashflow_entries WHERE 1=1"
+        query = (
+            "SELECT e.*, "
+            "COALESCE(r.status, CASE WHEN e.entry_type = 'income' THEN 'paid' ELSE 'pending' END) AS payment_status, "
+            "r.settled_at, "
+            "r.reconciled_at "
+            "FROM fin_cashflow_entries e "
+            "LEFT JOIN fin_cashflow_reconcile r ON r.entry_id = e.id "
+            "WHERE 1=1"
+        )
         params: list[Any] = []
 
         if month:
-            query += " AND substr(entry_date, 1, 7) = ?"
+            query += " AND substr(e.entry_date, 1, 7) = ?"
             params.append(month)
 
         if entry_type:
-            query += " AND entry_type = ?"
+            query += " AND e.entry_type = ?"
             params.append(entry_type)
 
-        query += " ORDER BY entry_date DESC, created_at DESC LIMIT ?"
+        if payment_status:
+            query += (
+                " AND COALESCE(r.status, "
+                "CASE WHEN e.entry_type = 'income' THEN 'paid' ELSE 'pending' END) = ?"
+            )
+            params.append(payment_status)
+
+        if cost_center:
+            query += " AND LOWER(COALESCE(e.cost_center, '')) = LOWER(?)"
+            params.append(cost_center)
+
+        if subcategory:
+            query += " AND LOWER(COALESCE(e.subcategory, '')) = LOWER(?)"
+            params.append(subcategory)
+
+        if tag:
+            query += " AND LOWER(COALESCE(e.tags_json, '')) LIKE ?"
+            params.append(f'%"{str(tag or '').lower()}"%')
+
+        if q:
+            query += (
+                " AND ("
+                "LOWER(COALESCE(e.category, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.subcategory, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.cost_center, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.description, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.notes, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.tags_json, '')) LIKE ?"
+                ")"
+            )
+            q_like = f"%{str(q).lower()}%"
+            params.extend([q_like, q_like, q_like, q_like, q_like, q_like])
+
+        query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
 
         with get_connection(self.database_target) as conn:
             rows = conn.execute(self._sql(query), tuple(params)).fetchall()
-            return [dict(r) for r in rows]
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                rec = dict(row)
+                tags = json_loads(rec.get("tags_json") or "[]")
+                rec["tags"] = tags if isinstance(tags, list) else []
+                out.append(rec)
+            return out
 
     def get_fin_cashflow_entry(self, entry_id: int) -> dict[str, Any] | None:
         with get_connection(self.database_target) as conn:
@@ -2687,11 +2811,25 @@ class Repository:
     def update_fin_cashflow_entry(self, entry_id: int, data: dict[str, Any]) -> bool:
         fields = []
         values: list[Any] = []
-        allowed = {"entry_type", "amount", "category", "description", "entry_date", "notes"}
+        allowed = {
+            "entry_type",
+            "amount",
+            "category",
+            "subcategory",
+            "cost_center",
+            "description",
+            "entry_date",
+            "notes",
+            "tags",
+        }
         for key, value in data.items():
             if key in allowed:
-                fields.append(f"{key} = ?")
-                values.append(value)
+                if key == "tags":
+                    fields.append("tags_json = ?")
+                    values.append(json_dumps(value or []))
+                else:
+                    fields.append(f"{key} = ?")
+                    values.append(value)
         if not fields:
             return False
 
@@ -2706,6 +2844,266 @@ class Repository:
             )
             conn.commit()
             return bool(cur.rowcount)
+
+    def add_fin_cashflow_recurring(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_cashflow_recurring
+                    (active, entry_type, amount, category, subcategory, cost_center,
+                     description, notes, tags_json, frequency, day_of_month,
+                     start_date, end_date, last_generated_month)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+
+            active_value: bool | int = bool(data.get("active", True)) if self.is_postgres else (1 if data.get("active", True) else 0)
+            cur = conn.execute(
+                q,
+                (
+                    active_value,
+                    data["entry_type"],
+                    data["amount"],
+                    data.get("category"),
+                    data.get("subcategory"),
+                    data.get("cost_center"),
+                    data.get("description"),
+                    data.get("notes"),
+                    json_dumps(data.get("tags") or []),
+                    data.get("frequency", "monthly"),
+                    data.get("day_of_month", 1),
+                    data.get("start_date"),
+                    data.get("end_date"),
+                    data.get("last_generated_month"),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cur.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cur.lastrowid or 0)
+
+    def list_fin_cashflow_recurring(self, active_only: bool = False) -> list[dict[str, Any]]:
+        q = "SELECT * FROM fin_cashflow_recurring"
+        params: list[Any] = []
+        if active_only:
+            q += " WHERE active = ?"
+            params.append(True if self.is_postgres else 1)
+        q += " ORDER BY id DESC"
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(self._sql(q), tuple(params)).fetchall()
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                rec = dict(row)
+                tags = json_loads(rec.get("tags_json") or "[]")
+                rec["tags"] = tags if isinstance(tags, list) else []
+                rec["active"] = bool(rec.get("active"))
+                out.append(rec)
+            return out
+
+    def update_fin_cashflow_recurring(self, recurring_id: int, data: dict[str, Any]) -> bool:
+        allowed = {
+            "active",
+            "entry_type",
+            "amount",
+            "category",
+            "subcategory",
+            "cost_center",
+            "description",
+            "notes",
+            "tags",
+            "frequency",
+            "day_of_month",
+            "start_date",
+            "end_date",
+            "last_generated_month",
+        }
+        fields: list[str] = []
+        values: list[Any] = []
+        for key, value in data.items():
+            if key not in allowed:
+                continue
+            if key == "tags":
+                fields.append("tags_json = ?")
+                values.append(json_dumps(value or []))
+            elif key == "active":
+                if self.is_postgres:
+                    fields.append("active = ?")
+                    values.append(bool(value))
+                else:
+                    fields.append("active = ?")
+                    values.append(1 if bool(value) else 0)
+            else:
+                fields.append(f"{key} = ?")
+                values.append(value)
+
+        if not fields:
+            return False
+
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(recurring_id)
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(
+                    f"UPDATE fin_cashflow_recurring SET {', '.join(fields)} WHERE id = ?"
+                ),
+                tuple(values),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def delete_fin_cashflow_recurring(self, recurring_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql("DELETE FROM fin_cashflow_recurring WHERE id = ?"),
+                (recurring_id,),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def run_fin_cashflow_recurring_for_month(self, month: str) -> dict[str, Any]:
+        templates = self.list_fin_cashflow_recurring(active_only=True)
+        existing = self.list_fin_cashflow_entries(month=month, limit=5000)
+
+        existing_signatures: set[tuple[str, float, str, str, str]] = set()
+        for row in existing:
+            existing_signatures.add(
+                (
+                    str(row.get("entry_type") or "").strip().lower(),
+                    round(float(row.get("amount") or 0), 2),
+                    str(row.get("category") or "").strip().lower(),
+                    str(row.get("description") or "").strip().lower(),
+                    str(row.get("entry_date") or "")[:10],
+                ),
+            )
+
+        created_ids: list[int] = []
+        skipped_duplicate = 0
+        skipped_already_generated = 0
+
+        year = int(month[:4])
+        month_num = int(month[5:7])
+        days_in_month = calendar.monthrange(year, month_num)[1]
+
+        for tpl in templates:
+            if str(tpl.get("frequency") or "monthly") != "monthly":
+                continue
+
+            last_month = str(tpl.get("last_generated_month") or "").strip()
+            if last_month and last_month >= month:
+                skipped_already_generated += 1
+                continue
+
+            start_date = str(tpl.get("start_date") or "").strip()
+            end_date = str(tpl.get("end_date") or "").strip()
+            if start_date and start_date[:7] > month:
+                continue
+            if end_date and end_date[:7] < month:
+                continue
+
+            day = max(1, min(days_in_month, int(tpl.get("day_of_month") or 1)))
+            entry_date = f"{year:04d}-{month_num:02d}-{day:02d}"
+            signature = (
+                str(tpl.get("entry_type") or "").strip().lower(),
+                round(float(tpl.get("amount") or 0), 2),
+                str(tpl.get("category") or "").strip().lower(),
+                str(tpl.get("description") or "").strip().lower(),
+                entry_date,
+            )
+
+            if signature in existing_signatures:
+                skipped_duplicate += 1
+                self.update_fin_cashflow_recurring(int(tpl["id"]), {"last_generated_month": month})
+                continue
+
+            new_id = self.add_fin_cashflow_entry(
+                {
+                    "entry_type": signature[0],
+                    "amount": signature[1],
+                    "category": str(tpl.get("category") or "").strip(),
+                    "subcategory": str(tpl.get("subcategory") or "").strip(),
+                    "cost_center": str(tpl.get("cost_center") or "").strip(),
+                    "description": str(tpl.get("description") or "").strip(),
+                    "entry_date": entry_date,
+                    "notes": str(tpl.get("notes") or "").strip(),
+                    "tags": tpl.get("tags") if isinstance(tpl.get("tags"), list) else [],
+                },
+            )
+            existing_signatures.add(signature)
+            created_ids.append(int(new_id))
+            self.update_fin_cashflow_recurring(int(tpl["id"]), {"last_generated_month": month})
+
+        return {
+            "month": month,
+            "created": len(created_ids),
+            "created_ids": created_ids,
+            "skipped_duplicate": skipped_duplicate,
+            "skipped_already_generated": skipped_already_generated,
+            "templates_total": len(templates),
+        }
+
+    def get_fin_cashflow_status(self, entry_id: int) -> dict[str, Any]:
+        with get_connection(self.database_target) as conn:
+            base = conn.execute(
+                self._sql("SELECT entry_type FROM fin_cashflow_entries WHERE id = ?"),
+                (entry_id,),
+            ).fetchone()
+            if not base:
+                return {}
+
+            default_status = "paid" if str(base["entry_type"] or "") == "income" else "pending"
+            row = conn.execute(
+                self._sql(
+                    """
+                    SELECT status, settled_at, reconciled_at
+                    FROM fin_cashflow_reconcile
+                    WHERE entry_id = ?
+                    """,
+                ),
+                (entry_id,),
+            ).fetchone()
+            if not row:
+                return {
+                    "status": default_status,
+                    "settled_at": None,
+                    "reconciled_at": None,
+                }
+            rec = dict(row)
+            rec["status"] = str(rec.get("status") or default_status)
+            return rec
+
+    def set_fin_cashflow_status(
+        self,
+        entry_id: int,
+        status: str,
+        settled_at: str | None,
+    ) -> bool:
+        with get_connection(self.database_target) as conn:
+            exists = conn.execute(
+                self._sql("SELECT id FROM fin_cashflow_entries WHERE id = ?"),
+                (entry_id,),
+            ).fetchone()
+            if not exists:
+                return False
+
+            conn.execute(
+                self._sql(
+                    """
+                    INSERT INTO fin_cashflow_reconcile (entry_id, status, settled_at, reconciled_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(entry_id)
+                    DO UPDATE SET
+                        status = excluded.status,
+                        settled_at = excluded.settled_at,
+                        reconciled_at = CURRENT_TIMESTAMP
+                    """,
+                ),
+                (entry_id, status, settled_at),
+            )
+            conn.commit()
+            return True
 
     def delete_fin_cashflow_entry(self, entry_id: int) -> bool:
         with get_connection(self.database_target) as conn:
