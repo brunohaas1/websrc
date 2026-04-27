@@ -177,6 +177,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         "brapi_monthly_limit": {
             "type": "int", "min": 100, "max": 500000, "default": "15000",
         },
+        "brapi_max_calls_per_request": {
+            "type": "int", "min": 0, "max": 200, "default": "2",
+        },
+        "brapi_reserve_pct": {
+            "type": "int", "min": 0, "max": 50, "default": "15",
+        },
         "finance_api_key": {
             "type": "str", "max_len": 300, "default": "", "secret": True,
         },
@@ -499,16 +505,43 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_api_stats():
         try:
+            def _resolve_brapi_policy() -> tuple[int, int, int, int]:
+                raw_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
+                if raw_limit is None:
+                    raw_limit = repo.get_setting("brapi_monthly_limit", "15000")
+                try:
+                    brapi_limit = max(100, min(500000, int(str(raw_limit).strip())))
+                except Exception:
+                    brapi_limit = 15000
+
+                raw_reserve = app.config.get("BRAPI_RESERVE_PCT")
+                if raw_reserve is None:
+                    raw_reserve = repo.get_setting("brapi_reserve_pct", "15")
+                try:
+                    reserve_pct = max(0, min(50, int(str(raw_reserve).strip())))
+                except Exception:
+                    reserve_pct = 15
+
+                raw_max_calls = app.config.get("BRAPI_MAX_CALLS_PER_REQUEST")
+                if raw_max_calls is None:
+                    raw_max_calls = repo.get_setting(
+                        "brapi_max_calls_per_request",
+                        "2",
+                    )
+                try:
+                    max_calls = max(0, min(200, int(str(raw_max_calls).strip())))
+                except Exception:
+                    max_calls = 2
+
+                reserve_calls = int(math.ceil(brapi_limit * (reserve_pct / 100.0)))
+                usable_limit = max(0, brapi_limit - reserve_calls)
+                return brapi_limit, reserve_pct, reserve_calls, max_calls
+
             month_key = datetime.now(timezone.utc).strftime("%Y%m")
             usage_key = f"brapi_usage:{month_key}"
             brapi_usage = int(repo.get_setting(usage_key, "0") or 0)
-            raw_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
-            if raw_limit is None:
-                raw_limit = repo.get_setting("brapi_monthly_limit", "15000")
-            try:
-                brapi_limit = max(100, min(500000, int(str(raw_limit).strip())))
-            except Exception:
-                brapi_limit = 15000
+            brapi_limit, reserve_pct, reserve_calls, max_calls = _resolve_brapi_policy()
+            usable_limit = max(0, brapi_limit - reserve_calls)
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             payload = {
                 "ok": True,
@@ -516,8 +549,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "month": month_key,
                     "usage": brapi_usage,
                     "limit": brapi_limit,
+                    "reserve_pct": reserve_pct,
+                    "reserve_calls": reserve_calls,
+                    "usable_limit": usable_limit,
                     "remaining": max(0, brapi_limit - brapi_usage),
-                    "degraded": brapi_usage >= brapi_limit,
+                    "remaining_usable": max(0, usable_limit - brapi_usage),
+                    "per_request_cap": max_calls,
+                    "degraded": brapi_usage >= usable_limit,
                 },
                 "daily_usage": {
                     "brapi": int(repo.get_setting(f"api_usage:{today}:market-data:brapi", "0") or 0),
@@ -549,9 +587,20 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             except Exception:
                 brapi_limit = 15000
 
+            raw_reserve = app.config.get("BRAPI_RESERVE_PCT")
+            if raw_reserve is None:
+                raw_reserve = repo.get_setting("brapi_reserve_pct", "15")
+            try:
+                reserve_pct = max(0, min(50, int(str(raw_reserve).strip())))
+            except Exception:
+                reserve_pct = 15
+
+            reserve_calls = int(math.ceil(brapi_limit * (reserve_pct / 100.0)))
+            usable_limit = max(0, brapi_limit - reserve_calls)
+
             brapi_usage = int(repo.get_setting(f"brapi_usage:{month_key}", "0") or 0)
             brapi_remaining = max(0, brapi_limit - brapi_usage)
-            brapi_degraded = brapi_usage >= brapi_limit
+            brapi_degraded = brapi_usage >= usable_limit
 
             providers = _provider_day_metrics(today)
 
@@ -582,6 +631,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "usage": brapi_usage,
                         "limit": brapi_limit,
                         "remaining": brapi_remaining,
+                        "reserve_pct": reserve_pct,
+                        "reserve_calls": reserve_calls,
+                        "usable_limit": usable_limit,
+                        "remaining_usable": max(0, usable_limit - brapi_usage),
                     },
                     "market_quality": {
                         "status": "degraded" if has_stale_data else "ok",
@@ -2687,6 +2740,26 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 parsed = 15000
             return max(100, min(500000, parsed))
 
+        def _resolve_brapi_reserve_pct() -> int:
+            raw = app.config.get("BRAPI_RESERVE_PCT")
+            if raw is None:
+                raw = repo.get_setting("brapi_reserve_pct", "15")
+            try:
+                parsed = int(str(raw).strip())
+            except Exception:
+                parsed = 15
+            return max(0, min(50, parsed))
+
+        def _resolve_brapi_max_calls_per_request() -> int:
+            raw = app.config.get("BRAPI_MAX_CALLS_PER_REQUEST")
+            if raw is None:
+                raw = repo.get_setting("brapi_max_calls_per_request", "2")
+            try:
+                parsed = int(str(raw).strip())
+            except Exception:
+                parsed = 2
+            return max(0, min(200, parsed))
+
         brapi_month_key = datetime.now(timezone.utc).strftime("%Y%m")
         brapi_usage_key = f"brapi_usage:{brapi_month_key}"
         try:
@@ -2694,13 +2767,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         except Exception:
             brapi_usage_start = 0
         brapi_limit = _resolve_brapi_monthly_limit()
+        brapi_reserve_pct = _resolve_brapi_reserve_pct()
+        brapi_reserve_calls = int(math.ceil(brapi_limit * (brapi_reserve_pct / 100.0)))
+        brapi_usable_limit = max(0, brapi_limit - brapi_reserve_calls)
+        brapi_max_calls_per_request = _resolve_brapi_max_calls_per_request()
         brapi_usage_delta = 0
         brapi_lock = Lock()
 
         def _try_reserve_brapi_call() -> bool:
             nonlocal brapi_usage_delta
             with brapi_lock:
-                if brapi_usage_start + brapi_usage_delta >= brapi_limit:
+                if brapi_usage_delta >= brapi_max_calls_per_request:
+                    return False
+                if brapi_usage_start + brapi_usage_delta >= brapi_usable_limit:
                     return False
                 brapi_usage_delta += 1
                 return True
@@ -3117,8 +3196,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "month": brapi_month_key,
             "usage": final_usage,
             "limit": brapi_limit,
+            "reserve_pct": brapi_reserve_pct,
+            "reserve_calls": brapi_reserve_calls,
+            "usable_limit": brapi_usable_limit,
+            "remaining_usable": max(0, brapi_usable_limit - final_usage),
+            "per_request_cap": brapi_max_calls_per_request,
+            "request_brapi_calls": brapi_usage_delta,
             "remaining": remaining,
-            "degraded": remaining <= 0,
+            "degraded": final_usage >= brapi_usable_limit,
         }
 
         stale_stocks = sum(1 for q in results["stocks"].values() if q.get("is_stale"))
