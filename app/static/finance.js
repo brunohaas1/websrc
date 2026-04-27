@@ -794,10 +794,16 @@ function renderMarketDataHealth(meta = {}) {
   }
 
   const stale = !!meta.stale;
+  const quoteStale = !!meta.quoteStale;
+  const staleItems = Number(meta.staleItems || 0);
   if (!stale) {
-    chip.className = "fin-market-health fin-market-health--ok";
-    chip.textContent = "ao vivo";
-    chip.title = "Dados de mercado em tempo real";
+    chip.className = quoteStale
+      ? "fin-market-health fin-market-health--stale"
+      : "fin-market-health fin-market-health--ok";
+    chip.textContent = quoteStale ? "parcialmente defasado" : "ao vivo";
+    chip.title = quoteStale
+      ? `Dados ao vivo com ${staleItems} cotacao(oes) em fallback/stale`
+      : "Dados de mercado em tempo real";
     FIN._marketStaleNotified = false;
     return;
   }
@@ -1047,6 +1053,8 @@ async function _loadSecondaryPanels(options = {}) {
         return {
           market: live || {},
           stale: false,
+          quoteStale: !!(live?.meta?.quality?.has_stale_data),
+          staleItems: Number(live?.meta?.quality?.stale_items || 0),
           snapshotAt: null,
           snapshotAgeMs: 0,
           snapshotExpired: false,
@@ -1057,6 +1065,8 @@ async function _loadSecondaryPanels(options = {}) {
           return {
             market: snap.market,
             stale: true,
+            quoteStale: !!(snap.market?.meta?.quality?.has_stale_data),
+            staleItems: Number(snap.market?.meta?.quality?.stale_items || 0),
             snapshotAt: snap.ts || null,
             snapshotAgeMs: snap.ageMs || 0,
             snapshotExpired: !!snap.isExpired,
@@ -1065,6 +1075,8 @@ async function _loadSecondaryPanels(options = {}) {
         return {
           market: {},
           stale: true,
+          quoteStale: false,
+          staleItems: 0,
           snapshotAt: null,
           snapshotAgeMs: 0,
           snapshotExpired: true,
@@ -1081,6 +1093,8 @@ async function _loadSecondaryPanels(options = {}) {
     payload: {
       market: FIN.marketData,
       marketStale: !!marketMeta.stale,
+      marketQuoteStale: !!marketMeta.quoteStale,
+      marketStaleItems: Number(marketMeta.staleItems || 0),
       marketSnapshotAt: marketMeta.snapshotAt || null,
       marketSnapshotAgeMs: marketMeta.snapshotAgeMs || 0,
       marketSnapshotExpired: !!marketMeta.snapshotExpired,
@@ -1089,6 +1103,7 @@ async function _loadSecondaryPanels(options = {}) {
   };
 
   renderIndices((FIN.marketData && FIN.marketData.indices) || {});
+  renderWatchlist(FIN.watchlist || []);
   renderMarketDataHealth(marketMeta);
   renderPerformanceMetrics(FIN.performanceMetrics);
   return { cacheHit: false, durationMs: _ms(performance.now() - started) };
@@ -1236,9 +1251,19 @@ function renderIndices(indices) {
       const priceStr = isFx
         ? formatBRL(idx.price)
         : `${formatNumber(idx.price, 0)} pts`;
+      const source = idx.source ? String(idx.source).toUpperCase() : "";
+      const staleBadge = idx.is_stale
+        ? '<span class="fin-quote-badge fin-quote-badge--stale" title="Cotacao em fallback">stale</span>'
+        : "";
+      const sourceBadge = source
+        ? `<span class="fin-quote-badge" title="Fonte da cotacao">${escapeHtml(source)}</span>`
+        : "";
       return `
         <div class="fin-index-row">
-          <span class="fin-index-name">${escapeHtml(idx.name)}</span>
+          <span class="fin-index-name-wrap">
+            <span class="fin-index-name">${escapeHtml(idx.name)}</span>
+            <span class="fin-quote-badges">${sourceBadge}${staleBadge}</span>
+          </span>
           <span class="fin-index-price">${priceStr}</span>
           <span class="fin-index-change ${cls}">${formatPct(idx.change_pct)}</span>
         </div>
@@ -1660,6 +1685,13 @@ function renderWatchlist(watchlist) {
       const typeCls = badgeClass(displayType);
       const hasPrice = w.current_price != null;
       const priceStr = hasPrice ? formatBRL(w.current_price) : "—";
+      const quote = FIN.marketData?.stocks?.[String(w.symbol || "").toUpperCase()] || null;
+      const staleBadge = quote?.is_stale
+        ? '<span class="fin-quote-badge fin-quote-badge--stale" title="Ultimo preco salvo (fallback)">stale</span>'
+        : "";
+      const sourceBadge = quote?.source
+        ? `<span class="fin-quote-badge" title="Fonte da cotacao">${escapeHtml(String(quote.source).toUpperCase())}</span>`
+        : "";
 
       // Change info
       let changeHtml = "";
@@ -1689,6 +1721,8 @@ function renderWatchlist(watchlist) {
           </div>
           <div class="fin-wl-prices">
             <span class="fin-wl-price">${priceStr}</span>
+            ${sourceBadge}
+            ${staleBadge}
             ${changeHtml}
           </div>
           <div class="fin-wl-meta">

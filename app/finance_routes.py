@@ -2463,6 +2463,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if cached:
             return jsonify(cached)
 
+        now_iso = datetime.now(timezone.utc).isoformat()
+
         def _resolve_brapi_monthly_limit() -> int:
             cfg_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
             if cfg_limit is None:
@@ -2524,6 +2526,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 high: float | None,
                 low: float | None,
                 updated: float | None = None,
+                source: str = "unknown",
+                is_stale: bool = False,
+                captured_at: str | None = None,
+                latency_ms: float | None = None,
             ) -> None:
                 results["stocks"][sym] = {
                     "symbol": sym,
@@ -2537,6 +2543,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "high": high,
                     "low": low,
                     "updated": updated,
+                    "source": source,
+                    "is_stale": is_stale,
+                    "captured_at": captured_at or now_iso,
+                    "latency_ms": latency_ms,
                 }
                 _aid = repo.upsert_fin_asset({
                     "symbol": sym,
@@ -2570,11 +2580,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
                 # 1) Yahoo first to preserve brapi monthly quota.
                 try:
+                    y_started = time.perf_counter()
                     yresp = _http_get_with_retry(
                         "https://query1.finance.yahoo.com/v7/finance/quote",
                         params={"symbols": f"{sym}.SA"},
                         timeout=10,
                     )
+                    y_latency_ms = round((time.perf_counter() - y_started) * 1000, 1)
                     _track_api_provider_usage("yahoo", bool(yresp.ok), "market-data")
                     if yresp.ok:
                         ydata = yresp.json()
@@ -2599,6 +2611,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                                     high=item.get("regularMarketDayHigh"),
                                     low=item.get("regularMarketDayLow"),
                                     updated=item.get("regularMarketTime"),
+                                    source="yahoo",
+                                    is_stale=False,
+                                    captured_at=now_iso,
+                                    latency_ms=y_latency_ms,
                                 )
                                 loaded = True
                 except Exception as exc:
@@ -2615,11 +2631,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     continue
                 try:
                     params = {"fundamental": "true", "token": brapi_token}
+                    b_started = time.perf_counter()
                     resp = _http_get_with_retry(
                         f"https://brapi.dev/api/quote/{sym}",
                         params=params,
                         timeout=10,
                     )
+                    b_latency_ms = round((time.perf_counter() - b_started) * 1000, 1)
                     _track_api_provider_usage("brapi", bool(resp.ok), "market-data")
                     if resp.ok:
                         data = resp.json()
@@ -2642,7 +2660,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             high=item.get("regularMarketDayHigh"),
                             low=item.get("regularMarketDayLow"),
                             updated=item.get("regularMarketTime"),
+                            source="brapi",
+                            is_stale=False,
+                            captured_at=now_iso,
+                            latency_ms=b_latency_ms,
                         )
+                        loaded = True
                 except Exception as exc:
                     _track_api_provider_usage("brapi", False, "market-data")
                     logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
@@ -2667,6 +2690,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "low": None,
                         "updated": None,
                         "stale": True,
+                        "source": "db-fallback",
+                        "is_stale": True,
+                        "captured_at": db_asset.get("updated_at") or now_iso,
+                        "latency_ms": None,
                     }
                     logger.info(
                         "DB fallback price used for %s: %.4f (stale)",
@@ -2701,6 +2728,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "change_24h": info.get("brl_24h_change"),
                             "market_cap": info.get("brl_market_cap"),
                             "volume_24h": info.get("brl_24h_vol"),
+                            "source": "coingecko",
+                            "is_stale": False,
+                            "captured_at": now_iso,
+                            "latency_ms": None,
                         }
                         _aid = repo.upsert_fin_asset({
                             "symbol": cid.upper(),
@@ -2768,6 +2799,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "price": price,
                         "change": change,
                         "change_pct": change_pct,
+                        "source": "yahoo",
+                        "is_stale": False,
+                        "captured_at": now_iso,
+                        "latency_ms": None,
                     }
                 except Exception as exc:
                     _track_api_provider_usage("yahoo", False, "market-data")
@@ -2810,6 +2845,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "price": item.get("regularMarketPrice"),
                             "change": item.get("regularMarketChange"),
                             "change_pct": item.get("regularMarketChangePercent"),
+                            "source": "brapi",
+                            "is_stale": False,
+                            "captured_at": now_iso,
+                            "latency_ms": None,
                         }
             except Exception as exc:
                 _track_api_provider_usage("brapi", False, "market-data")
@@ -2841,6 +2880,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "limit": brapi_limit,
             "remaining": remaining,
             "degraded": remaining <= 0,
+        }
+
+        stale_stocks = sum(1 for q in results["stocks"].values() if q.get("is_stale"))
+        stale_crypto = sum(1 for q in results["crypto"].values() if q.get("is_stale"))
+        stale_indices = sum(1 for q in results["indices"].values() if q.get("is_stale"))
+        stale_items = stale_stocks + stale_crypto + stale_indices
+        results["meta"]["quality"] = {
+            "captured_at": now_iso,
+            "has_stale_data": stale_items > 0,
+            "stale_items": stale_items,
+            "stale_stocks": stale_stocks,
+            "stale_crypto": stale_crypto,
+            "stale_indices": stale_indices,
         }
 
         cache.set("finance:market", results, FINANCE_CACHE_TTLS["market"])

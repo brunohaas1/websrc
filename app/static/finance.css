@@ -263,6 +263,40 @@ body.fin-density-comfortable .fin-table td {
   font-size: 0.92rem;
 }
 
+.fin-index-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fin-quote-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fin-quote-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  font-size: 0.62rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-muted, #94a3b8);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.fin-quote-badge--stale {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.14);
+}
+
 .fin-index-price {
   font-weight: 700;
   font-size: 1.05rem;
