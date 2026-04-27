@@ -60,6 +60,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     logger = logging.getLogger(__name__)
     repo = Repository(app.config["DATABASE_TARGET"])
     cache = get_cache(app.config)
+    app._finance_cache = cache  # exposed for tests
 
     FINANCE_CACHE_TTLS = {
         "summary": 60,
@@ -265,6 +266,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             status = int(repo.get_setting(status_key, "0") or 0)
             repo.set_setting(base_key, str(total + 1))
             repo.set_setting(status_key, str(status + 1))
+            cache.delete(f"finance:provider-metrics:{today}")
         except Exception:
             pass
 
@@ -284,6 +286,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             cur_count = int(repo.get_setting(count_key, "0") or 0)
             repo.set_setting(sum_key, f"{cur_sum + float(latency_ms):.3f}")
             repo.set_setting(count_key, str(cur_count + 1))
+            cache.delete(f"finance:provider-metrics:{today}")
         except Exception:
             pass
 
@@ -294,10 +297,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             fallback_key = f"{base_key}:fallback"
             cur = int(repo.get_setting(fallback_key, "0") or 0)
             repo.set_setting(fallback_key, str(cur + 1))
+            cache.delete(f"finance:provider-metrics:{today}")
         except Exception:
             pass
 
     def _provider_day_metrics(day_key: str) -> dict[str, dict]:
+        cache_key = f"finance:provider-metrics:{day_key}"
+        cached: dict[str, dict] | None = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         settings = repo.get_all_settings()
         prefix = f"api_usage:{day_key}:"
         providers: dict[str, dict] = {}
@@ -398,6 +407,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 )
                 endpoint_metrics.pop("latency_sum_ms", None)
 
+        cache.set(cache_key, providers, 60)
         return providers
 
     def _audit(
