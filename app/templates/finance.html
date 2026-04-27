@@ -120,6 +120,11 @@
     <!-- ── Watchlist Alerts Banner ─────────────────────── -->
     <div id="finAlertsBanner" class="fin-alerts-banner" style="display:none" role="alert" aria-live="assertive"></div>
 
+    <section class="fin-main-tabs" aria-label="Navegação principal de finanças">
+      <button id="finTabInvestments" class="fin-main-tab is-active" type="button" data-fin-tab="investments">📈 Investimentos</button>
+      <button id="finTabCashflow" class="fin-main-tab" type="button" data-fin-tab="cashflow">🧾 Fluxo de Caixa</button>
+    </section>
+
     <main class="fin-grid" id="financeMain">
 
       <!-- ── Currency ─────────────────────────────────── -->
@@ -197,24 +202,6 @@
         <div id="finPassiveIncomeGoalSummary" class="fin-passive-goal-summary"></div>
         <div id="finGoalsContent" class="fin-card-body">
           {{ fin_skeleton('goals') }}
-        </div>
-      </section>
-
-      <!-- ── Cashflow (Ganhos e Gastos) ────────────────── -->
-      <section class="fin-card fin-wide" id="finCashflowCard">
-        <h2>
-          🧾 Fluxo de Caixa
-          <select id="finCashflowMonth" class="fin-inline-select" title="Filtrar por mês">
-            <option value="">Todos os meses</option>
-          </select>
-          <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button>
-        </h2>
-        <div id="finCashflowSummary" class="fin-cashflow-summary"></div>
-        <div class="fin-card-body fin-chart-container fin-cashflow-chart-wrap">
-          <canvas id="cashflowChart" height="220"></canvas>
-        </div>
-        <div id="finCashflowContent" class="fin-card-body">
-          <p class="fin-empty">Carregando fluxo de caixa...</p>
         </div>
       </section>
 
@@ -404,6 +391,37 @@
         <div id="finAIChatHistory" class="fin-ai-chat-history"></div>
       </section>
 
+    </main>
+
+    <main class="fin-grid" id="financeCashflowMain" style="display:none">
+      <!-- ── Cashflow (Ganhos e Gastos) ────────────────── -->
+      <section class="fin-card fin-wide" id="finCashflowCard">
+        <h2>
+          🧾 Fluxo de Caixa
+          <select id="finCashflowMonth" class="fin-inline-select" title="Filtrar por mês">
+            <option value="">Todos os meses</option>
+          </select>
+          <select id="finCashflowType" class="fin-inline-select" title="Filtrar por tipo">
+            <option value="">Ganhos e gastos</option>
+            <option value="income">Somente ganhos</option>
+            <option value="expense">Somente gastos</option>
+          </select>
+          <button id="btnCashflowBudget" class="btn-text" title="Configurar orçamento por categoria">⚙ Orçamento</button>
+          <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button>
+        </h2>
+        <div id="finCashflowSummary" class="fin-cashflow-summary"></div>
+        <div class="fin-card-body fin-chart-container fin-cashflow-chart-wrap">
+          <canvas id="cashflowChart" height="220"></canvas>
+        </div>
+        <div class="fin-card-body fin-chart-container fin-cashflow-chart-wrap">
+          <canvas id="cashflowCategoryChart" height="220"></canvas>
+        </div>
+        <div id="finCashflowAnalytics" class="fin-cashflow-analytics"></div>
+        <div id="finCashflowBudgetStatus" class="fin-cashflow-budget-status"></div>
+        <div id="finCashflowContent" class="fin-card-body">
+          <p class="fin-empty">Carregando fluxo de caixa...</p>
+        </div>
+      </section>
     </main>
 
   <!-- ── Modals ─────────────────────────────────────── -->

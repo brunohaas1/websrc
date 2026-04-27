@@ -10,6 +10,8 @@ const FIN = {
   transactions: [],
   cashflowEntries: [],
   cashflowSummary: null,
+  cashflowAnalytics: null,
+  cashflowBudget: {},
   watchlist: [],
   goals: [],
   assets: [],
@@ -52,6 +54,7 @@ function _healthStatusClass(status) {
 const SECONDARY_CACHE_TTL_MS = 25000;
 const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
 const MARKET_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FIN_ACTIVE_TAB_KEY = "fin_active_tab_v1";
 
 const FIN_THEME_KEY = "fin-theme";
 const FIN_LAYOUT_KEY = "fin_layout_v1";
@@ -546,6 +549,46 @@ function runEmptyStateAction(action) {
   if (fn) fn();
 }
 
+function setFinanceTab(tabId) {
+  const normalized = tabId === "cashflow" ? "cashflow" : "investments";
+  const investmentsMain = byId("financeMain");
+  const cashflowMain = byId("financeCashflowMain");
+  const tabButtons = document.querySelectorAll("[data-fin-tab]");
+
+  if (investmentsMain) {
+    investmentsMain.style.display = normalized === "investments" ? "grid" : "none";
+  }
+  if (cashflowMain) {
+    cashflowMain.style.display = normalized === "cashflow" ? "grid" : "none";
+  }
+
+  tabButtons.forEach((btn) => {
+    const isActive = String(btn.getAttribute("data-fin-tab") || "") === normalized;
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+
+  localStorage.setItem(FIN_ACTIVE_TAB_KEY, normalized);
+}
+
+function initFinanceTabs() {
+  const tabButtons = document.querySelectorAll("[data-fin-tab]");
+  if (!tabButtons.length) return;
+
+  tabButtons.forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const target = String(btn.getAttribute("data-fin-tab") || "investments");
+      setFinanceTab(target);
+      if (target === "cashflow") {
+        await refreshByDomains(["cashflow"]);
+      }
+    });
+  });
+
+  const saved = String(localStorage.getItem(FIN_ACTIVE_TAB_KEY) || "investments");
+  setFinanceTab(saved);
+}
+
 function showKeyboardShortcutsHelp() {
   openFinModal("Atalhos de Teclado", `
     <div class="fin-shortcuts-list">
@@ -648,10 +691,12 @@ async function loadAll(options = {}) {
       ]);
 
       const selectedMonth = String(byId("finCashflowMonth")?.value || "").trim();
-      const [cashflowEntries, cashflowSummary] = await Promise.all([
+      const effectiveMonth = selectedMonth || currentMonthKey();
+      const selectedType = String(byId("finCashflowType")?.value || "").trim();
+      const [cashflowEntries, cashflowSummary, cashflowAnalytics, cashflowBudgetPayload] = await Promise.all([
         fetchWidgetJsonCached(
-          `cashflow-entries:${selectedMonth || "all"}`,
-          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}`,
+          `cashflow-entries:${selectedMonth || "all"}:${selectedType || "all"}`,
+          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}${selectedType ? `&type=${encodeURIComponent(selectedType)}` : ""}`,
           [],
           { useCache: useWidgetCache },
         ),
@@ -670,6 +715,26 @@ async function loadAll(options = {}) {
           },
           { useCache: useWidgetCache },
         ),
+        fetchWidgetJsonCached(
+          `cashflow-analytics:${effectiveMonth}`,
+          `/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`,
+          {
+            month: effectiveMonth,
+            totals: { income: 0, expense: 0, balance: 0, savings_rate_pct: 0 },
+            projection: { projected_income: 0, projected_expense: 0, projected_balance: 0 },
+            categories: { income: [], expense: [] },
+            daily: [],
+            top_expenses: [],
+            budget: { items: [], total_limit: 0, total_spent: 0, total_remaining: 0 },
+          },
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          `cashflow-budget:${effectiveMonth}`,
+          `/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`,
+          { month: effectiveMonth, budget: {} },
+          { useCache: useWidgetCache },
+        ),
       ]);
 
       FIN.watchlist = Array.isArray(watchlist) ? watchlist : [];
@@ -685,6 +750,8 @@ async function loadAll(options = {}) {
       FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
       FIN.cashflowEntries = Array.isArray(cashflowEntries) ? cashflowEntries : [];
       FIN.cashflowSummary = cashflowSummary || { monthly: [] };
+      FIN.cashflowAnalytics = cashflowAnalytics || null;
+      FIN.cashflowBudget = cashflowBudgetPayload?.budget || {};
 
       renderSummary(FIN.summary);
       renderWatchlist(FIN.watchlist);
@@ -692,6 +759,8 @@ async function loadAll(options = {}) {
       renderDividends(FIN.dividends);
       renderCashflowSummary(FIN.cashflowSummary);
       renderCashflow(FIN.cashflowEntries);
+      renderCashflowAnalytics(FIN.cashflowAnalytics);
+      renderCashflowBudgetStatus(FIN.cashflowAnalytics);
       syncCashflowMonthFilter(FIN.cashflowSummary);
       if (FIN._rebalanceLoaded) {
         renderRebalance();
@@ -952,14 +1021,22 @@ async function refreshDividendsPanels() {
 
 async function refreshCashflowPanel() {
   const month = String(byId("finCashflowMonth")?.value || "").trim();
-  const [entries, summary] = await Promise.all([
-    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}`).then((r) => r.json()),
+  const effectiveMonth = month || currentMonthKey();
+  const entryType = String(byId("finCashflowType")?.value || "").trim();
+  const [entries, summary, analytics, budgetPayload] = await Promise.all([
+    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}`).then((r) => r.json()),
     finFetch("/api/finance/cashflow/summary?months=12").then((r) => r.json()),
+    finFetch(`/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
+    finFetch(`/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
   ]);
   FIN.cashflowEntries = Array.isArray(entries) ? entries : [];
   FIN.cashflowSummary = summary || { monthly: [] };
+  FIN.cashflowAnalytics = analytics || null;
+  FIN.cashflowBudget = budgetPayload?.budget || {};
   renderCashflowSummary(FIN.cashflowSummary);
   renderCashflow(FIN.cashflowEntries);
+  renderCashflowAnalytics(FIN.cashflowAnalytics);
+  renderCashflowBudgetStatus(FIN.cashflowAnalytics);
   syncCashflowMonthFilter(FIN.cashflowSummary);
   updateLastUpdated();
 }
@@ -1924,6 +2001,11 @@ function currentMonthKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function getSelectedCashflowMonth() {
+  const selected = String(byId("finCashflowMonth")?.value || "").trim();
+  return selected || currentMonthKey();
+}
+
 function syncCashflowMonthFilter(summary) {
   const sel = byId("finCashflowMonth");
   if (!sel) return;
@@ -1948,6 +2030,8 @@ function renderCashflowSummary(summary) {
   const el = byId("finCashflowSummary");
   if (!el) return;
   const s = summary || {};
+  const totals = FIN.cashflowAnalytics?.totals || {};
+  const projection = FIN.cashflowAnalytics?.projection || {};
   const balanceCls = Number(s.current_balance || 0) >= 0 ? "fin-up" : "fin-down";
   el.innerHTML = `
     <div class="fin-cashflow-kpis">
@@ -1967,6 +2051,144 @@ function renderCashflowSummary(summary) {
         <span>Saldo total</span>
         <strong class="${Number(s.total_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(s.total_balance || 0)}</strong>
       </div>
+      <div class="fin-cashflow-kpi">
+        <span>Taxa de poupança</span>
+        <strong class="${Number(totals.savings_rate_pct || 0) >= 0 ? "fin-up" : "fin-down"}">${formatNumber(totals.savings_rate_pct || 0, 2)}%</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Saldo projetado no mês</span>
+        <strong class="${Number(projection.projected_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(projection.projected_balance || 0)}</strong>
+      </div>
+    </div>
+  `;
+}
+
+function renderCashflowCategoryChart(analytics) {
+  const canvas = byId("cashflowCategoryChart");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  const expenseRows = Array.isArray(analytics?.categories?.expense)
+    ? analytics.categories.expense
+    : [];
+
+  if (!expenseRows.length) {
+    if (FIN.charts.cashflowCategory) {
+      FIN.charts.cashflowCategory.destroy();
+      FIN.charts.cashflowCategory = null;
+    }
+    return;
+  }
+
+  const labels = expenseRows.map((r) => r.category || "Sem categoria");
+  const values = expenseRows.map((r) => Number(r.amount || 0));
+  const colors = chartColors(values.length);
+
+  if (FIN.charts.cashflowCategory) FIN.charts.cashflowCategory.destroy();
+
+  FIN.charts.cashflowCategory = new Chart(canvas, {
+    type: "doughnut",
+    data: {
+      labels,
+      datasets: [
+        {
+          data: values,
+          backgroundColor: colors,
+          borderWidth: 0,
+          hoverOffset: 6,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: "right",
+          labels: {
+            color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+              const pct = total > 0 ? ((Number(ctx.raw || 0) / total) * 100) : 0;
+              return ` ${ctx.label}: ${formatBRL(ctx.raw)} (${pct.toFixed(1)}%)`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderCashflowAnalytics(analytics) {
+  const el = byId("finCashflowAnalytics");
+  if (!el) return;
+  const projection = analytics?.projection || {};
+  const topExpenses = Array.isArray(analytics?.top_expenses) ? analytics.top_expenses : [];
+
+  const topHtml = topExpenses.length
+    ? topExpenses.slice(0, 3).map((row) => `
+      <div class="fin-cashflow-chip">
+        <span>${escapeHtml(row.category || "Sem categoria")}</span>
+        <strong class="fin-down">${formatBRL(row.amount || 0)}</strong>
+      </div>
+    `).join("")
+    : '<div class="fin-cashflow-chip"><span>Top gastos</span><strong>Sem dados</strong></div>';
+
+  el.innerHTML = `
+    <div class="fin-cashflow-analytics-grid">
+      <div class="fin-cashflow-chip">
+        <span>Dias considerados</span>
+        <strong>${formatNumber(projection.elapsed_days || 0, 0)} / ${formatNumber(projection.days_in_month || 0, 0)}</strong>
+      </div>
+      <div class="fin-cashflow-chip">
+        <span>Receita projetada</span>
+        <strong class="fin-up">${formatBRL(projection.projected_income || 0)}</strong>
+      </div>
+      <div class="fin-cashflow-chip">
+        <span>Despesa projetada</span>
+        <strong class="fin-down">${formatBRL(projection.projected_expense || 0)}</strong>
+      </div>
+      ${topHtml}
+    </div>
+  `;
+
+  renderCashflowCategoryChart(analytics);
+}
+
+function renderCashflowBudgetStatus(analytics) {
+  const el = byId("finCashflowBudgetStatus");
+  if (!el) return;
+  const budget = analytics?.budget || { items: [] };
+  const items = Array.isArray(budget.items) ? budget.items : [];
+  if (!items.length) {
+    el.innerHTML = '<p class="fin-empty">Nenhum orçamento configurado para o mês. Use o botão Orçamento.</p>';
+    return;
+  }
+
+  const cards = items.map((item) => {
+    const over = !!item.over_budget;
+    return `
+      <div class="fin-cashflow-budget-item ${over ? "fin-over-budget" : ""}">
+        <div class="fin-cashflow-budget-item-head">
+          <strong>${escapeHtml(item.category || "Sem categoria")}</strong>
+          <small>${formatNumber(item.usage_pct || 0, 1)}%</small>
+        </div>
+        <small>Gasto: ${formatBRL(item.spent || 0)} / Limite: ${formatBRL(item.limit || 0)}</small>
+        <div class="fin-goal-bar" style="margin-top:6px;">
+          <div class="fin-goal-fill ${over ? "" : "complete"}" style="width:${Math.min(100, Number(item.usage_pct || 0)).toFixed(1)}%"></div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="fin-cashflow-budget-grid">${cards}</div>
+    <div class="fin-cashflow-chip">
+      <span>Orçamento total</span>
+      <strong>${formatBRL(budget.total_spent || 0)} / ${formatBRL(budget.total_limit || 0)}</strong>
     </div>
   `;
 }
@@ -2597,6 +2819,7 @@ function openFinModal(title, bodyHtml) {
     submitAddTransaction,
     submitAddCashflow,
     submitEditCashflow,
+    submitCashflowBudget,
     submitAddWatchlist,
     submitAddGoal,
     submitEditGoal,
@@ -3889,6 +4112,72 @@ function openAddCashflowModal() {
   `);
 }
 
+function openCashflowBudgetModal() {
+  const month = getSelectedCashflowMonth();
+  const analytics = FIN.cashflowAnalytics || {};
+  const expenseCategories = Array.isArray(analytics?.categories?.expense)
+    ? analytics.categories.expense
+    : [];
+
+  const existing = FIN.cashflowBudget || {};
+  const mergedCats = [...new Set([
+    ...Object.keys(existing),
+    ...expenseCategories.map((row) => String(row.category || "").trim()).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b));
+
+  const rows = mergedCats.map((cat, idx) => {
+    const spent = Number(expenseCategories.find((row) => row.category === cat)?.amount || 0);
+    const limit = Number(existing[cat] || 0);
+    return `
+      <div class="fin-form-row" data-budget-row="${idx}">
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input data-budget-cat value="${escapeHtml(cat)}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Limite mensal (R$)</label>
+          <input data-budget-limit type="number" step="0.01" min="0" value="${Number.isFinite(limit) ? limit : 0}" />
+          <small style="display:block;opacity:0.75;margin-top:3px;">Gasto atual: ${formatBRL(spent)}</small>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  openFinModal("Orçamento Mensal por Categoria", `
+    <form data-form-action="submitCashflowBudget">
+      <div class="fin-form-group">
+        <label>Mês</label>
+        <input id="fmBudgetMonth" type="month" value="${escapeHtml(month)}" required />
+      </div>
+      <div id="fmBudgetRows">${rows || ""}</div>
+      <button id="btnBudgetAddRow" class="btn-text" type="button">＋ Adicionar categoria</button>
+      <button type="submit" class="fin-form-submit">💾 Salvar Orçamento</button>
+    </form>
+  `);
+
+  const addRowBtn = byId("btnBudgetAddRow");
+  const rowsHost = byId("fmBudgetRows");
+  if (addRowBtn && rowsHost) {
+    addRowBtn.addEventListener("click", () => {
+      const idx = rowsHost.querySelectorAll("[data-budget-row]").length;
+      const row = document.createElement("div");
+      row.className = "fin-form-row";
+      row.setAttribute("data-budget-row", String(idx));
+      row.innerHTML = `
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input data-budget-cat placeholder="Ex.: Moradia" />
+        </div>
+        <div class="fin-form-group">
+          <label>Limite mensal (R$)</label>
+          <input data-budget-limit type="number" step="0.01" min="0" value="0" />
+        </div>
+      `;
+      rowsHost.appendChild(row);
+    });
+  }
+}
+
 async function submitAddCashflow(e) {
   e.preventDefault();
   const body = {
@@ -3986,6 +4275,37 @@ async function submitEditCashflow(e, entryId) {
     closeFinModal();
     await refreshByDomains(["cashflow"]);
     showToast("Lançamento atualizado!", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function submitCashflowBudget(e) {
+  e.preventDefault();
+  const month = String(byId("fmBudgetMonth")?.value || "").trim();
+  const rows = Array.from(document.querySelectorAll("#fmBudgetRows [data-budget-row]"));
+  const budget = {};
+  rows.forEach((row) => {
+    const cat = String(row.querySelector("[data-budget-cat]")?.value || "").trim();
+    const limit = Number(row.querySelector("[data-budget-limit]")?.value || 0);
+    if (!cat || !(limit >= 0)) return;
+    budget[cat] = limit;
+  });
+
+  try {
+    const resp = await finFetch("/api/finance/cashflow/budget", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month, budget }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao salvar orçamento");
+      return;
+    }
+    closeFinModal();
+    await refreshByDomains(["cashflow"]);
+    showToast("Orçamento atualizado!", "success");
   } catch {
     showToast("Erro de rede");
   }

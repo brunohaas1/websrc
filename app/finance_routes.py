@@ -1198,6 +1198,65 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         payload = repo.get_fin_cashflow_summary(months=max(1, min(24, months)))
         return jsonify(payload)
 
+    @app.get("/api/finance/cashflow/analytics")
+    @limiter.limit("30/minute")
+    def finance_cashflow_analytics():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if month and not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+        payload = repo.get_fin_cashflow_analytics(month=month or None)
+        return jsonify(payload)
+
+    @app.get("/api/finance/cashflow/budget")
+    @limiter.limit("30/minute")
+    def finance_cashflow_budget_get():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+        return jsonify({
+            "month": month,
+            "budget": repo.get_fin_cashflow_budget(month),
+        })
+
+    @app.put("/api/finance/cashflow/budget")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_cashflow_budget_put():
+        body = request.get_json(silent=True) or {}
+        month = sanitize_text(str(body.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        raw_budget = body.get("budget")
+        if not isinstance(raw_budget, dict):
+            return jsonify({"error": "budget deve ser um objeto {categoria: valor}"}), 400
+
+        safe_budget: dict[str, float] = {}
+        for k, v in raw_budget.items():
+            category = sanitize_text(str(k or ""), 60).strip()
+            if not category:
+                continue
+            try:
+                amount = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not _is_finite_number(amount) or amount < 0:
+                continue
+            safe_budget[category] = round(amount, 2)
+
+        repo.set_fin_cashflow_budget(month, safe_budget)
+        _audit(
+            "update",
+            "cashflow_budget",
+            None,
+            {"month": month, "categories": sorted(list(safe_budget.keys()))},
+        )
+        return jsonify({"ok": True, "month": month, "budget": safe_budget})
+
     @app.post("/api/finance/cashflow")
     @limiter.limit("20/minute")
     @require_finance_key

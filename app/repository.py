@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import calendar
 from datetime import datetime, timezone
 import re
 from typing import Any
@@ -2765,6 +2766,164 @@ class Repository:
             "total_expense": round(total_expense, 2),
             "total_balance": round(total_income - total_expense, 2),
             "monthly": monthly_rows,
+        }
+
+    def get_fin_cashflow_budget(self, month: str) -> dict[str, float]:
+        key = f"finance_cashflow_budget:{month}"
+        raw = self.get_setting(key, "{}")
+        parsed = json_loads(raw)
+        if not isinstance(parsed, dict):
+            return {}
+
+        result: dict[str, float] = {}
+        for k, v in parsed.items():
+            category = str(k or "").strip()
+            if not category:
+                continue
+            try:
+                amount = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not (amount >= 0):
+                continue
+            result[category] = round(amount, 2)
+        return result
+
+    def set_fin_cashflow_budget(self, month: str, budget: dict[str, float]) -> None:
+        safe_budget: dict[str, float] = {}
+        for k, v in (budget or {}).items():
+            category = str(k or "").strip()
+            if not category:
+                continue
+            try:
+                amount = float(v)
+            except (TypeError, ValueError):
+                continue
+            if amount < 0:
+                continue
+            safe_budget[category] = round(amount, 2)
+
+        key = f"finance_cashflow_budget:{month}"
+        self.set_setting(key, json_dumps(safe_budget))
+
+    def get_fin_cashflow_analytics(self, month: str | None = None) -> dict[str, Any]:
+        target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        rows = self.list_fin_cashflow_entries(month=target_month, limit=5000)
+
+        income_total = 0.0
+        expense_total = 0.0
+        by_income_category: dict[str, float] = {}
+        by_expense_category: dict[str, float] = {}
+        daily: dict[str, dict[str, float]] = {}
+
+        for row in rows:
+            amount = float(row.get("amount") or 0)
+            entry_type = str(row.get("entry_type") or "").strip().lower()
+            category = str(row.get("category") or "").strip() or "Sem categoria"
+            day_key = str(row.get("entry_date") or "")[:10]
+            if len(day_key) != 10:
+                continue
+
+            day_bucket = daily.setdefault(day_key, {"income": 0.0, "expense": 0.0})
+            if entry_type == "income":
+                income_total += amount
+                by_income_category[category] = by_income_category.get(category, 0.0) + amount
+                day_bucket["income"] += amount
+            elif entry_type == "expense":
+                expense_total += amount
+                by_expense_category[category] = by_expense_category.get(category, 0.0) + amount
+                day_bucket["expense"] += amount
+
+        balance = income_total - expense_total
+        savings_rate_pct = (balance / income_total * 100.0) if income_total > 0 else 0.0
+
+        def _category_rows(src: dict[str, float], total: float) -> list[dict[str, Any]]:
+            out = []
+            for cat, val in sorted(src.items(), key=lambda item: item[1], reverse=True):
+                pct = (val / total * 100.0) if total > 0 else 0.0
+                out.append({
+                    "category": cat,
+                    "amount": round(val, 2),
+                    "pct": round(pct, 2),
+                })
+            return out
+
+        income_categories = _category_rows(by_income_category, income_total)
+        expense_categories = _category_rows(by_expense_category, expense_total)
+
+        daily_rows: list[dict[str, Any]] = []
+        for day in sorted(daily.keys()):
+            inc = float(daily[day].get("income") or 0)
+            exp = float(daily[day].get("expense") or 0)
+            daily_rows.append(
+                {
+                    "day": day,
+                    "income": round(inc, 2),
+                    "expense": round(exp, 2),
+                    "balance": round(inc - exp, 2),
+                },
+            )
+
+        year, month_num = target_month.split("-")
+        days_in_month = calendar.monthrange(int(year), int(month_num))[1]
+        today = datetime.now(timezone.utc)
+        elapsed_days = today.day if target_month == today.strftime("%Y-%m") else days_in_month
+        elapsed_days = max(1, min(days_in_month, elapsed_days))
+
+        avg_daily_income = income_total / elapsed_days
+        avg_daily_expense = expense_total / elapsed_days
+        projected_income = avg_daily_income * days_in_month
+        projected_expense = avg_daily_expense * days_in_month
+        projected_balance = projected_income - projected_expense
+
+        budget_map = self.get_fin_cashflow_budget(target_month)
+        budget_rows: list[dict[str, Any]] = []
+        budget_total = 0.0
+        budget_spent = 0.0
+        for category, limit in sorted(budget_map.items(), key=lambda item: item[0].lower()):
+            spent = float(by_expense_category.get(category, 0.0))
+            remaining = limit - spent
+            usage_pct = (spent / limit * 100.0) if limit > 0 else 0.0
+            budget_total += limit
+            budget_spent += spent
+            budget_rows.append(
+                {
+                    "category": category,
+                    "limit": round(limit, 2),
+                    "spent": round(spent, 2),
+                    "remaining": round(remaining, 2),
+                    "usage_pct": round(usage_pct, 2),
+                    "over_budget": spent > limit,
+                },
+            )
+
+        return {
+            "month": target_month,
+            "totals": {
+                "income": round(income_total, 2),
+                "expense": round(expense_total, 2),
+                "balance": round(balance, 2),
+                "savings_rate_pct": round(savings_rate_pct, 2),
+            },
+            "projection": {
+                "days_in_month": days_in_month,
+                "elapsed_days": elapsed_days,
+                "projected_income": round(projected_income, 2),
+                "projected_expense": round(projected_expense, 2),
+                "projected_balance": round(projected_balance, 2),
+            },
+            "categories": {
+                "income": income_categories,
+                "expense": expense_categories,
+            },
+            "daily": daily_rows,
+            "top_expenses": expense_categories[:5],
+            "budget": {
+                "items": budget_rows,
+                "total_limit": round(budget_total, 2),
+                "total_spent": round(budget_spent, 2),
+                "total_remaining": round(budget_total - budget_spent, 2),
+            },
         }
 
     # ── Financial Summary ───────────────────────────────────

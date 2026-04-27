@@ -25,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initFinanceLayoutTools();
   initFinanceKeyboardShortcuts();
   initQuickNav();
+  initFinanceTabs();
   if (isFinFlagOn("lazyRebalanceLoad")) {
     initRebalanceLazyLoad();
   } else {
@@ -52,6 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddWatchlist", openAddWatchlistModal);
   bind("btnAddGoal", openAddGoalModal);
   bind("btnAddCashflow", openAddCashflowModal);
+  bind("btnCashflowBudget", openCashflowBudgetModal);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
@@ -95,6 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const histSel = byId("historyAssetSelect");
   const cashflowMonthSel = byId("finCashflowMonth");
+  const cashflowTypeSel = byId("finCashflowType");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
@@ -104,6 +107,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (cashflowMonthSel) {
     cashflowMonthSel.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowTypeSel) {
+    cashflowTypeSel.addEventListener("change", () => refreshByDomains(["cashflow"]));
   }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);

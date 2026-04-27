@@ -756,6 +756,150 @@ class TestCashflow:
         bad_month_filter = client.get("/api/finance/cashflow?month=2026/04")
         assert bad_month_filter.status_code == 400
 
+    def test_cashflow_analytics(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 3000,
+            "category": "Salario",
+            "description": "Folha",
+            "entry_date": "2026-04-05",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 1000,
+            "category": "Moradia",
+            "description": "Aluguel",
+            "entry_date": "2026-04-06",
+        })
+
+        resp = client.get("/api/finance/cashflow/analytics?month=2026-04")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["month"] == "2026-04"
+        assert payload["totals"]["income"] == pytest.approx(3000)
+        assert payload["totals"]["expense"] == pytest.approx(1000)
+        assert payload["totals"]["balance"] == pytest.approx(2000)
+        assert isinstance(payload.get("top_expenses"), list)
+
+    def test_cashflow_budget_roundtrip(self, client):
+        put_resp = jput(client, "/api/finance/cashflow/budget", {
+            "month": "2026-04",
+            "budget": {
+                "Moradia": 1500,
+                "Alimentacao": 800,
+            },
+        })
+        assert put_resp.status_code == 200
+        put_data = put_resp.get_json()
+        assert put_data["ok"] is True
+        assert put_data["budget"]["Moradia"] == pytest.approx(1500)
+
+        get_resp = client.get("/api/finance/cashflow/budget?month=2026-04")
+        assert get_resp.status_code == 200
+        get_data = get_resp.get_json()
+        assert get_data["month"] == "2026-04"
+        assert get_data["budget"]["Moradia"] == pytest.approx(1500)
+
+    def test_cashflow_analytics_includes_budget_usage(self, client):
+        jput(client, "/api/finance/cashflow/budget", {
+            "month": "2026-04",
+            "budget": {
+                "Moradia": 1000,
+            },
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 1200,
+            "category": "Moradia",
+            "description": "Aluguel",
+            "entry_date": "2026-04-02",
+        })
+
+        resp = client.get("/api/finance/cashflow/analytics?month=2026-04")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        items = payload.get("budget", {}).get("items", [])
+        row = [i for i in items if i.get("category") == "Moradia"][0]
+        assert row["spent"] == pytest.approx(1200)
+        assert row["limit"] == pytest.approx(1000)
+        assert bool(row["over_budget"]) is True
+
+
+class TestFinanceSettings:
+    def test_update_settings_and_read_back(self, client):
+        resp = jput(client, "/api/finance/settings", {
+            "brapi_monthly_limit": 20000,
+            "brapi_reserve_pct": 10,
+            "ai_local_enabled": False,
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 3
+
+        settings = client.get("/api/finance/settings").get_json()
+        assert str(settings["brapi_monthly_limit"]) == "20000"
+        assert str(settings["brapi_reserve_pct"]) == "10"
+        assert str(settings["ai_local_enabled"]) == "0"
+
+    def test_update_settings_rejects_invalid_value(self, client):
+        resp = jput(client, "/api/finance/settings", {
+            "brapi_monthly_limit": "abc",
+        })
+        assert resp.status_code == 400
+
+
+class TestGoals:
+    def test_goal_create_update_delete(self, client):
+        create = jpost(client, "/api/finance/goals", {
+            "name": "Reserva de Emergencia",
+            "target_amount": 30000,
+            "current_amount": 1000,
+            "category": "savings",
+        })
+        assert create.status_code == 201
+        goal_id = create.get_json()["id"]
+
+        upd = jput(client, f"/api/finance/goals/{goal_id}", {
+            "current_amount": 2500,
+            "notes": "Aporte mensal",
+        })
+        assert upd.status_code == 200
+
+        goals = client.get("/api/finance/goals").get_json()
+        row = [g for g in goals if g["id"] == goal_id][0]
+        assert row["current_amount"] == pytest.approx(2500)
+
+        dele = client.delete(f"/api/finance/goals/{goal_id}")
+        assert dele.status_code == 200
+
+    def test_goal_create_requires_required_fields(self, client):
+        resp = jpost(client, "/api/finance/goals", {
+            "name": "Sem alvo",
+        })
+        assert resp.status_code == 400
+
+
+class TestPassiveIncomeGoal:
+    def test_passive_income_goal_roundtrip(self, client):
+        put_resp = jput(client, "/api/finance/goals/passive-income", {
+            "target_monthly": 3500,
+            "note": "Objetivo ate o fim do ano",
+        })
+        assert put_resp.status_code == 200
+        put_data = put_resp.get_json()
+        assert put_data["target_monthly"] == pytest.approx(3500)
+
+        get_resp = client.get("/api/finance/goals/passive-income")
+        assert get_resp.status_code == 200
+        get_data = get_resp.get_json()
+        assert get_data["target_monthly"] == pytest.approx(3500)
+
+    def test_passive_income_goal_rejects_negative(self, client):
+        resp = jput(client, "/api/finance/goals/passive-income", {
+            "target_monthly": -10,
+        })
+        assert resp.status_code == 400
+
 
 class TestFinanceAdvanced:
     def test_performance_metrics(self, client):

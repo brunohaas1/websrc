@@ -113,6 +113,34 @@ body.fin-density-comfortable .fin-table td {
   color: #ef4444;
 }
 
+/* ── Main Tabs ───────────────────────────────────────── */
+.fin-main-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 20px 0;
+}
+
+.fin-main-tab {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: rgba(15, 23, 42, 0.35);
+  color: var(--text, #e2e8f0);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.fin-main-tab:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.fin-main-tab.is-active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.55);
+}
+
 /* ── Grid Layout ──────────────────────────────────────── */
 .fin-grid {
   display: grid;
@@ -698,6 +726,62 @@ body.fin-density-comfortable .fin-table td {
 .fin-cashflow-kpi strong {
   font-size: 0.9rem;
   font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.fin-cashflow-analytics,
+.fin-cashflow-budget-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.fin-cashflow-analytics-grid,
+.fin-cashflow-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.fin-cashflow-chip {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.3);
+  padding: 8px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.fin-cashflow-chip span {
+  font-size: 0.72rem;
+  color: var(--text-muted, #8b92a5);
+}
+
+.fin-cashflow-chip strong {
+  font-size: 0.88rem;
+}
+
+.fin-cashflow-budget-item {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.22);
+}
+
+.fin-cashflow-budget-item.fin-over-budget {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.fin-cashflow-budget-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.fin-cashflow-budget-item small {
+  color: var(--text-muted, #8b92a5);
 }
 
 .fin-passive-goal-summary {
