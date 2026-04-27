@@ -2001,6 +2001,16 @@ function currentMonthKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function prevMonthKey(monthKey) {
+  const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return currentMonthKey();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const d = new Date(Date.UTC(year, month - 1, 1));
+  d.setUTCMonth(d.getUTCMonth() - 1);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 function getSelectedCashflowMonth() {
   const selected = String(byId("finCashflowMonth")?.value || "").trim();
   return selected || currentMonthKey();
@@ -2820,6 +2830,7 @@ function openFinModal(title, bodyHtml) {
     submitAddCashflow,
     submitEditCashflow,
     submitCashflowBudget,
+    submitCashflowRollover,
     submitAddWatchlist,
     submitAddGoal,
     submitEditGoal,
@@ -4178,6 +4189,35 @@ function openCashflowBudgetModal() {
   }
 }
 
+function openCashflowRolloverModal() {
+  const targetMonth = getSelectedCashflowMonth();
+  const sourceMonth = prevMonthKey(targetMonth);
+  openFinModal("Virada de Mês (Lançamentos Recorrentes)", `
+    <form data-form-action="submitCashflowRollover">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Copiar de (mês origem)</label>
+          <input id="fmCfRollSourceMonth" type="month" value="${escapeHtml(sourceMonth)}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Para (mês destino)</label>
+          <input id="fmCfRollTargetMonth" type="month" value="${escapeHtml(targetMonth)}" required />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Tipo de lançamento</label>
+        <select id="fmCfRollType">
+          <option value="all">Ganhos e gastos</option>
+          <option value="expense">Somente gastos</option>
+          <option value="income">Somente ganhos</option>
+        </select>
+      </div>
+      <div class="fin-inline-info">Registros idênticos já existentes no mês destino serão ignorados automaticamente.</div>
+      <button type="submit" class="fin-form-submit">↻ Executar virada de mês</button>
+    </form>
+  `);
+}
+
 async function submitAddCashflow(e) {
   e.preventDefault();
   const body = {
@@ -4306,6 +4346,39 @@ async function submitCashflowBudget(e) {
     closeFinModal();
     await refreshByDomains(["cashflow"]);
     showToast("Orçamento atualizado!", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function submitCashflowRollover(e) {
+  e.preventDefault();
+  const sourceMonth = String(byId("fmCfRollSourceMonth")?.value || "").trim();
+  const targetMonth = String(byId("fmCfRollTargetMonth")?.value || "").trim();
+  const entryType = String(byId("fmCfRollType")?.value || "all").trim();
+
+  try {
+    const resp = await finFetch("/api/finance/cashflow/rollover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_month: sourceMonth,
+        target_month: targetMonth,
+        entry_type: entryType,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao executar virada de mês");
+      return;
+    }
+
+    closeFinModal();
+    await refreshByDomains(["cashflow"]);
+    showToast(
+      `Virada concluída: ${Number(data.created || 0)} criado(s), ${Number(data.skipped || 0)} ignorado(s).`,
+      "success",
+    );
   } catch {
     showToast("Erro de rede");
   }

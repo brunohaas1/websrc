@@ -824,6 +824,60 @@ class TestCashflow:
         assert row["limit"] == pytest.approx(1000)
         assert bool(row["over_budget"]) is True
 
+    def test_cashflow_rollover_copies_entries_and_skips_duplicates(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 300,
+            "category": "Internet",
+            "description": "Plano fibra",
+            "entry_date": "2026-03-10",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 5000,
+            "category": "Salario",
+            "description": "Folha",
+            "entry_date": "2026-03-05",
+        })
+        # Duplicate no mês destino para validar skip
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 300,
+            "category": "Internet",
+            "description": "Plano fibra",
+            "entry_date": "2026-04-10",
+        })
+
+        roll = jpost(client, "/api/finance/cashflow/rollover", {
+            "source_month": "2026-03",
+            "target_month": "2026-04",
+            "entry_type": "all",
+        })
+        assert roll.status_code == 200
+        data = roll.get_json()
+        assert data["ok"] is True
+        assert data["created"] == 1
+        assert data["skipped"] == 1
+
+        april = client.get("/api/finance/cashflow?month=2026-04").get_json()
+        assert len(april) == 2
+        assert len([r for r in april if r["entry_type"] == "income"]) == 1
+
+    def test_cashflow_rollover_validates_payload(self, client):
+        bad_same = jpost(client, "/api/finance/cashflow/rollover", {
+            "source_month": "2026-04",
+            "target_month": "2026-04",
+            "entry_type": "all",
+        })
+        assert bad_same.status_code == 400
+
+        bad_type = jpost(client, "/api/finance/cashflow/rollover", {
+            "source_month": "2026-03",
+            "target_month": "2026-04",
+            "entry_type": "foo",
+        })
+        assert bad_type.status_code == 400
+
 
 class TestFinanceSettings:
     def test_update_settings_and_read_back(self, client):

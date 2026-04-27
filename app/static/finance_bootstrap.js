@@ -53,6 +53,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddWatchlist", openAddWatchlistModal);
   bind("btnAddGoal", openAddGoalModal);
   bind("btnAddCashflow", openAddCashflowModal);
+  bind("btnCashflowRollover", openCashflowRolloverModal);
   bind("btnCashflowBudget", openCashflowBudgetModal);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);

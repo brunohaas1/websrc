@@ -1257,6 +1257,120 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         )
         return jsonify({"ok": True, "month": month, "budget": safe_budget})
 
+    @app.post("/api/finance/cashflow/rollover")
+    @limiter.limit("10/minute")
+    @require_finance_key
+    def finance_cashflow_rollover():
+        body = request.get_json(silent=True) or {}
+        source_month = sanitize_text(str(body.get("source_month", "")), 7).strip()
+        target_month = sanitize_text(str(body.get("target_month", "")), 7).strip()
+        raw_type = sanitize_text(str(body.get("entry_type", "all")), 12).strip().lower()
+
+        if not re.match(r"^\d{4}-\d{2}$", source_month):
+            return jsonify({"error": "source_month inválido (use YYYY-MM)"}), 400
+        if not re.match(r"^\d{4}-\d{2}$", target_month):
+            return jsonify({"error": "target_month inválido (use YYYY-MM)"}), 400
+        if source_month == target_month:
+            return jsonify({"error": "source_month e target_month devem ser diferentes"}), 400
+        if raw_type not in ("all", "income", "expense"):
+            return jsonify({"error": "entry_type inválido (all|income|expense)"}), 400
+
+        entry_type = None if raw_type == "all" else raw_type
+
+        def _target_date(src_date: str, month_key: str) -> str:
+            year = int(month_key[:4])
+            month = int(month_key[5:7])
+            try:
+                src_day = int(str(src_date)[8:10])
+            except (TypeError, ValueError):
+                src_day = 1
+
+            if month == 12:
+                next_month_first = datetime(year + 1, 1, 1)
+            else:
+                next_month_first = datetime(year, month + 1, 1)
+            last_day = (next_month_first - timedelta(days=1)).day
+            safe_day = max(1, min(last_day, src_day))
+            return f"{year:04d}-{month:02d}-{safe_day:02d}"
+
+        source_rows = repo.list_fin_cashflow_entries(
+            month=source_month,
+            entry_type=entry_type,
+            limit=5000,
+        )
+        target_rows = repo.list_fin_cashflow_entries(
+            month=target_month,
+            entry_type=entry_type,
+            limit=5000,
+        )
+
+        existing_signatures: set[tuple[str, float, str, str, str]] = set()
+        for row in target_rows:
+            entry_date = str(row.get("entry_date") or "")[:10]
+            existing_signatures.add(
+                (
+                    str(row.get("entry_type") or "").strip().lower(),
+                    round(float(row.get("amount") or 0), 2),
+                    str(row.get("category") or "").strip().lower(),
+                    str(row.get("description") or "").strip().lower(),
+                    entry_date,
+                ),
+            )
+
+        created = 0
+        skipped = 0
+        created_ids: list[int] = []
+        for row in source_rows:
+            new_date = _target_date(str(row.get("entry_date") or ""), target_month)
+            signature = (
+                str(row.get("entry_type") or "").strip().lower(),
+                round(float(row.get("amount") or 0), 2),
+                str(row.get("category") or "").strip().lower(),
+                str(row.get("description") or "").strip().lower(),
+                new_date,
+            )
+            if signature in existing_signatures:
+                skipped += 1
+                continue
+
+            new_id = repo.add_fin_cashflow_entry(
+                {
+                    "entry_type": signature[0],
+                    "amount": signature[1],
+                    "category": str(row.get("category") or "").strip(),
+                    "description": str(row.get("description") or "").strip(),
+                    "entry_date": new_date,
+                    "notes": str(row.get("notes") or "").strip(),
+                },
+            )
+            existing_signatures.add(signature)
+            created += 1
+            created_ids.append(int(new_id))
+
+        _audit(
+            "rollover",
+            "cashflow",
+            None,
+            {
+                "source_month": source_month,
+                "target_month": target_month,
+                "entry_type": raw_type,
+                "created": created,
+                "skipped": skipped,
+            },
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "source_month": source_month,
+                "target_month": target_month,
+                "entry_type": raw_type,
+                "created": created,
+                "skipped": skipped,
+                "created_ids": created_ids,
+            },
+        )
+
     @app.post("/api/finance/cashflow")
     @limiter.limit("20/minute")
     @require_finance_key
