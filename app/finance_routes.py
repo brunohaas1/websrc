@@ -8,6 +8,7 @@ import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request
@@ -25,7 +26,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     FINANCE_CACHE_TTLS = {
         "summary": 60,
-        "market": 120,
+        "market": 300,
         "portfolio_history": 120,
         "asset_history": 120,
         "invested_history": 120,
@@ -135,6 +136,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     FINANCE_SETTINGS_SCHEMA: dict[str, dict] = {
         "brapi_token": {
             "type": "str", "max_len": 300, "default": "", "secret": True,
+        },
+        "brapi_monthly_limit": {
+            "type": "int", "min": 100, "max": 500000, "default": "15000",
         },
         "finance_api_key": {
             "type": "str", "max_len": 300, "default": "", "secret": True,
@@ -2315,6 +2319,34 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if cached:
             return jsonify(cached)
 
+        def _resolve_brapi_monthly_limit() -> int:
+            cfg_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
+            if cfg_limit is None:
+                cfg_limit = repo.get_setting("brapi_monthly_limit", "15000")
+            try:
+                parsed = int(str(cfg_limit).strip())
+            except Exception:
+                parsed = 15000
+            return max(100, min(500000, parsed))
+
+        brapi_month_key = datetime.now(timezone.utc).strftime("%Y%m")
+        brapi_usage_key = f"brapi_usage:{brapi_month_key}"
+        try:
+            brapi_usage_start = int(repo.get_setting(brapi_usage_key, "0") or 0)
+        except Exception:
+            brapi_usage_start = 0
+        brapi_limit = _resolve_brapi_monthly_limit()
+        brapi_usage_delta = 0
+        brapi_lock = Lock()
+
+        def _try_reserve_brapi_call() -> bool:
+            nonlocal brapi_usage_delta
+            with brapi_lock:
+                if brapi_usage_start + brapi_usage_delta >= brapi_limit:
+                    return False
+                brapi_usage_delta += 1
+                return True
+
         assets = repo.list_fin_assets()
         watchlist = repo.list_fin_watchlist()
 
@@ -2329,7 +2361,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             else:
                 stock_symbols.add(sym)
 
-        results: dict = {"stocks": {}, "crypto": {}, "indices": {}}
+        results: dict = {"stocks": {}, "crypto": {}, "indices": {}, "meta": {}}
 
         def _fetch_stocks():
             """Fetch BR stock data from brapi.dev."""
@@ -2392,34 +2424,31 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
                 loaded = False
 
-                # 1) brapi: one asset per request
+                # 1) Yahoo first to preserve brapi monthly quota.
                 try:
-                    params = {"fundamental": "true"}
-                    if brapi_token:
-                        params["token"] = brapi_token
-                    resp = http_requests.get(
-                        f"https://brapi.dev/api/quote/{sym}",
-                        params=params,
+                    yresp = http_requests.get(
+                        "https://query1.finance.yahoo.com/v7/finance/quote",
+                        params={"symbols": f"{sym}.SA"},
                         timeout=10,
                     )
-                    if resp.ok:
-                        data = resp.json()
-                        items = data.get("results", [])
+                    if yresp.ok:
+                        ydata = yresp.json()
+                        items = ydata.get("quoteResponse", {}).get("result", [])
                         if items:
                             item = items[0]
                             price = item.get("regularMarketPrice")
                             if price is not None:
                                 _save_stock_quote(
                                     sym=sym,
-                                    name=item.get("longName", sym),
+                                    name=item.get("longName")
+                                    or item.get("shortName")
+                                    or sym,
                                     price=price,
                                     previous_close=item.get(
                                         "regularMarketPreviousClose",
                                     ),
                                     change=item.get("regularMarketChange"),
-                                    change_pct=item.get(
-                                        "regularMarketChangePercent",
-                                    ),
+                                    change_pct=item.get("regularMarketChangePercent"),
                                     volume=item.get("regularMarketVolume"),
                                     market_cap=item.get("marketCap"),
                                     high=item.get("regularMarketDayHigh"),
@@ -2428,47 +2457,47 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                                 )
                                 loaded = True
                 except Exception as exc:
-                    logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
+                    logger.warning("Yahoo Finance fetch failed for %s: %s", sym, exc)
 
                 if loaded:
                     continue
 
-                # 2) Yahoo fallback: one asset per request
+                # 2) brapi fallback only if quota/token available.
+                if not brapi_token:
+                    continue
+                if not _try_reserve_brapi_call():
+                    continue
                 try:
-                    yresp = http_requests.get(
-                        "https://query1.finance.yahoo.com/v7/finance/quote",
-                        params={"symbols": f"{sym}.SA"},
+                    params = {"fundamental": "true", "token": brapi_token}
+                    resp = http_requests.get(
+                        f"https://brapi.dev/api/quote/{sym}",
+                        params=params,
                         timeout=10,
                     )
-                    if not yresp.ok:
-                        continue
-                    ydata = yresp.json()
-                    items = ydata.get("quoteResponse", {}).get("result", [])
-                    if not items:
-                        continue
-                    item = items[0]
-                    price = item.get("regularMarketPrice")
-                    if price is None:
-                        continue
-                    _save_stock_quote(
-                        sym=sym,
-                        name=item.get("longName")
-                        or item.get("shortName")
-                        or sym,
-                        price=price,
-                        previous_close=item.get(
-                            "regularMarketPreviousClose",
-                        ),
-                        change=item.get("regularMarketChange"),
-                        change_pct=item.get("regularMarketChangePercent"),
-                        volume=item.get("regularMarketVolume"),
-                        market_cap=item.get("marketCap"),
-                        high=item.get("regularMarketDayHigh"),
-                        low=item.get("regularMarketDayLow"),
-                        updated=item.get("regularMarketTime"),
-                    )
+                    if resp.ok:
+                        data = resp.json()
+                        items = data.get("results", [])
+                        if not items:
+                            continue
+                        item = items[0]
+                        price = item.get("regularMarketPrice")
+                        if price is None:
+                            continue
+                        _save_stock_quote(
+                            sym=sym,
+                            name=item.get("longName", sym),
+                            price=price,
+                            previous_close=item.get("regularMarketPreviousClose"),
+                            change=item.get("regularMarketChange"),
+                            change_pct=item.get("regularMarketChangePercent"),
+                            volume=item.get("regularMarketVolume"),
+                            market_cap=item.get("marketCap"),
+                            high=item.get("regularMarketDayHigh"),
+                            low=item.get("regularMarketDayLow"),
+                            updated=item.get("regularMarketTime"),
+                        )
                 except Exception as exc:
-                    logger.warning("Yahoo Finance fetch failed for %s: %s", sym, exc)
+                    logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
 
         def _fetch_crypto():
             """Fetch crypto from CoinGecko."""
@@ -2518,7 +2547,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 logger.warning("CoinGecko fetch failed: %s", exc)
 
         def _fetch_indices():
-            """Fetch market indices via brapi (with token) or Yahoo Finance fallback."""
+            """Fetch market indices via Yahoo first and brapi fallback for IBOV."""
             _INDEX_SYMBOLS = {
                 "^BVSP": "Ibovespa",
                 "^GSPC": "S&P 500",
@@ -2526,37 +2555,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "USDBRL=X": "Dólar (BRL)",
             }
 
-            # Try brapi.dev for IBOV (requires token)
-            brapi_ok = False
-            brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
-            if not brapi_token:
-                brapi_token = repo.get_setting("brapi_token", "").strip()
-            if brapi_token:
-                try:
-                    resp = http_requests.get(
-                        "https://brapi.dev/api/quote/%5EBVSP",
-                        params={"token": brapi_token},
-                        timeout=8,
-                    )
-                    if resp.ok:
-                        data = resp.json()
-                        for item in data.get("results", []):
-                            results["indices"][item.get("symbol", "^BVSP")] = {
-                                "name": item.get("longName", "Ibovespa"),
-                                "price": item.get("regularMarketPrice"),
-                                "change": item.get("regularMarketChange"),
-                                "change_pct": item.get(
-                                    "regularMarketChangePercent",
-                                ),
-                            }
-                        brapi_ok = bool(results["indices"])
-                except Exception as exc:
-                    logger.warning("brapi indices fetch failed: %s", exc)
-
             # Yahoo Finance v8 chart fallback — fetch all in parallel
             def _yahoo_index(yahoo_sym: str, default_name: str) -> None:
-                if brapi_ok and yahoo_sym == "^BVSP":
-                    return
                 try:
                     yresp = http_requests.get(
                         f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}",
@@ -2605,6 +2605,36 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 for f in as_completed(idx_futures):
                     f.result()
 
+            # brapi fallback only for IBOV when Yahoo is unavailable.
+            if "^BVSP" in results["indices"]:
+                return
+            brapi_token = str(app.config.get("BRAPI_TOKEN", "")).strip()
+            if not brapi_token:
+                brapi_token = repo.get_setting("brapi_token", "").strip()
+            if not brapi_token:
+                return
+            if not _try_reserve_brapi_call():
+                return
+            try:
+                resp = http_requests.get(
+                    "https://brapi.dev/api/quote/%5EBVSP",
+                    params={"token": brapi_token},
+                    timeout=8,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    items = data.get("results", [])
+                    if items:
+                        item = items[0]
+                        results["indices"]["^BVSP"] = {
+                            "name": item.get("longName", "Ibovespa"),
+                            "price": item.get("regularMarketPrice"),
+                            "change": item.get("regularMarketChange"),
+                            "change_pct": item.get("regularMarketChangePercent"),
+                        }
+            except Exception as exc:
+                logger.warning("brapi indices fetch failed: %s", exc)
+
         # Run all fetches in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
@@ -2614,6 +2644,21 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             ]
             for f in as_completed(futures):
                 f.result()  # propagate any unexpected errors
+
+        if brapi_usage_delta > 0:
+            final_usage = brapi_usage_start + brapi_usage_delta
+            repo.set_setting(brapi_usage_key, str(final_usage))
+        else:
+            final_usage = brapi_usage_start
+
+        remaining = max(0, brapi_limit - final_usage)
+        results["meta"]["brapi"] = {
+            "month": brapi_month_key,
+            "usage": final_usage,
+            "limit": brapi_limit,
+            "remaining": remaining,
+            "degraded": remaining <= 0,
+        }
 
         cache.set("finance:market", results, FINANCE_CACHE_TTLS["market"])
         return jsonify(results)
