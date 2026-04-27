@@ -1170,6 +1170,117 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _invalidate_cache_prefixes("finance:audit:")
         return jsonify({"ok": True})
 
+    # ── Cashflow (gains / expenses) ────────────────────────
+
+    @app.get("/api/finance/cashflow")
+    @limiter.limit("30/minute")
+    def finance_list_cashflow():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        entry_type = sanitize_text(str(request.args.get("type", "")), 12).strip().lower()
+        limit = int(request.args.get("limit", "500"))
+
+        if month and not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+        if entry_type and entry_type not in ("income", "expense"):
+            return jsonify({"error": "type inválido (income|expense)"}), 400
+
+        payload = repo.list_fin_cashflow_entries(
+            month=month or None,
+            entry_type=entry_type or None,
+            limit=max(1, min(2000, limit)),
+        )
+        return jsonify(payload)
+
+    @app.get("/api/finance/cashflow/summary")
+    @limiter.limit("30/minute")
+    def finance_cashflow_summary():
+        months = int(request.args.get("months", "6"))
+        payload = repo.get_fin_cashflow_summary(months=max(1, min(24, months)))
+        return jsonify(payload)
+
+    @app.post("/api/finance/cashflow")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_add_cashflow():
+        body = request.get_json(silent=True) or {}
+        entry_type = sanitize_text(str(body.get("entry_type", "")).lower(), 12)
+        if entry_type not in ("income", "expense"):
+            return jsonify({"error": "entry_type deve ser income ou expense"}), 400
+
+        try:
+            amount = float(body.get("amount", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "amount inválido"}), 400
+        if not _is_finite_number(amount) or amount <= 0:
+            return jsonify({"error": "amount deve ser > 0"}), 400
+
+        entry_date = sanitize_text(
+            str(body.get("entry_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+            10,
+        )
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+            return jsonify({"error": "entry_date inválida (use YYYY-MM-DD)"}), 400
+
+        data = {
+            "entry_type": entry_type,
+            "amount": amount,
+            "category": sanitize_text(str(body.get("category", "")), 60),
+            "description": sanitize_text(str(body.get("description", "")), 160),
+            "entry_date": entry_date,
+            "notes": sanitize_text(str(body.get("notes", "")), 500),
+        }
+        entry_id = repo.add_fin_cashflow_entry(data)
+        _audit("add", "cashflow", entry_id, {"entry_type": entry_type, "amount": amount})
+        return jsonify({"ok": True, "id": entry_id}), 201
+
+    @app.put("/api/finance/cashflow/<int:entry_id>")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_update_cashflow(entry_id: int):
+        body = request.get_json(silent=True) or {}
+        if not body:
+            return jsonify({"error": "JSON inválido"}), 400
+
+        data: dict[str, object] = {}
+        if "entry_type" in body:
+            entry_type = sanitize_text(str(body.get("entry_type", "")).lower(), 12)
+            if entry_type not in ("income", "expense"):
+                return jsonify({"error": "entry_type deve ser income ou expense"}), 400
+            data["entry_type"] = entry_type
+        if "amount" in body:
+            try:
+                amount = float(body.get("amount", 0))
+            except (TypeError, ValueError):
+                return jsonify({"error": "amount inválido"}), 400
+            if not _is_finite_number(amount) or amount <= 0:
+                return jsonify({"error": "amount deve ser > 0"}), 400
+            data["amount"] = amount
+        if "entry_date" in body:
+            entry_date = sanitize_text(str(body.get("entry_date") or ""), 10)
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+                return jsonify({"error": "entry_date inválida (use YYYY-MM-DD)"}), 400
+            data["entry_date"] = entry_date
+        if "category" in body:
+            data["category"] = sanitize_text(str(body.get("category", "")), 60)
+        if "description" in body:
+            data["description"] = sanitize_text(str(body.get("description", "")), 160)
+        if "notes" in body:
+            data["notes"] = sanitize_text(str(body.get("notes", "")), 500)
+
+        if not repo.update_fin_cashflow_entry(entry_id, data):
+            return jsonify({"error": "Lançamento não encontrado"}), 404
+
+        _audit("update", "cashflow", entry_id, {"fields": sorted(list(data.keys()))})
+        return jsonify({"ok": True})
+
+    @app.delete("/api/finance/cashflow/<int:entry_id>")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_delete_cashflow(entry_id: int):
+        repo.delete_fin_cashflow_entry(entry_id)
+        _audit("delete", "cashflow", entry_id, None)
+        return jsonify({"ok": True})
+
     @app.get("/api/finance/goals/passive-income")
     @limiter.limit("30/minute")
     def finance_get_passive_income_goal():

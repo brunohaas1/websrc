@@ -2621,6 +2621,152 @@ class Repository:
             conn.commit()
             return True
 
+    # ── Cashflow (income/expenses) ─────────────────────────
+
+    def add_fin_cashflow_entry(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_cashflow_entries
+                    (entry_type, amount, category, description, entry_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (
+                    data["entry_type"],
+                    data["amount"],
+                    data.get("category"),
+                    data.get("description"),
+                    data["entry_date"],
+                    data.get("notes"),
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_cashflow_entries(
+        self,
+        month: str | None = None,
+        entry_type: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM fin_cashflow_entries WHERE 1=1"
+        params: list[Any] = []
+
+        if month:
+            query += " AND substr(entry_date, 1, 7) = ?"
+            params.append(month)
+
+        if entry_type:
+            query += " AND entry_type = ?"
+            params.append(entry_type)
+
+        query += " ORDER BY entry_date DESC, created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(self._sql(query), tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_fin_cashflow_entry(self, entry_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_cashflow_entries WHERE id = ?"),
+                (entry_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_fin_cashflow_entry(self, entry_id: int, data: dict[str, Any]) -> bool:
+        fields = []
+        values: list[Any] = []
+        allowed = {"entry_type", "amount", "category", "description", "entry_date", "notes"}
+        for key, value in data.items():
+            if key in allowed:
+                fields.append(f"{key} = ?")
+                values.append(value)
+        if not fields:
+            return False
+
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(entry_id)
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(
+                    f"UPDATE fin_cashflow_entries SET {', '.join(fields)} WHERE id = ?"
+                ),
+                tuple(values),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def delete_fin_cashflow_entry(self, entry_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_cashflow_entries WHERE id = ?"),
+                (entry_id,),
+            )
+            conn.commit()
+            return True
+
+    def get_fin_cashflow_summary(self, months: int = 6) -> dict[str, Any]:
+        safe_months = max(1, min(24, int(months)))
+        rows = self.list_fin_cashflow_entries(limit=5000)
+
+        monthly: dict[str, dict[str, float]] = {}
+        total_income = 0.0
+        total_expense = 0.0
+
+        for row in rows:
+            month_key = str(row.get("entry_date") or "")[:7]
+            if len(month_key) != 7:
+                continue
+            amount = float(row.get("amount") or 0)
+            entry_type = str(row.get("entry_type") or "")
+            bucket = monthly.setdefault(month_key, {"income": 0.0, "expense": 0.0})
+            if entry_type == "income":
+                bucket["income"] += amount
+                total_income += amount
+            elif entry_type == "expense":
+                bucket["expense"] += amount
+                total_expense += amount
+
+        month_keys = sorted(monthly.keys())[-safe_months:]
+        monthly_rows: list[dict[str, Any]] = []
+        for mk in month_keys:
+            inc = float(monthly[mk].get("income") or 0)
+            exp = float(monthly[mk].get("expense") or 0)
+            monthly_rows.append(
+                {
+                    "month": mk,
+                    "income": round(inc, 2),
+                    "expense": round(exp, 2),
+                    "balance": round(inc - exp, 2),
+                },
+            )
+
+        now_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        now_inc = float(monthly.get(now_month, {}).get("income") or 0)
+        now_exp = float(monthly.get(now_month, {}).get("expense") or 0)
+
+        return {
+            "months": safe_months,
+            "current_month": now_month,
+            "current_income": round(now_inc, 2),
+            "current_expense": round(now_exp, 2),
+            "current_balance": round(now_inc - now_exp, 2),
+            "total_income": round(total_income, 2),
+            "total_expense": round(total_expense, 2),
+            "total_balance": round(total_income - total_expense, 2),
+            "monthly": monthly_rows,
+        }
+
     # ── Financial Summary ───────────────────────────────────
 
     def get_fin_summary(self) -> dict[str, Any]:

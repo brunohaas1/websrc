@@ -665,6 +665,41 @@ body.fin-density-comfortable .fin-table td {
   gap: 6px;
 }
 
+/* ── Cashflow ─────────────────────────────────────────── */
+.fin-cashflow-summary {
+  margin-bottom: 12px;
+}
+
+.fin-cashflow-chart-wrap {
+  min-height: 240px;
+  max-height: 280px;
+}
+
+.fin-cashflow-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.fin-cashflow-kpi {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.28);
+  display: grid;
+  gap: 3px;
+}
+
+.fin-cashflow-kpi span {
+  font-size: 0.72rem;
+  color: var(--text-muted, #8b92a5);
+}
+
+.fin-cashflow-kpi strong {
+  font-size: 0.9rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
 .fin-passive-goal-summary {
   margin-bottom: 12px;
 }

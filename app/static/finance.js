@@ -8,6 +8,8 @@ const FIN = {
   summary: null,
   portfolio: [],
   transactions: [],
+  cashflowEntries: [],
+  cashflowSummary: null,
   watchlist: [],
   goals: [],
   assets: [],
@@ -530,6 +532,7 @@ function runEmptyStateAction(action) {
   const map = {
     addAsset: openAddAssetModal,
     addTransaction: openAddTransactionModal,
+    addCashflow: openAddCashflowModal,
     addDividend: openAddDividendModal,
     addWatchlist: openAddWatchlistModal,
     addGoal: openAddGoalModal,
@@ -644,6 +647,31 @@ async function loadAll(options = {}) {
         ),
       ]);
 
+      const selectedMonth = String(byId("finCashflowMonth")?.value || "").trim();
+      const [cashflowEntries, cashflowSummary] = await Promise.all([
+        fetchWidgetJsonCached(
+          `cashflow-entries:${selectedMonth || "all"}`,
+          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}`,
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "cashflow-summary",
+          "/api/finance/cashflow/summary?months=12",
+          {
+            current_month: "",
+            current_income: 0,
+            current_expense: 0,
+            current_balance: 0,
+            total_income: 0,
+            total_expense: 0,
+            total_balance: 0,
+            monthly: [],
+          },
+          { useCache: useWidgetCache },
+        ),
+      ]);
+
       FIN.watchlist = Array.isArray(watchlist) ? watchlist : [];
       FIN.goals = Array.isArray(goals) ? goals : [];
       FIN.assets = (Array.isArray(assets) ? assets : []).map((a) => ({
@@ -655,11 +683,16 @@ async function loadAll(options = {}) {
       FIN.dividends = Array.isArray(dividends) ? dividends : [];
       FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
       FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
+      FIN.cashflowEntries = Array.isArray(cashflowEntries) ? cashflowEntries : [];
+      FIN.cashflowSummary = cashflowSummary || { monthly: [] };
 
       renderSummary(FIN.summary);
       renderWatchlist(FIN.watchlist);
       renderGoals(FIN.goals);
       renderDividends(FIN.dividends);
+      renderCashflowSummary(FIN.cashflowSummary);
+      renderCashflow(FIN.cashflowEntries);
+      syncCashflowMonthFilter(FIN.cashflowSummary);
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();
@@ -917,6 +950,20 @@ async function refreshDividendsPanels() {
   updateLastUpdated();
 }
 
+async function refreshCashflowPanel() {
+  const month = String(byId("finCashflowMonth")?.value || "").trim();
+  const [entries, summary] = await Promise.all([
+    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}`).then((r) => r.json()),
+    finFetch("/api/finance/cashflow/summary?months=12").then((r) => r.json()),
+  ]);
+  FIN.cashflowEntries = Array.isArray(entries) ? entries : [];
+  FIN.cashflowSummary = summary || { monthly: [] };
+  renderCashflowSummary(FIN.cashflowSummary);
+  renderCashflow(FIN.cashflowEntries);
+  syncCashflowMonthFilter(FIN.cashflowSummary);
+  updateLastUpdated();
+}
+
 async function refreshImportPanels() {
   const [summary, transactions, assets, allocTargets, dividends] = await Promise.all([
     finFetch("/api/finance/summary").then((r) => r.json()),
@@ -985,6 +1032,7 @@ async function refreshByDomains(domains) {
     watchlist: refreshWatchlistPanel,
     goals: refreshGoalsPanel,
     dividends: refreshDividendsPanels,
+    cashflow: refreshCashflowPanel,
   };
 
   for (const domain of normalized) {
@@ -1871,6 +1919,224 @@ function renderGoals(goals) {
     .join("");
 }
 
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function syncCashflowMonthFilter(summary) {
+  const sel = byId("finCashflowMonth");
+  if (!sel) return;
+  const prev = String(sel.value || "");
+
+  const months = Array.isArray(summary?.monthly)
+    ? summary.monthly.map((m) => String(m.month || "").slice(0, 7)).filter((m) => /^\d{4}-\d{2}$/.test(m))
+    : [];
+  const merged = [...new Set([currentMonthKey(), ...months])].sort().reverse();
+
+  const opts = ['<option value="">Todos os meses</option>'];
+  merged.forEach((m) => {
+    opts.push(`<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`);
+  });
+  sel.innerHTML = opts.join("");
+
+  const next = merged.includes(prev) ? prev : (prev || currentMonthKey());
+  sel.value = next;
+}
+
+function renderCashflowSummary(summary) {
+  const el = byId("finCashflowSummary");
+  if (!el) return;
+  const s = summary || {};
+  const balanceCls = Number(s.current_balance || 0) >= 0 ? "fin-up" : "fin-down";
+  el.innerHTML = `
+    <div class="fin-cashflow-kpis">
+      <div class="fin-cashflow-kpi">
+        <span>Mês atual • Ganhos</span>
+        <strong>${formatBRL(s.current_income || 0)}</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Mês atual • Gastos</span>
+        <strong>${formatBRL(s.current_expense || 0)}</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Mês atual • Saldo</span>
+        <strong class="${balanceCls}">${formatBRL(s.current_balance || 0)}</strong>
+      </div>
+      <div class="fin-cashflow-kpi">
+        <span>Saldo total</span>
+        <strong class="${Number(s.total_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(s.total_balance || 0)}</strong>
+      </div>
+    </div>
+  `;
+}
+
+function renderCashflowChart(summary) {
+  const canvas = byId("cashflowChart");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  const monthly = Array.isArray(summary?.monthly)
+    ? summary.monthly
+    : [];
+
+  if (!monthly.length) {
+    if (FIN.charts.cashflow) {
+      FIN.charts.cashflow.destroy();
+      FIN.charts.cashflow = null;
+    }
+    return;
+  }
+
+  const ordered = [...monthly].sort((a, b) => String(a.month || "").localeCompare(String(b.month || "")));
+  const labels = ordered.map((m) => String(m.month || "").slice(2));
+  const incomes = ordered.map((m) => Number(m.income || 0));
+  const expenses = ordered.map((m) => Number(m.expense || 0));
+
+  let running = 0;
+  const cumulative = ordered.map((m) => {
+    running += Number(m.balance || 0);
+    return running;
+  });
+
+  if (FIN.charts.cashflow) FIN.charts.cashflow.destroy();
+
+  FIN.charts.cashflow = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          type: "bar",
+          label: "Ganhos",
+          data: incomes,
+          backgroundColor: "rgba(34, 197, 94, 0.55)",
+          borderColor: "#22c55e",
+          borderWidth: 1,
+          borderRadius: 5,
+        },
+        {
+          type: "bar",
+          label: "Gastos",
+          data: expenses,
+          backgroundColor: "rgba(239, 68, 68, 0.45)",
+          borderColor: "#ef4444",
+          borderWidth: 1,
+          borderRadius: 5,
+        },
+        {
+          type: "line",
+          label: "Saldo acumulado",
+          data: cumulative,
+          yAxisID: "y1",
+          borderColor: "#60a5fa",
+          backgroundColor: "rgba(96, 165, 250, 0.2)",
+          pointBackgroundColor: "#60a5fa",
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          borderWidth: 2,
+          tension: 0.28,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          labels: {
+            color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: "rgba(255,255,255,0.04)" },
+          ticks: { color: "#94a3b8" },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: "rgba(255,255,255,0.05)" },
+          ticks: {
+            color: "#94a3b8",
+            callback: (v) => formatBRL(v),
+          },
+        },
+        y1: {
+          position: "right",
+          grid: { drawOnChartArea: false },
+          ticks: {
+            color: "#93c5fd",
+            callback: (v) => formatBRL(v),
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderCashflow(entries) {
+  const el = byId("finCashflowContent");
+  if (!el) return;
+  renderCashflowChart(FIN.cashflowSummary);
+  const rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) {
+    el.innerHTML = renderEmptyState(
+      "Nenhum lançamento de ganhos/gastos para este mês.",
+      "Adicionar lançamento",
+      "addCashflow",
+    );
+    return;
+  }
+
+  const html = rows.map((entry) => {
+    const type = String(entry.entry_type || "");
+    const isIncome = type === "income";
+    const badge = isIncome ? "fin-badge-buy" : "fin-badge-sell";
+    const label = isIncome ? "GANHO" : "GASTO";
+    const amountCls = isIncome ? "fin-up" : "fin-down";
+    return `
+      <tr>
+        <td>${escapeHtml(String(entry.entry_date || "").slice(0, 10))}</td>
+        <td><span class="fin-badge ${badge}">${label}</span></td>
+        <td>${escapeHtml(entry.category || "—")}</td>
+        <td>${escapeHtml(entry.description || "—")}</td>
+        <td class="text-right mono ${amountCls}">${formatBRL(entry.amount || 0)}</td>
+        <td>${escapeHtml(entry.notes || "")}</td>
+        <td class="text-center">
+          <button class="fin-del-btn" data-action="openEditCashflowModal" data-id="${entry.id}" title="Editar">✎</button>
+          <button class="fin-del-btn" data-action="deleteCashflowEntry" data-id="${entry.id}" title="Excluir">✕</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="fin-table-wrap">
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Tipo</th>
+            <th>Categoria</th>
+            <th>Descrição</th>
+            <th class="text-right">Valor</th>
+            <th>Notas</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${html}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function getPassiveIncomeProgress() {
   const monthTotals = {};
   (FIN.dividends || []).forEach((d) => {
@@ -2329,6 +2595,8 @@ function openFinModal(title, bodyHtml) {
   const formActionMap = {
     submitAddAsset,
     submitAddTransaction,
+    submitAddCashflow,
+    submitEditCashflow,
     submitAddWatchlist,
     submitAddGoal,
     submitEditGoal,
@@ -3582,6 +3850,163 @@ async function deleteGoal(goalId) {
   }
 }
 
+function openAddCashflowModal() {
+  openFinModal("Novo Lançamento (Ganho/Gasto)", `
+    <form data-form-action="submitAddCashflow">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmCfType">
+            <option value="income">Ganho</option>
+            <option value="expense">Gasto</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Data</label>
+          <input id="fmCfDate" type="date" value="${new Date().toISOString().slice(0, 10)}" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Valor (R$)</label>
+          <input id="fmCfAmount" type="number" min="0.01" step="0.01" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input id="fmCfCategory" placeholder="Ex.: Salário, Moradia, Alimentação" />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Descrição</label>
+        <input id="fmCfDescription" placeholder="Resumo do lançamento" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Notas</label>
+        <textarea id="fmCfNotes" rows="2" placeholder="Opcional"></textarea>
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar Lançamento</button>
+    </form>
+  `);
+}
+
+async function submitAddCashflow(e) {
+  e.preventDefault();
+  const body = {
+    entry_type: String(byId("fmCfType")?.value || "expense"),
+    amount: Number(byId("fmCfAmount")?.value || 0),
+    category: String(byId("fmCfCategory")?.value || "").trim(),
+    description: String(byId("fmCfDescription")?.value || "").trim(),
+    entry_date: String(byId("fmCfDate")?.value || "").trim(),
+    notes: String(byId("fmCfNotes")?.value || "").trim(),
+  };
+  try {
+    const resp = await finFetch("/api/finance/cashflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao salvar lançamento");
+      return;
+    }
+    closeFinModal();
+    await refreshByDomains(["cashflow"]);
+    showToast("Lançamento salvo!", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+function openEditCashflowModal(entryId) {
+  const entry = (FIN.cashflowEntries || []).find((i) => Number(i.id) === Number(entryId));
+  if (!entry) {
+    showToast("Lançamento não encontrado");
+    return;
+  }
+  openFinModal("Editar Lançamento", `
+    <form data-form-action="submitEditCashflow" data-form-arg="${entryId}">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmCfType">
+            <option value="income" ${entry.entry_type === "income" ? "selected" : ""}>Ganho</option>
+            <option value="expense" ${entry.entry_type === "expense" ? "selected" : ""}>Gasto</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Data</label>
+          <input id="fmCfDate" type="date" value="${escapeHtml(String(entry.entry_date || "").slice(0, 10))}" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Valor (R$)</label>
+          <input id="fmCfAmount" type="number" min="0.01" step="0.01" value="${Number(entry.amount || 0)}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input id="fmCfCategory" value="${escapeHtml(entry.category || "")}" />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Descrição</label>
+        <input id="fmCfDescription" value="${escapeHtml(entry.description || "")}" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Notas</label>
+        <textarea id="fmCfNotes" rows="2" placeholder="Opcional">${escapeHtml(entry.notes || "")}</textarea>
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar Alterações</button>
+    </form>
+  `);
+}
+
+async function submitEditCashflow(e, entryId) {
+  e.preventDefault();
+  const body = {
+    entry_type: String(byId("fmCfType")?.value || "expense"),
+    amount: Number(byId("fmCfAmount")?.value || 0),
+    category: String(byId("fmCfCategory")?.value || "").trim(),
+    description: String(byId("fmCfDescription")?.value || "").trim(),
+    entry_date: String(byId("fmCfDate")?.value || "").trim(),
+    notes: String(byId("fmCfNotes")?.value || "").trim(),
+  };
+  try {
+    const resp = await finFetch(`/api/finance/cashflow/${entryId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao atualizar lançamento");
+      return;
+    }
+    closeFinModal();
+    await refreshByDomains(["cashflow"]);
+    showToast("Lançamento atualizado!", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function deleteCashflowEntry(entryId) {
+  if (!confirm("Excluir este lançamento?")) return;
+  try {
+    const resp = await finFetch(`/api/finance/cashflow/${entryId}`, { method: "DELETE" });
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.error || "Erro ao excluir lançamento");
+      return;
+    }
+    await refreshByDomains(["cashflow"]);
+    showToast("Lançamento removido.", "success");
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
 // Dividends domain moved to app/static/finance_dividends.js.
 
 function getCadastroCollections() {
@@ -3614,6 +4039,15 @@ function getCadastroCollections() {
         g.category || "sem categoria",
       ],
       search: `${g.name} ${g.category || ""} ${g.notes || ""}`.toLowerCase(),
+    })),
+    cashflow: FIN.cashflowEntries.map((entry) => ({
+      title: `${entry.entry_type === "income" ? "Ganho" : "Gasto"} — ${formatBRL(entry.amount || 0)}`,
+      subtitle: entry.category || "sem categoria",
+      meta: [
+        String(entry.entry_date || "").slice(0, 10),
+        entry.description || "sem descrição",
+      ],
+      search: `${entry.entry_type || ""} ${entry.category || ""} ${entry.description || ""} ${entry.notes || ""}`.toLowerCase(),
     })),
     dividends: FIN.dividends.map((d) => ({
       title: `${d.symbol || "—"} — ${formatBRL(d.total_amount)}`,
@@ -3666,6 +4100,7 @@ function openCadastroBrowserModal(initialType = "assets") {
         <option value="assets" ${initialType === "assets" ? "selected" : ""}>Ativos</option>
         <option value="watchlist" ${initialType === "watchlist" ? "selected" : ""}>Watchlist</option>
         <option value="goals" ${initialType === "goals" ? "selected" : ""}>Metas</option>
+        <option value="cashflow" ${initialType === "cashflow" ? "selected" : ""}>Ganhos/Gastos</option>
         <option value="dividends" ${initialType === "dividends" ? "selected" : ""}>Dividendos</option>
       </select>
       <input id="fmCadastroSearch" class="fin-cadastro-search" placeholder="Filtrar por nome, símbolo, nota, categoria..." />

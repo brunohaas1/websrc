@@ -289,6 +289,20 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT,
+    description TEXT,
+    entry_date TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
+ON fin_cashflow_entries(entry_date DESC, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     asset_id INTEGER NOT NULL,
@@ -580,6 +594,20 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
+    id BIGSERIAL PRIMARY KEY,
+    entry_type TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL,
+    category TEXT,
+    description TEXT,
+    entry_date DATE NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
+ON fin_cashflow_entries(entry_date DESC, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id BIGSERIAL PRIMARY KEY,

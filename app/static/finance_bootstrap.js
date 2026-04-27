@@ -51,6 +51,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddTransaction", openAddTransactionModal);
   bind("btnAddWatchlist", openAddWatchlistModal);
   bind("btnAddGoal", openAddGoalModal);
+  bind("btnAddCashflow", openAddCashflowModal);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
@@ -93,12 +94,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const histSel = byId("historyAssetSelect");
+  const cashflowMonthSel = byId("finCashflowMonth");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
   const histCompare = byId("historyCompareTotal");
   if (histSel) {
     histSel.addEventListener("change", loadHistoryFromControls);
+  }
+  if (cashflowMonthSel) {
+    cashflowMonthSel.addEventListener("change", () => refreshByDomains(["cashflow"]));
   }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);
@@ -136,6 +141,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const actionMap = {
     deleteAsset,
     deleteTransaction,
+    openEditCashflowModal,
+    deleteCashflowEntry,
     deleteWatchlistItem,
     deleteGoal,
     openEditGoalModal,

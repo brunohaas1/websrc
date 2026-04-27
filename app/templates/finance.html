@@ -200,6 +200,24 @@
         </div>
       </section>
 
+      <!-- ── Cashflow (Ganhos e Gastos) ────────────────── -->
+      <section class="fin-card fin-wide" id="finCashflowCard">
+        <h2>
+          🧾 Fluxo de Caixa
+          <select id="finCashflowMonth" class="fin-inline-select" title="Filtrar por mês">
+            <option value="">Todos os meses</option>
+          </select>
+          <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button>
+        </h2>
+        <div id="finCashflowSummary" class="fin-cashflow-summary"></div>
+        <div class="fin-card-body fin-chart-container fin-cashflow-chart-wrap">
+          <canvas id="cashflowChart" height="220"></canvas>
+        </div>
+        <div id="finCashflowContent" class="fin-card-body">
+          <p class="fin-empty">Carregando fluxo de caixa...</p>
+        </div>
+      </section>
+
       <!-- ── P&L Chart ────────────────────────────────── -->
       <section class="fin-card" id="finPnLCard">
         <h2>💹 P&amp;L por Ativo</h2>

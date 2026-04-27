@@ -658,6 +658,105 @@ class TestWatchlist:
         assert resp.status_code == 404
 
 
+class TestCashflow:
+    def test_cashflow_list_empty(self, client):
+        resp = client.get("/api/finance/cashflow")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+    def test_cashflow_create_and_filter_by_month(self, client):
+        r1 = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 5000,
+            "category": "Salario",
+            "description": "Pagamento mensal",
+            "entry_date": "2026-04-10",
+        })
+        r2 = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 1200,
+            "category": "Moradia",
+            "description": "Aluguel",
+            "entry_date": "2026-04-05",
+        })
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+
+        april = client.get("/api/finance/cashflow?month=2026-04")
+        assert april.status_code == 200
+        payload = april.get_json()
+        assert len(payload) == 2
+        assert {p["entry_type"] for p in payload} == {"income", "expense"}
+
+    def test_cashflow_summary(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 1000,
+            "category": "Freela",
+            "description": "Projeto A",
+            "entry_date": "2026-03-01",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 400,
+            "category": "Transporte",
+            "description": "Combustivel",
+            "entry_date": "2026-03-03",
+        })
+
+        resp = client.get("/api/finance/cashflow/summary?months=12")
+        assert resp.status_code == 200
+        summary = resp.get_json()
+        assert summary["total_income"] >= 1000
+        assert summary["total_expense"] >= 400
+        assert "monthly" in summary
+        assert isinstance(summary["monthly"], list)
+
+    def test_cashflow_update_and_delete(self, client):
+        create = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 200,
+            "category": "Lazer",
+            "description": "Cinema",
+            "entry_date": "2026-04-20",
+        })
+        assert create.status_code == 201
+        entry_id = create.get_json()["id"]
+
+        upd = jput(client, f"/api/finance/cashflow/{entry_id}", {
+            "amount": 250,
+            "description": "Cinema + lanche",
+        })
+        assert upd.status_code == 200
+
+        items = client.get("/api/finance/cashflow?month=2026-04").get_json()
+        row = [i for i in items if i["id"] == entry_id][0]
+        assert row["amount"] == pytest.approx(250)
+
+        dele = client.delete(f"/api/finance/cashflow/{entry_id}")
+        assert dele.status_code == 200
+
+    def test_cashflow_validates_payload(self, client):
+        bad_type = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "foo",
+            "amount": 10,
+            "description": "x",
+            "entry_date": "2026-04-10",
+        })
+        assert bad_type.status_code == 400
+
+        bad_amount = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": -1,
+            "description": "x",
+            "entry_date": "2026-04-10",
+        })
+        assert bad_amount.status_code == 400
+
+        bad_month_filter = client.get("/api/finance/cashflow?month=2026/04")
+        assert bad_month_filter.status_code == 400
+
+
 class TestFinanceAdvanced:
     def test_performance_metrics(self, client):
         asset = _add_asset(client).get_json()
