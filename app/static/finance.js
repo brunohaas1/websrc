@@ -26,6 +26,7 @@ const FIN = {
   _txFilter: { asset: "", type: "", dateFrom: "", dateTo: "", minTotal: "", maxTotal: "" },
   _txSelected: {},
   performanceMetrics: null,
+  opsHealth: null,
   auditEntries: [],
   _rebalanceLoaded: false,
   _secondaryCache: { ts: 0, payload: null },
@@ -38,6 +39,13 @@ const FIN = {
   layoutSaveTimer: null,
   defaultCardOrder: [],
 };
+
+function _healthStatusClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "ok") return "fin-health-chip fin-health-chip--ok";
+  if (s === "degraded") return "fin-health-chip fin-health-chip--warn";
+  return "fin-health-chip fin-health-chip--neutral";
+}
 
 const SECONDARY_CACHE_TTL_MS = 25000;
 const MARKET_SNAPSHOT_KEY = "fin_market_snapshot_v1";
@@ -1032,18 +1040,22 @@ async function _loadSecondaryPanels(options = {}) {
     const cached = FIN._secondaryCache.payload;
     FIN.marketData = cached.market || {};
     FIN.performanceMetrics = cached.metrics && !cached.metrics.error ? cached.metrics : null;
+    FIN.opsHealth = cached.health && cached.health.ok ? cached.health : null;
     renderIndices((FIN.marketData && FIN.marketData.indices) || {});
     renderMarketDataHealth({
       stale: !!cached.marketStale,
+      quoteStale: !!cached.marketQuoteStale,
+      staleItems: Number(cached.marketStaleItems || 0),
       snapshotAt: cached.marketSnapshotAt || null,
       snapshotAgeMs: cached.marketSnapshotAgeMs || 0,
       snapshotExpired: !!cached.marketSnapshotExpired,
     });
     renderPerformanceMetrics(FIN.performanceMetrics);
+    renderOpsHealth(FIN.opsHealth);
     return { cacheHit: true, durationMs: _ms(performance.now() - started) };
   }
 
-  const [marketMeta, metrics] = await Promise.all([
+  const [marketMeta, metrics, health] = await Promise.all([
     (async () => {
       try {
         const resp = await finFetch("/api/finance/market-data");
@@ -1084,10 +1096,12 @@ async function _loadSecondaryPanels(options = {}) {
       }
     })(),
     finFetch("/api/finance/metrics/performance").then((r) => r.json()).catch(() => null),
+    finFetch("/api/finance/health").then((r) => r.json()).catch(() => null),
   ]);
 
   FIN.marketData = marketMeta.market || {};
   FIN.performanceMetrics = metrics && !metrics.error ? metrics : null;
+  FIN.opsHealth = health && health.ok ? health : null;
   FIN._secondaryCache = {
     ts: Date.now(),
     payload: {
@@ -1099,6 +1113,7 @@ async function _loadSecondaryPanels(options = {}) {
       marketSnapshotAgeMs: marketMeta.snapshotAgeMs || 0,
       marketSnapshotExpired: !!marketMeta.snapshotExpired,
       metrics,
+      health,
     },
   };
 
@@ -1106,6 +1121,7 @@ async function _loadSecondaryPanels(options = {}) {
   renderWatchlist(FIN.watchlist || []);
   renderMarketDataHealth(marketMeta);
   renderPerformanceMetrics(FIN.performanceMetrics);
+  renderOpsHealth(FIN.opsHealth);
   return { cacheHit: false, durationMs: _ms(performance.now() - started) };
 }
 
@@ -1164,6 +1180,76 @@ function renderPerformanceMetrics(metrics) {
     <div class="fin-mini-metric">
       <span>Patrimônio</span>
       <strong>${formatBRL(metrics.current_value)}</strong>
+    </div>
+  `;
+}
+
+function _formatPercent(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+function renderOpsHealth(health) {
+  const el = byId("finOpsHealthContent");
+  if (!el) return;
+
+  if (!health || health.ok === false) {
+    el.innerHTML = '<p class="fin-empty">Health indisponível no momento.</p>';
+    return;
+  }
+
+  const checks = health.checks || {};
+  const quota = checks.brapi_quota || {};
+  const market = checks.market_quality || {};
+  const providers = checks.providers || {};
+  const providerRows = Object.values(providers.metrics || {}).sort((a, b) => {
+    return String(a.provider || "").localeCompare(String(b.provider || ""));
+  });
+
+  const degradedProviders = Array.isArray(providers.degraded_providers)
+    ? providers.degraded_providers
+    : [];
+  const statusCls = _healthStatusClass(health.status);
+  const updatedAt = health.timestamp
+    ? new Date(health.timestamp).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+    : "—";
+
+  const providersHtml = providerRows.length
+    ? providerRows.map((p) => {
+      const pName = escapeHtml(String(p.provider || "—").toUpperCase());
+      const success = _formatPercent(p.success_rate);
+      const fallback = _formatPercent(p.fallback_rate);
+      const latency = p.avg_latency_ms == null ? "—" : `${formatNumber(p.avg_latency_ms, 1)} ms`;
+      const total = formatNumber(p.total || 0, 0);
+      const degraded = degradedProviders.includes(p.provider)
+        ? '<span class="fin-health-provider-badge fin-health-provider-badge--warn">degradado</span>'
+        : '<span class="fin-health-provider-badge">ok</span>';
+      return `
+        <div class="fin-health-provider-row">
+          <div class="fin-health-provider-name">${pName} ${degraded}</div>
+          <div class="fin-health-provider-metrics">
+            <span>Total: <strong>${total}</strong></span>
+            <span>Sucesso: <strong>${success}</strong></span>
+            <span>Fallback: <strong>${fallback}</strong></span>
+            <span>Latência média: <strong>${latency}</strong></span>
+          </div>
+        </div>
+      `;
+    }).join("")
+    : '<p class="fin-empty">Sem métricas de provedores hoje.</p>';
+
+  el.innerHTML = `
+    <div class="fin-health-overview">
+      <span class="${statusCls}">${escapeHtml(String(health.status || "unknown").toUpperCase())}</span>
+      <span class="fin-health-meta">Atualizado: ${updatedAt}</span>
+      <span class="fin-health-meta">BRAPI: ${formatNumber(quota.remaining || 0, 0)} restantes</span>
+      <span class="fin-health-meta">Stale: ${formatNumber(market.stale_items || 0, 0)}</span>
+    </div>
+    <div class="fin-health-provider-list">
+      ${providersHtml}
     </div>
   `;
 }
