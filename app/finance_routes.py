@@ -262,6 +262,138 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         except Exception:
             pass
 
+    def _track_api_provider_latency(
+        provider: str,
+        endpoint: str,
+        latency_ms: float,
+    ) -> None:
+        try:
+            if not math.isfinite(float(latency_ms)):
+                return
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            base_key = f"api_usage:{today}:{endpoint}:{provider}"
+            sum_key = f"{base_key}:latency_sum_ms"
+            count_key = f"{base_key}:latency_count"
+            cur_sum = float(repo.get_setting(sum_key, "0") or 0)
+            cur_count = int(repo.get_setting(count_key, "0") or 0)
+            repo.set_setting(sum_key, f"{cur_sum + float(latency_ms):.3f}")
+            repo.set_setting(count_key, str(cur_count + 1))
+        except Exception:
+            pass
+
+    def _track_api_provider_fallback(provider: str, endpoint: str = "") -> None:
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            base_key = f"api_usage:{today}:{endpoint}:{provider}"
+            fallback_key = f"{base_key}:fallback"
+            cur = int(repo.get_setting(fallback_key, "0") or 0)
+            repo.set_setting(fallback_key, str(cur + 1))
+        except Exception:
+            pass
+
+    def _provider_day_metrics(day_key: str) -> dict[str, dict]:
+        settings = repo.get_all_settings()
+        prefix = f"api_usage:{day_key}:"
+        providers: dict[str, dict] = {}
+
+        for key, value in settings.items():
+            if not key.startswith(prefix):
+                continue
+            parts = key.split(":")
+            if len(parts) < 4:
+                continue
+            endpoint = str(parts[2] or "")
+            provider = str(parts[3] or "")
+            suffix = parts[4] if len(parts) >= 5 else ""
+            if not endpoint or not provider:
+                continue
+
+            p = providers.setdefault(
+                provider,
+                {
+                    "provider": provider,
+                    "total": 0,
+                    "ok": 0,
+                    "err": 0,
+                    "fallback": 0,
+                    "latency_sum_ms": 0.0,
+                    "latency_count": 0,
+                    "endpoints": {},
+                },
+            )
+            ep = p["endpoints"].setdefault(
+                endpoint,
+                {
+                    "total": 0,
+                    "ok": 0,
+                    "err": 0,
+                    "fallback": 0,
+                    "latency_sum_ms": 0.0,
+                    "latency_count": 0,
+                },
+            )
+
+            if suffix == "ok":
+                n = int(value or 0)
+                p["ok"] += n
+                ep["ok"] += n
+            elif suffix == "err":
+                n = int(value or 0)
+                p["err"] += n
+                ep["err"] += n
+            elif suffix == "fallback":
+                n = int(value or 0)
+                p["fallback"] += n
+                ep["fallback"] += n
+            elif suffix == "latency_sum_ms":
+                n = float(value or 0)
+                p["latency_sum_ms"] += n
+                ep["latency_sum_ms"] += n
+            elif suffix == "latency_count":
+                n = int(value or 0)
+                p["latency_count"] += n
+                ep["latency_count"] += n
+            elif suffix == "":
+                n = int(value or 0)
+                p["total"] += n
+                ep["total"] += n
+
+        for provider_metrics in providers.values():
+            total = int(provider_metrics.get("total") or 0)
+            ok = int(provider_metrics.get("ok") or 0)
+            fb = int(provider_metrics.get("fallback") or 0)
+            lsum = float(provider_metrics.get("latency_sum_ms") or 0)
+            lcount = int(provider_metrics.get("latency_count") or 0)
+            provider_metrics["success_rate"] = round((ok / total), 4) if total > 0 else None
+            provider_metrics["fallback_rate"] = round((fb / total), 4) if total > 0 else None
+            provider_metrics["avg_latency_ms"] = round((lsum / lcount), 2) if lcount > 0 else None
+            provider_metrics.pop("latency_sum_ms", None)
+
+            for endpoint_metrics in provider_metrics["endpoints"].values():
+                etotal = int(endpoint_metrics.get("total") or 0)
+                eok = int(endpoint_metrics.get("ok") or 0)
+                efb = int(endpoint_metrics.get("fallback") or 0)
+                elsum = float(endpoint_metrics.get("latency_sum_ms") or 0)
+                elcount = int(endpoint_metrics.get("latency_count") or 0)
+                endpoint_metrics["success_rate"] = (
+                    round((eok / etotal), 4)
+                    if etotal > 0
+                    else None
+                )
+                endpoint_metrics["fallback_rate"] = (
+                    round((efb / etotal), 4)
+                    if etotal > 0
+                    else None
+                )
+                endpoint_metrics["avg_latency_ms"] = (
+                    round((elsum / elcount), 2)
+                    if elcount > 0
+                    else None
+                )
+                endpoint_metrics.pop("latency_sum_ms", None)
+
+        return providers
+
     def _audit(
         action: str,
         target_type: str,
@@ -393,12 +525,80 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "coingecko": int(repo.get_setting(f"api_usage:{today}:market-data:coingecko", "0") or 0),
                     "bcb": int(repo.get_setting(f"api_usage:{today}:benchmark:bcb", "0") or 0),
                 },
+                "provider_metrics": _provider_day_metrics(today),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             return jsonify(payload)
         except Exception as exc:
             logger.warning("finance api stats failed: %s", exc)
             return jsonify({"ok": False, "error": "Falha ao carregar estatísticas"}), 500
+
+    @app.get("/api/finance/health")
+    @limiter.limit("30/minute")
+    def finance_health():
+        try:
+            now = datetime.now(timezone.utc)
+            today = now.strftime("%Y-%m-%d")
+            month_key = now.strftime("%Y%m")
+
+            raw_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
+            if raw_limit is None:
+                raw_limit = repo.get_setting("brapi_monthly_limit", "15000")
+            try:
+                brapi_limit = max(100, min(500000, int(str(raw_limit).strip())))
+            except Exception:
+                brapi_limit = 15000
+
+            brapi_usage = int(repo.get_setting(f"brapi_usage:{month_key}", "0") or 0)
+            brapi_remaining = max(0, brapi_limit - brapi_usage)
+            brapi_degraded = brapi_usage >= brapi_limit
+
+            providers = _provider_day_metrics(today)
+
+            market_cached = cache.get("finance:market") or {}
+            market_quality = (market_cached.get("meta") or {}).get("quality") or {}
+            stale_items = int(market_quality.get("stale_items") or 0)
+            has_stale_data = bool(market_quality.get("has_stale_data"))
+
+            provider_errors = []
+            for p in providers.values():
+                total = int(p.get("total") or 0)
+                success_rate = p.get("success_rate")
+                if total >= 5 and success_rate is not None and float(success_rate) < 0.7:
+                    provider_errors.append(p.get("provider"))
+
+            status = "ok"
+            if brapi_degraded or has_stale_data or provider_errors:
+                status = "degraded"
+
+            return jsonify({
+                "ok": True,
+                "status": status,
+                "timestamp": now.isoformat(),
+                "checks": {
+                    "brapi_quota": {
+                        "status": "degraded" if brapi_degraded else "ok",
+                        "month": month_key,
+                        "usage": brapi_usage,
+                        "limit": brapi_limit,
+                        "remaining": brapi_remaining,
+                    },
+                    "market_quality": {
+                        "status": "degraded" if has_stale_data else "ok",
+                        "has_stale_data": has_stale_data,
+                        "stale_items": stale_items,
+                        "captured_at": market_quality.get("captured_at"),
+                    },
+                    "providers": {
+                        "status": "degraded" if provider_errors else "ok",
+                        "degraded_providers": provider_errors,
+                        "metrics": providers,
+                    },
+                },
+            })
+        except Exception as exc:
+            logger.warning("finance health failed: %s", exc)
+            return jsonify({"ok": False, "error": "Falha ao carregar health"}), 500
 
     # ── Assets CRUD ─────────────────────────────────────────
 
@@ -1811,11 +2011,17 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 else:
                     rng = "10y"
 
+                y_started = time.perf_counter()
                 resp = http_requests.get(
                     f"https://query1.finance.yahoo.com/v8/finance/chart/{benchmark_yahoo_map[benchmark]}",
                     params={"interval": "1d", "range": rng},
                     headers={"User-Agent": "Mozilla/5.0"},
                     timeout=10,
+                )
+                _track_api_provider_latency(
+                    "yahoo",
+                    "benchmark",
+                    (time.perf_counter() - y_started) * 1000,
                 )
                 _track_api_provider_usage("yahoo", bool(resp.ok), "benchmark")
                 if not resp.ok:
@@ -1835,6 +2041,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 series_id = benchmark_bcb_map[benchmark]
                 end_date = datetime.utcnow().date()
                 start_date = end_date - timedelta(days=max(40, limit * 2))
+                b_started = time.perf_counter()
                 resp = http_requests.get(
                     f"https://api.bcb.gov.br/dados/serie/bcdata.sgs/{series_id}/dados",
                     params={
@@ -1843,6 +2050,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "dataFinal": end_date.strftime("%d/%m/%Y"),
                     },
                     timeout=10,
+                )
+                _track_api_provider_latency(
+                    "bcb",
+                    "benchmark",
+                    (time.perf_counter() - b_started) * 1000,
                 )
                 _track_api_provider_usage("bcb", bool(resp.ok), "benchmark")
                 if not resp.ok:
@@ -2587,6 +2799,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         timeout=10,
                     )
                     y_latency_ms = round((time.perf_counter() - y_started) * 1000, 1)
+                    _track_api_provider_latency("yahoo", "market-data", y_latency_ms)
                     _track_api_provider_usage("yahoo", bool(yresp.ok), "market-data")
                     if yresp.ok:
                         ydata = yresp.json()
@@ -2638,6 +2851,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         timeout=10,
                     )
                     b_latency_ms = round((time.perf_counter() - b_started) * 1000, 1)
+                    _track_api_provider_latency("brapi", "market-data", b_latency_ms)
                     _track_api_provider_usage("brapi", bool(resp.ok), "market-data")
                     if resp.ok:
                         data = resp.json()
@@ -2665,6 +2879,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             captured_at=now_iso,
                             latency_ms=b_latency_ms,
                         )
+                        _track_api_provider_fallback("brapi", "market-data")
                         loaded = True
                 except Exception as exc:
                     _track_api_provider_usage("brapi", False, "market-data")
@@ -2677,6 +2892,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 db_asset = repo.get_fin_asset_by_symbol(sym)
                 if db_asset and db_asset.get("current_price") is not None:
                     stale_price = float(db_asset["current_price"])
+                    _track_api_provider_usage("db-fallback", True, "market-data")
+                    _track_api_provider_fallback("db-fallback", "market-data")
                     results["stocks"][sym] = {
                         "symbol": sym,
                         "name": db_asset.get("name") or sym,
@@ -2706,6 +2923,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 return
             try:
                 ids_param = ",".join(crypto_ids)
+                c_started = time.perf_counter()
                 resp = _http_get_with_retry(
                     "https://api.coingecko.com/api/v3/simple/price",
                     params={
@@ -2716,6 +2934,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "include_24hr_vol": "true",
                     },
                     timeout=10,
+                )
+                c_latency_ms = round((time.perf_counter() - c_started) * 1000, 1)
+                _track_api_provider_latency(
+                    "coingecko",
+                    "market-data",
+                    c_latency_ms,
                 )
                 _track_api_provider_usage("coingecko", bool(resp.ok), "market-data")
                 if resp.ok:
@@ -2731,7 +2955,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "source": "coingecko",
                             "is_stale": False,
                             "captured_at": now_iso,
-                            "latency_ms": None,
+                            "latency_ms": c_latency_ms,
                         }
                         _aid = repo.upsert_fin_asset({
                             "symbol": cid.upper(),
@@ -2765,11 +2989,18 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             # Yahoo Finance v8 chart fallback — fetch all in parallel
             def _yahoo_index(yahoo_sym: str, default_name: str) -> None:
                 try:
+                    y_started = time.perf_counter()
                     yresp = _http_get_with_retry(
                         f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_sym}",
                         params={"interval": "1d", "range": "1d"},
                         headers={"User-Agent": "Mozilla/5.0"},
                         timeout=8,
+                    )
+                    y_latency_ms = round((time.perf_counter() - y_started) * 1000, 1)
+                    _track_api_provider_latency(
+                        "yahoo",
+                        "market-data",
+                        y_latency_ms,
                     )
                     _track_api_provider_usage("yahoo", bool(yresp.ok), "market-data")
                     if not yresp.ok:
@@ -2802,7 +3033,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "source": "yahoo",
                         "is_stale": False,
                         "captured_at": now_iso,
-                        "latency_ms": None,
+                        "latency_ms": y_latency_ms,
                     }
                 except Exception as exc:
                     _track_api_provider_usage("yahoo", False, "market-data")
@@ -2829,10 +3060,17 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             if not _try_reserve_brapi_call():
                 return
             try:
+                b_started = time.perf_counter()
                 resp = _http_get_with_retry(
                     "https://brapi.dev/api/quote/%5EBVSP",
                     params={"token": brapi_token},
                     timeout=8,
+                )
+                b_latency_ms = round((time.perf_counter() - b_started) * 1000, 1)
+                _track_api_provider_latency(
+                    "brapi",
+                    "market-data",
+                    b_latency_ms,
                 )
                 _track_api_provider_usage("brapi", bool(resp.ok), "market-data")
                 if resp.ok:
@@ -2848,8 +3086,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "source": "brapi",
                             "is_stale": False,
                             "captured_at": now_iso,
-                            "latency_ms": None,
+                            "latency_ms": b_latency_ms,
                         }
+                        _track_api_provider_fallback("brapi", "market-data")
             except Exception as exc:
                 _track_api_provider_usage("brapi", False, "market-data")
                 logger.warning("brapi indices fetch failed: %s", exc)

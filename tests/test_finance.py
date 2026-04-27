@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import pytest
 
@@ -672,6 +673,49 @@ class TestFinanceAdvanced:
         resp = client.get("/api/finance/audit")
         assert resp.status_code == 200
         assert isinstance(resp.get_json(), list)
+
+
+class TestFinanceObservability:
+    def test_api_stats_includes_provider_metrics(self, client, app):
+        from app.repository import Repository
+
+        repo = Repository(app.config["DATABASE_TARGET"])
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        base = f"api_usage:{today}:market-data:yahoo"
+        repo.set_setting(base, "10")
+        repo.set_setting(f"{base}:ok", "8")
+        repo.set_setting(f"{base}:err", "2")
+        repo.set_setting(f"{base}:latency_sum_ms", "1200")
+        repo.set_setting(f"{base}:latency_count", "10")
+
+        resp = client.get("/api/finance/api-stats")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["ok"] is True
+        assert "provider_metrics" in payload
+        yahoo = payload["provider_metrics"]["yahoo"]
+        assert yahoo["total"] == 10
+        assert yahoo["ok"] == 8
+        assert yahoo["err"] == 2
+        assert yahoo["success_rate"] == pytest.approx(0.8, rel=1e-6)
+        assert yahoo["avg_latency_ms"] == pytest.approx(120.0, rel=1e-6)
+
+    def test_finance_health_reports_degraded_quota(self, client, app):
+        from app.repository import Repository
+
+        repo = Repository(app.config["DATABASE_TARGET"])
+        month_key = datetime.now(timezone.utc).strftime("%Y%m")
+        repo.set_setting("brapi_monthly_limit", "100")
+        repo.set_setting(f"brapi_usage:{month_key}", "100")
+
+        resp = client.get("/api/finance/health")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["ok"] is True
+        assert payload["status"] == "degraded"
+        quota = payload["checks"]["brapi_quota"]
+        assert quota["status"] == "degraded"
+        assert quota["remaining"] == 0
 
 
 
