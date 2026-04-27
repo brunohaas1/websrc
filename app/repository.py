@@ -1747,6 +1747,64 @@ class Repository:
                     )
             conn.commit()
 
+    def delete_setting(self, key: str) -> bool:
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql("DELETE FROM app_settings WHERE key = ?"),
+                (key,),
+            )
+            conn.commit()
+            return bool(getattr(cur, "rowcount", 0))
+
+    def delete_settings_by_prefix(self, prefix: str) -> int:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql("SELECT key FROM app_settings WHERE key LIKE ?"),
+                (f"{prefix}%",),
+            ).fetchall()
+            keys = [str(r["key"]) for r in rows]
+            deleted = 0
+            for key in keys:
+                cur = conn.execute(
+                    self._sql("DELETE FROM app_settings WHERE key = ?"),
+                    (key,),
+                )
+                deleted += int(getattr(cur, "rowcount", 0) or 0)
+            conn.commit()
+            return deleted
+
+    def get_fin_transaction_signature(self, asset_id: int | None = None) -> dict[str, Any]:
+        with get_connection(self.database_target) as conn:
+            if asset_id is None:
+                row = conn.execute(
+                    self._sql(
+                        """
+                        SELECT COUNT(*) AS tx_count,
+                               MAX(id) AS max_id,
+                               MAX(tx_date) AS max_tx_date
+                        FROM fin_transactions
+                        """,
+                    ),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    self._sql(
+                        """
+                        SELECT COUNT(*) AS tx_count,
+                               MAX(id) AS max_id,
+                               MAX(tx_date) AS max_tx_date
+                        FROM fin_transactions
+                        WHERE asset_id = ?
+                        """,
+                    ),
+                    (asset_id,),
+                ).fetchone()
+            return {
+                "tx_count": int((row and row["tx_count"]) or 0),
+                "max_id": int((row and row["max_id"]) or 0),
+                "max_tx_date": str((row and row["max_tx_date"]) or ""),
+            }
+
     # ==================================================================
     # Financial Dashboard
     # ==================================================================
@@ -1849,6 +1907,51 @@ class Repository:
             )
             conn.commit()
             return True
+
+    def normalize_fin_asset_types(self) -> dict[str, int]:
+        def _looks_like_fii(symbol: str) -> bool:
+            s = str(symbol or "").strip().upper()
+            return (len(s) >= 5 and s.endswith("11")) or (len(s) >= 6 and s.endswith("11B"))
+
+        assets_updated = 0
+        watchlist_updated = 0
+        with get_connection(self.database_target) as conn:
+            asset_rows = conn.execute(
+                self._sql("SELECT id, symbol, asset_type FROM fin_assets ORDER BY id"),
+            ).fetchall()
+            for row in asset_rows:
+                if not _looks_like_fii(str(row["symbol"] or "")):
+                    continue
+                current_type = str(row["asset_type"] or "").strip().lower()
+                if current_type == "fii":
+                    continue
+                cur = conn.execute(
+                    self._sql("UPDATE fin_assets SET asset_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
+                    ("fii", int(row["id"])),
+                )
+                assets_updated += int(getattr(cur, "rowcount", 0) or 0)
+
+            wl_rows = conn.execute(
+                self._sql("SELECT id, symbol, asset_type FROM fin_watchlist ORDER BY id"),
+            ).fetchall()
+            for row in wl_rows:
+                if not _looks_like_fii(str(row["symbol"] or "")):
+                    continue
+                current_type = str(row["asset_type"] or "").strip().lower()
+                if current_type == "fii":
+                    continue
+                cur = conn.execute(
+                    self._sql("UPDATE fin_watchlist SET asset_type = ? WHERE id = ?"),
+                    ("fii", int(row["id"])),
+                )
+                watchlist_updated += int(getattr(cur, "rowcount", 0) or 0)
+
+            conn.commit()
+
+        return {
+            "assets_updated": assets_updated,
+            "watchlist_updated": watchlist_updated,
+        }
 
     def record_fin_asset_price(
         self, asset_id: int, price: float, volume: float | None = None,

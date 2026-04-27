@@ -213,6 +213,18 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return False
         return math.isfinite(n)
 
+    def _track_api_provider_usage(provider: str, success: bool, endpoint: str = "") -> None:
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            base_key = f"api_usage:{today}:{endpoint}:{provider}"
+            total = int(repo.get_setting(base_key, "0") or 0)
+            status_key = f"{base_key}:{'ok' if success else 'err'}"
+            status = int(repo.get_setting(status_key, "0") or 0)
+            repo.set_setting(base_key, str(total + 1))
+            repo.set_setting(status_key, str(status + 1))
+        except Exception:
+            pass
+
     def _audit(
         action: str,
         target_type: str,
@@ -313,6 +325,43 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _invalidate_financial_state_cache(include_market=True)
 
         return jsonify({"updated": list(valid.keys()), "count": len(valid)})
+
+    @app.get("/api/finance/api-stats")
+    @limiter.limit("30/minute")
+    def finance_api_stats():
+        try:
+            month_key = datetime.now(timezone.utc).strftime("%Y%m")
+            usage_key = f"brapi_usage:{month_key}"
+            brapi_usage = int(repo.get_setting(usage_key, "0") or 0)
+            raw_limit = app.config.get("BRAPI_MONTHLY_LIMIT")
+            if raw_limit is None:
+                raw_limit = repo.get_setting("brapi_monthly_limit", "15000")
+            try:
+                brapi_limit = max(100, min(500000, int(str(raw_limit).strip())))
+            except Exception:
+                brapi_limit = 15000
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            payload = {
+                "ok": True,
+                "brapi_monthly": {
+                    "month": month_key,
+                    "usage": brapi_usage,
+                    "limit": brapi_limit,
+                    "remaining": max(0, brapi_limit - brapi_usage),
+                    "degraded": brapi_usage >= brapi_limit,
+                },
+                "daily_usage": {
+                    "brapi": int(repo.get_setting(f"api_usage:{today}:market-data:brapi", "0") or 0),
+                    "yahoo": int(repo.get_setting(f"api_usage:{today}:market-data:yahoo", "0") or 0),
+                    "coingecko": int(repo.get_setting(f"api_usage:{today}:market-data:coingecko", "0") or 0),
+                    "bcb": int(repo.get_setting(f"api_usage:{today}:benchmark:bcb", "0") or 0),
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            return jsonify(payload)
+        except Exception as exc:
+            logger.warning("finance api stats failed: %s", exc)
+            return jsonify({"ok": False, "error": "Falha ao carregar estatísticas"}), 500
 
     # ── Assets CRUD ─────────────────────────────────────────
 
@@ -635,6 +684,50 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         cache.set(idem_cache_key, response_payload, CLEANUP_IDEMPOTENCY_TTL)
         cache.set(cooldown_key, {"ts": now_ts}, CLEANUP_COOLDOWN_SECONDS)
         return jsonify(response_payload)
+
+    @app.post("/api/finance/maintenance/cleanup-stale")
+    @limiter.limit("2/day")
+    @require_finance_key
+    def finance_cleanup_stale_data():
+        confirm_token = str(request.headers.get("X-Cleanup-Confirm", "")).strip()
+        if confirm_token != CLEANUP_CONFIRM_TOKEN:
+            return jsonify({
+                "error": "Confirmação obrigatória para limpeza.",
+                "required_header": "X-Cleanup-Confirm",
+                "required_value": CLEANUP_CONFIRM_TOKEN,
+            }), 400
+        keep_days = min(365, max(7, int(request.args.get("keep_days", "90"))))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        settings = repo.get_all_settings()
+        stale_keys = []
+        for key in settings.keys():
+            if not key.startswith("api_usage:"):
+                continue
+            parts = key.split(":")
+            if len(parts) >= 2 and parts[1] < cutoff:
+                stale_keys.append(key)
+        deleted = 0
+        for key in stale_keys:
+            if repo.delete_setting(key):
+                deleted += 1
+        _audit("cleanup", "stale_api_usage", None, {"deleted": deleted, "keep_days": keep_days})
+        return jsonify({"ok": True, "deleted": deleted, "keep_days": keep_days})
+
+    @app.post("/api/finance/maintenance/migrate-asset-types")
+    @limiter.limit("2/day")
+    @require_finance_key
+    def finance_migrate_asset_types():
+        confirm_token = str(request.headers.get("X-Cleanup-Confirm", "")).strip()
+        if confirm_token != CLEANUP_CONFIRM_TOKEN:
+            return jsonify({
+                "error": "Confirmação obrigatória para migração.",
+                "required_header": "X-Cleanup-Confirm",
+                "required_value": CLEANUP_CONFIRM_TOKEN,
+            }), 400
+        payload = repo.normalize_fin_asset_types()
+        _invalidate_financial_state_cache(include_market=True)
+        _audit("maintenance", "migrate_asset_types", None, payload)
+        return jsonify({"ok": True, **payload})
 
     @app.get("/api/finance/maintenance/cleanup-duplicates")
     def finance_cleanup_duplicate_transactions_help():
@@ -1614,7 +1707,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_asset_history_alt(asset_id: int):
         limit = min(3650, max(1, int(request.args.get("limit", "90"))))
-        cache_key = f"finance:asset-history:v3:{asset_id}:{limit}"
+        tx_sig = repo.get_fin_transaction_signature(asset_id)
+        cache_key = (
+            f"finance:asset-history:v4:{asset_id}:{limit}:"
+            f"{tx_sig['tx_count']}:{tx_sig['max_id']}:{tx_sig['max_tx_date']}"
+        )
         cached = cache.get(cache_key)
         if cached:
             return jsonify(cached)
@@ -1626,7 +1723,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_portfolio_history():
         limit = min(3650, max(1, int(request.args.get("limit", "90"))))
-        cache_key = f"finance:portfolio-history:v3:{limit}"
+        tx_sig = repo.get_fin_transaction_signature()
+        cache_key = (
+            f"finance:portfolio-history:v4:{limit}:"
+            f"{tx_sig['tx_count']}:{tx_sig['max_id']}:{tx_sig['max_tx_date']}"
+        )
         cached = cache.get(cache_key)
         if cached:
             return jsonify(cached)
@@ -1679,6 +1780,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     headers={"User-Agent": "Mozilla/5.0"},
                     timeout=10,
                 )
+                _track_api_provider_usage("yahoo", bool(resp.ok), "benchmark")
                 if not resp.ok:
                     return jsonify([])
 
@@ -1705,6 +1807,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     },
                     timeout=10,
                 )
+                _track_api_provider_usage("bcb", bool(resp.ok), "benchmark")
                 if not resp.ok:
                     return jsonify([])
 
@@ -1747,7 +1850,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_invested_history():
         limit = min(3650, max(1, int(request.args.get("limit", "180"))))
         asset_id = request.args.get("asset_id", type=int)
-        cache_key = f"finance:invested-history:{asset_id or 'all'}:{limit}"
+        tx_sig = repo.get_fin_transaction_signature(asset_id)
+        cache_key = (
+            f"finance:invested-history:v2:{asset_id or 'all'}:{limit}:"
+            f"{tx_sig['tx_count']}:{tx_sig['max_id']}:{tx_sig['max_tx_date']}"
+        )
         cached = cache.get(cache_key)
         if cached:
             return jsonify(cached)
@@ -2431,6 +2538,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         params={"symbols": f"{sym}.SA"},
                         timeout=10,
                     )
+                    _track_api_provider_usage("yahoo", bool(yresp.ok), "market-data")
                     if yresp.ok:
                         ydata = yresp.json()
                         items = ydata.get("quoteResponse", {}).get("result", [])
@@ -2457,6 +2565,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                                 )
                                 loaded = True
                 except Exception as exc:
+                    _track_api_provider_usage("yahoo", False, "market-data")
                     logger.warning("Yahoo Finance fetch failed for %s: %s", sym, exc)
 
                 if loaded:
@@ -2474,6 +2583,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         params=params,
                         timeout=10,
                     )
+                    _track_api_provider_usage("brapi", bool(resp.ok), "market-data")
                     if resp.ok:
                         data = resp.json()
                         items = data.get("results", [])
@@ -2497,6 +2607,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             updated=item.get("regularMarketTime"),
                         )
                 except Exception as exc:
+                    _track_api_provider_usage("brapi", False, "market-data")
                     logger.warning("brapi.dev fetch failed for %s: %s", sym, exc)
 
         def _fetch_crypto():
@@ -2516,6 +2627,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     },
                     timeout=10,
                 )
+                _track_api_provider_usage("coingecko", bool(resp.ok), "market-data")
                 if resp.ok:
                     data = resp.json()
                     for cid, info in data.items():
@@ -2544,6 +2656,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                                 info.get("brl_24h_vol"),
                             )
             except Exception as exc:
+                _track_api_provider_usage("coingecko", False, "market-data")
                 logger.warning("CoinGecko fetch failed: %s", exc)
 
         def _fetch_indices():
@@ -2564,6 +2677,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         headers={"User-Agent": "Mozilla/5.0"},
                         timeout=8,
                     )
+                    _track_api_provider_usage("yahoo", bool(yresp.ok), "market-data")
                     if not yresp.ok:
                         return
                     chart = yresp.json().get("chart", {}).get("result", [])
@@ -2593,6 +2707,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                         "change_pct": change_pct,
                     }
                 except Exception as exc:
+                    _track_api_provider_usage("yahoo", False, "market-data")
                     logger.warning(
                         "Yahoo indices fetch failed for %s: %s", yahoo_sym, exc,
                     )
@@ -2621,6 +2736,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     params={"token": brapi_token},
                     timeout=8,
                 )
+                _track_api_provider_usage("brapi", bool(resp.ok), "market-data")
                 if resp.ok:
                     data = resp.json()
                     items = data.get("results", [])
@@ -2633,6 +2749,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                             "change_pct": item.get("regularMarketChangePercent"),
                         }
             except Exception as exc:
+                _track_api_provider_usage("brapi", False, "market-data")
                 logger.warning("brapi indices fetch failed: %s", exc)
 
         # Run all fetches in parallel
@@ -2643,7 +2760,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 executor.submit(_fetch_indices),
             ]
             for f in as_completed(futures):
-                f.result()  # propagate any unexpected errors
+                try:
+                    f.result()
+                except Exception as exc:
+                    logger.warning("market-data worker failed: %s", exc)
 
         if brapi_usage_delta > 0:
             final_usage = brapi_usage_start + brapi_usage_delta
