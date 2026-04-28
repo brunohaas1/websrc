@@ -2476,6 +2476,71 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             },
         )
 
+    @app.get("/api/finance/cashflow/categories")
+    @limiter.limit("60/minute")
+    def finance_cashflow_categories():
+        """Return distinct categories and subcategories from cashflow entries."""
+        try:
+            rows = repo.get_fin_cashflow_distinct_categories()
+            return jsonify(rows)
+        except Exception as exc:
+            logging.getLogger(__name__).error("cashflow categories: %s", exc)
+            return jsonify({"categories": [], "subcategories": []}), 200
+
+    @app.get("/api/finance/cashflow/export-csv")
+    @limiter.limit("20/minute")
+    def finance_cashflow_export_csv():
+        """Export cashflow entries for a month as CSV."""
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        entries = repo.list_fin_cashflow_entries(month=month, limit=5000)
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=";")
+        writer.writerow([
+            "data", "tipo", "descricao", "categoria", "subcategoria",
+            "centro_custo", "valor", "status", "tags", "notas",
+        ])
+        for e in entries:
+            writer.writerow([
+                str(e.get("entry_date", "") or "")[:10],
+                "Ganho" if e.get("entry_type") == "income" else "Gasto",
+                e.get("description", ""),
+                e.get("category", ""),
+                e.get("subcategory", ""),
+                e.get("cost_center", ""),
+                str(e.get("amount", "0")),
+                "Pago" if str(e.get("payment_status", "")).lower() == "paid" else "Pendente",
+                ", ".join(e.get("tags", []) if isinstance(e.get("tags"), list) else []),
+                e.get("notes", ""),
+            ])
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        return app.response_class(
+            csv_bytes,
+            mimetype="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f"attachment; filename=gestor-financeiro-{month}.csv",
+            },
+        )
+
+    @app.get("/api/finance/global-search")
+    @limiter.limit("60/minute")
+    def finance_global_search():
+        """Search across cashflow entries, assets, watchlist and goals."""
+        q = sanitize_text(str(request.args.get("q", "")), 120).strip()
+        limit = min(int(request.args.get("limit", "20")), 50)
+        if not q or len(q) < 2:
+            return jsonify({"results": []})
+        try:
+            results = repo.global_finance_search(q=q, limit=limit)
+            return jsonify({"results": results})
+        except Exception as exc:
+            logging.getLogger(__name__).error("global search: %s", exc)
+            return jsonify({"results": []}), 200
+
     @app.post("/api/finance/cashflow/rollover")
     @limiter.limit("10/minute")
     @require_finance_key

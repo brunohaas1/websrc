@@ -216,6 +216,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   initAutoRefresh();
+  initGlobalSearch();
+  loadCashflowCategories();
+  bind("btnCashflowExportCsv", exportCashflowCsv);
 });
 
 function initAutoRefresh() {

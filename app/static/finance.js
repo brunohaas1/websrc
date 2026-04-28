@@ -4645,3 +4645,104 @@ function checkWatchlistAlerts() {
 // AI analysis domain moved to app/static/finance_ai.js.
 
 // Bootstrap domain moved to app/static/finance_bootstrap.js.
+
+// ── Global search ─────────────────────────────────────
+let _gsTimer = null;
+
+function initGlobalSearch() {
+  const input = byId("finGlobalSearch");
+  const results = byId("finGlobalSearchResults");
+  if (!input || !results) return;
+
+  input.addEventListener("input", () => {
+    clearTimeout(_gsTimer);
+    const q = input.value.trim();
+    if (q.length < 2) { results.style.display = "none"; return; }
+    _gsTimer = setTimeout(() => _runGlobalSearch(q), 280);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { results.style.display = "none"; input.value = ""; }
+    if (e.key === "ArrowDown") { _gsNavigate(1); e.preventDefault(); }
+    if (e.key === "ArrowUp") { _gsNavigate(-1); e.preventDefault(); }
+    if (e.key === "Enter") { _gsSelectActive(); e.preventDefault(); }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!input.contains(e.target) && !results.contains(e.target)) {
+      results.style.display = "none";
+    }
+  });
+}
+
+async function _runGlobalSearch(q) {
+  const results = byId("finGlobalSearchResults");
+  if (!results) return;
+  results.style.display = "block";
+  results.innerHTML = `<div class="fin-gs-empty">Buscando...</div>`;
+  try {
+    const data = await fetchFinanceJson(`/api/finance/global-search?q=${encodeURIComponent(q)}&limit=20`);
+    const items = Array.isArray(data.results) ? data.results : [];
+    if (!items.length) {
+      results.innerHTML = `<div class="fin-gs-empty">Nenhum resultado para "${escapeHtml(q)}"</div>`;
+      return;
+    }
+    const badgeClass = { cashflow: "fin-gs-badge--cashflow", asset: "fin-gs-badge--asset", goal: "fin-gs-badge--goal" };
+    const badgeLabel = { cashflow: "Lançamento", asset: "Ativo", goal: "Meta" };
+    results.innerHTML = items.map((item, idx) => `
+      <div class="fin-gs-item" data-gs-idx="${idx}" data-gs-type="${escapeHtml(item.type)}" data-gs-id="${Number(item.id)}">
+        <span class="fin-gs-badge ${badgeClass[item.type] || ""}">${escapeHtml(badgeLabel[item.type] || item.type)}</span>
+        <span class="fin-gs-label">${escapeHtml(String(item.label || ""))}</span>
+        <span class="fin-gs-sub">${escapeHtml(String(item.sub || ""))}</span>
+        ${item.value != null ? `<span style="font-size:.82em;opacity:.75">${formatBRL(item.value)}</span>` : ""}
+      </div>
+    `).join("");
+    results.querySelectorAll(".fin-gs-item").forEach((el) => {
+      el.addEventListener("click", () => _gsActivate(el));
+    });
+  } catch {
+    results.innerHTML = `<div class="fin-gs-empty">Erro na busca</div>`;
+  }
+}
+
+function _gsNavigate(dir) {
+  const results = byId("finGlobalSearchResults");
+  if (!results || results.style.display === "none") return;
+  const items = [...results.querySelectorAll(".fin-gs-item")];
+  if (!items.length) return;
+  const active = results.querySelector(".fin-gs-item.is-active");
+  let idx = active ? items.indexOf(active) + dir : (dir > 0 ? 0 : items.length - 1);
+  idx = ((idx % items.length) + items.length) % items.length;
+  items.forEach((el) => el.classList.remove("is-active"));
+  items[idx].classList.add("is-active");
+  items[idx].scrollIntoView({ block: "nearest" });
+}
+
+function _gsSelectActive() {
+  const results = byId("finGlobalSearchResults");
+  if (!results) return;
+  const active = results.querySelector(".fin-gs-item.is-active") || results.querySelector(".fin-gs-item");
+  if (active) _gsActivate(active);
+}
+
+function _gsActivate(el) {
+  const type = el.dataset.gsType;
+  const id = Number(el.dataset.gsId);
+  const input = byId("finGlobalSearch");
+  const results = byId("finGlobalSearchResults");
+  if (input) input.value = "";
+  if (results) results.style.display = "none";
+  if (type === "cashflow") {
+    const tab = byId("finTabCashflow");
+    if (tab) tab.click();
+    setTimeout(() => { if (typeof openEditCashflowModal === "function") openEditCashflowModal(id); }, 300);
+  } else if (type === "asset") {
+    const tab = byId("finTabInvestments");
+    if (tab) tab.click();
+    showToast(`Ativo #${id} selecionado`, "info");
+  } else if (type === "goal") {
+    const tab = byId("finTabInvestments");
+    if (tab) tab.click();
+    showToast(`Meta #${id} selecionada`, "info");
+  }
+}

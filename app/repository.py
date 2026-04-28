@@ -2896,6 +2896,94 @@ class Repository:
                 out.append(rec)
             return out
 
+    def get_fin_cashflow_distinct_categories(self) -> dict[str, list[str]]:
+        """Return sorted distinct category and subcategory values."""
+        with get_connection(self.database_target) as conn:
+            cat_rows = conn.execute(
+                self._sql(
+                    "SELECT DISTINCT category FROM fin_cashflow_entries "
+                    "WHERE category IS NOT NULL AND TRIM(category) != '' "
+                    "ORDER BY category"
+                )
+            ).fetchall()
+            sub_rows = conn.execute(
+                self._sql(
+                    "SELECT DISTINCT subcategory FROM fin_cashflow_entries "
+                    "WHERE subcategory IS NOT NULL AND TRIM(subcategory) != '' "
+                    "ORDER BY subcategory"
+                )
+            ).fetchall()
+        return {
+            "categories": [r[0] for r in cat_rows],
+            "subcategories": [r[0] for r in sub_rows],
+        }
+
+    def global_finance_search(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Search across cashflow entries, assets, watchlist and goals."""
+        q_like = f"%{q.lower()}%"
+        results: list[dict[str, Any]] = []
+        with get_connection(self.database_target) as conn:
+            # cashflow entries
+            rows = conn.execute(
+                self._sql(
+                    "SELECT id, description, category, amount, entry_date, entry_type "
+                    "FROM fin_cashflow_entries "
+                    "WHERE LOWER(description) LIKE ? OR LOWER(category) LIKE ? "
+                    "ORDER BY entry_date DESC LIMIT ?"
+                ),
+                (q_like, q_like, limit),
+            ).fetchall()
+            for r in rows:
+                results.append({
+                    "type": "cashflow",
+                    "id": r["id"],
+                    "label": str(r["description"] or ""),
+                    "sub": f"{r['category'] or '—'} • {('Ganho' if r['entry_type'] == 'income' else 'Gasto')}",
+                    "value": r["amount"],
+                    "date": str(r["entry_date"] or "")[:10],
+                })
+            # assets
+            try:
+                rows = conn.execute(
+                    self._sql(
+                        "SELECT id, symbol, name, asset_type FROM fin_assets "
+                        "WHERE LOWER(symbol) LIKE ? OR LOWER(name) LIKE ? LIMIT ?"
+                    ),
+                    (q_like, q_like, limit),
+                ).fetchall()
+                for r in rows:
+                    results.append({
+                        "type": "asset",
+                        "id": r["id"],
+                        "label": str(r["symbol"] or ""),
+                        "sub": str(r["name"] or ""),
+                        "value": None,
+                        "date": None,
+                    })
+            except Exception:
+                pass
+            # goals
+            try:
+                rows = conn.execute(
+                    self._sql(
+                        "SELECT id, name, target_amount, current_amount FROM fin_goals "
+                        "WHERE LOWER(name) LIKE ? LIMIT ?"
+                    ),
+                    (q_like, limit),
+                ).fetchall()
+                for r in rows:
+                    results.append({
+                        "type": "goal",
+                        "id": r["id"],
+                        "label": str(r["name"] or ""),
+                        "sub": "Meta",
+                        "value": r["target_amount"],
+                        "date": None,
+                    })
+            except Exception:
+                pass
+        return results[:limit]
+
     def get_fin_cashflow_entry(self, entry_id: int) -> dict[str, Any] | None:
         with get_connection(self.database_target) as conn:
             row = conn.execute(

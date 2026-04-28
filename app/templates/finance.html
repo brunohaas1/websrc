@@ -78,6 +78,10 @@
           <button id="btnTour" class="btn-icon" title="Guia rápido" aria-label="Abrir guia rápido"><span class="btn-glyph" aria-hidden="true">❔</span><span>Guia</span></button>
           <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema"><span class="btn-glyph" aria-hidden="true">◐</span><span>Tema</span></button>
           <button id="btnDensity" class="btn-icon" title="Alternar densidade" aria-label="Alternar densidade"><span class="btn-glyph" aria-hidden="true">▥</span><span>Densidade</span></button>
+          <div class="fin-global-search-wrap" style="position:relative;display:inline-flex;align-items:center;">
+            <input id="finGlobalSearch" class="fin-inline-select" placeholder="🔍 Buscar..." autocomplete="off" aria-label="Busca global" style="width:140px;" />
+            <div id="finGlobalSearchResults" class="fin-global-search-results" style="display:none;"></div>
+          </div>
           <button id="finRefreshBtn" class="btn-icon btn-refresh" title="Atualizar dados" aria-label="Atualizar dados"><span class="btn-glyph" aria-hidden="true">↻</span><span>Atualizar</span></button>
           <select id="autoRefreshSelect" class="fin-inline-select" title="Auto-atualizar" aria-label="Intervalo de atualização automática">
             <option value="0">Manual</option>
@@ -430,6 +434,7 @@
           <button id="btnCashflowBulk" class="btn-text" title="Atualizações em lote">🧩 Lote</button>
           <button id="btnCashflowAutoClassify" class="btn-text" title="Classificar automaticamente lançamentos sem categoria">🏷 Auto-classificar</button>
           <button id="btnCashflowClosingPdf" class="btn-text" title="Gerar fechamento mensal em PDF">🧾 PDF</button>
+          <button id="btnCashflowExportCsv" class="btn-text" title="Exportar lançamentos do mês como CSV">📊 CSV</button>
         </h2>
         <div id="finCashflowBudgetAlerts" class="fin-cashflow-budget-alerts"></div>
         <div id="finCashflowSummary" class="fin-cashflow-summary"></div>
@@ -447,6 +452,10 @@
         </div>
       </section>
     </main>
+
+  <!-- ── Shared datalists (for autocomplete) ──────────── -->
+  <datalist id="finCfCategoriesDatalist"></datalist>
+  <datalist id="finCfSubcategoriesDatalist"></datalist>
 
   <!-- ── Modals ─────────────────────────────────────── -->
     <div id="finModalOverlay" class="fin-modal-overlay" style="display:none">

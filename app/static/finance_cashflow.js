@@ -593,13 +593,13 @@ function openAddCashflowModal(prefill = {}) {
         </div>
         <div class="fin-form-group">
           <label>Categoria</label>
-          <input id="fmCfCategory" placeholder="Ex.: Salário, Moradia, Alimentação" value="${escapeHtml(_pcat)}" />
+          <input id="fmCfCategory" list="finCfCategoriesDatalist" placeholder="Ex.: Salário, Moradia, Alimentação" value="${escapeHtml(_pcat)}" />
         </div>
       </div>
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Subcategoria</label>
-          <input id="fmCfSubcategory" placeholder="Ex.: Condomínio" />
+          <input id="fmCfSubcategory" list="finCfSubcategoriesDatalist" placeholder="Ex.: Condomínio" />
         </div>
         <div class="fin-form-group">
           <label>Centro de custo</label>
@@ -1355,13 +1355,13 @@ function openEditCashflowModal(entryId) {
         </div>
         <div class="fin-form-group">
           <label>Categoria</label>
-          <input id="fmCfCategory" value="${escapeHtml(entry.category || "")}" />
+          <input id="fmCfCategory" list="finCfCategoriesDatalist" value="${escapeHtml(entry.category || "")}" />
         </div>
       </div>
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Subcategoria</label>
-          <input id="fmCfSubcategory" value="${escapeHtml(entry.subcategory || "")}" />
+          <input id="fmCfSubcategory" list="finCfSubcategoriesDatalist" value="${escapeHtml(entry.subcategory || "")}" />
         </div>
         <div class="fin-form-group">
           <label>Centro de custo</label>
@@ -1898,4 +1898,30 @@ function openGoalScenarioModal(goalId) {
       if (resultEl) resultEl.innerHTML = '<span class="fin-down">Erro de rede</span>';
     }
   });
+}
+
+// ── Category autocomplete ─────────────────────────────
+async function loadCashflowCategories() {
+  try {
+    const data = await fetchFinanceJson("/api/finance/cashflow/categories");
+    const cats = Array.isArray(data.categories) ? data.categories : [];
+    const subs = Array.isArray(data.subcategories) ? data.subcategories : [];
+    FIN._cashflowCategories = cats;
+    FIN._cashflowSubcategories = subs;
+    _populateCfDatalist("finCfCategoriesDatalist", cats);
+    _populateCfDatalist("finCfSubcategoriesDatalist", subs);
+  } catch { /* silent */ }
+}
+
+function _populateCfDatalist(id, values) {
+  const dl = document.getElementById(id);
+  if (!dl) return;
+  dl.innerHTML = values.map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
+}
+
+// ── CSV export ────────────────────────────────────────
+function exportCashflowCsv() {
+  const month = getSelectedCashflowMonth();
+  const url = `/api/finance/cashflow/export-csv${month ? "?month=" + encodeURIComponent(month) : ""}`;
+  window.open(url, "_blank", "noopener");
 }
