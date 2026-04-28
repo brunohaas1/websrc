@@ -219,6 +219,7 @@ a:hover { color: var(--cyan); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 12px 20px;
 }
@@ -232,7 +233,10 @@ a:hover { color: var(--cyan); }
   flex-wrap: wrap;
 }
 
-.brand { flex-shrink: 0; }
+.brand {
+  flex: 1 1 260px;
+  min-width: 0;
+}
 
 .eyebrow {
   font-size: 0.65rem;
@@ -261,7 +265,10 @@ a:hover { color: var(--cyan); }
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
 }
 
 .tool-select {
@@ -1680,7 +1687,8 @@ select:focus:not(:focus-visible) { outline: none; }
 .topbar-tools .btn-icon,
 .topbar-bottom .btn-icon {
   width: auto;
-  min-width: 112px;
+  min-width: clamp(88px, 24vw, 112px);
+  max-width: 100%;
   min-height: 48px;
   padding: 10px 14px;
   border-radius: 14px;
@@ -1746,12 +1754,31 @@ select:focus:not(:focus-visible) { outline: none; }
 }
 
 @media (max-width: 900px) {
+  .topbar-top {
+    align-items: flex-start;
+  }
+
+  .topbar-tools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .topbar-tools .btn-icon,
   .topbar-bottom .btn-icon {
-    min-width: 104px;
+    flex: 1 1 140px;
+    min-width: 0;
     min-height: 44px;
     padding: 9px 12px;
     font-size: 0.82rem;
+    white-space: normal;
+    line-height: 1.2;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar-tools .btn-icon,
+  .topbar-bottom .btn-icon {
+    flex-basis: 100%;
   }
 }
 

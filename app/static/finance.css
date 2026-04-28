@@ -2933,6 +2933,53 @@ body.light .fin-ai-btn.active {
   }
 }
 
+/* ── Records page: compact topbar actions on mobile ───── */
+body.finance-records-page .topbar-top {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+body.finance-records-page .brand {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+body.finance-records-page .topbar-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+body.finance-records-page .topbar-tools .btn-icon {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 768px) {
+  body.finance-records-page .topbar-tools .btn-icon {
+    flex: 1 1 calc(50% - 8px);
+    min-height: 42px;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  body.finance-records-page .topbar-tools .btn-icon .btn-glyph {
+    width: 1rem;
+    height: 1rem;
+    font-size: 0.72rem;
+  }
+}
+
+@media (max-width: 480px) {
+  body.finance-records-page .topbar-tools .btn-icon {
+    flex-basis: 100%;
+  }
+}
+
 /* ── Budget Alert Badges ─────────────────────────────── */
 .fin-cashflow-budget-alerts {
   display: flex;
