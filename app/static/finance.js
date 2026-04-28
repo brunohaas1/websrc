@@ -222,19 +222,14 @@ function _captureLayoutState() {
   if (!grid) return {};
   const cards = [...grid.querySelectorAll(".fin-card[id]")];
   const hidden = [];
-  const heights = {};
   cards.forEach((card) => {
     const cardId = card.id;
     const isHidden = card.style.display === "none";
     if (isHidden) hidden.push(cardId);
-    if (card.style.height && card.style.height.endsWith("px")) {
-      heights[cardId] = card.style.height;
-    }
   });
   return {
     order: cards.map((card) => card.id),
     hidden,
-    heights,
   };
 }
 
@@ -269,10 +264,9 @@ function applyFinanceLayout() {
   ordered.forEach((card) => grid.appendChild(card));
 
   const hidden = new Set(state.hidden || []);
-  const heights = state.heights || {};
   cards.forEach((card) => {
     card.style.display = hidden.has(card.id) ? "none" : "";
-    if (heights[card.id]) card.style.height = heights[card.id];
+    card.style.height = "";
   });
 }
 
