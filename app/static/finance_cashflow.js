@@ -461,21 +461,116 @@ function renderCashflow(entries) {
   `;
 }
 
-function openAddCashflowModal() {
+function openBudgetMethodologyModal() {
+  const month = getSelectedCashflowMonth();
+  const methods = [
+    { value: "50_30_20", label: "50/30/20 — Necessidades / Desejos / Poupança", hint: "50% moradia+alimentação+saúde, 30% lazer+compras, 20% investimentos" },
+    { value: "envelope", label: "Envelopes — Alocação por categorias fixas", hint: "Distribua valores fixos entre envelopes até esgotar a renda" },
+    { value: "zero_based", label: "Base Zero — Cada real é alocado", hint: "Receita − todas as despesas e investimentos = R$ 0" },
+  ];
+  const opts = methods.map((m, i) => `
+    <label class="fin-method-option" style="display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:6px;cursor:pointer;margin-bottom:6px;">
+      <input type="radio" name="budgetMethod" value="${m.value}" ${i === 0 ? "checked" : ""} style="margin-top:3px;flex-shrink:0;" />
+      <span>
+        <strong>${escapeHtml(m.label)}</strong>
+        <small style="display:block;opacity:.65;margin-top:2px;">${escapeHtml(m.hint)}</small>
+      </span>
+    </label>
+  `).join("");
+
+  openFinModal("📐 Metodologia de Orçamento", `
+    <div style="margin-bottom:10px;opacity:.75;font-size:.85em;">
+      Escolha uma metodologia e informe sua renda líquida mensal para gerar sugestões de limites por categoria.
+    </div>
+    <div class="fin-form-group">
+      <label>Mês alvo</label>
+      <input id="fmMethMonth" type="month" value="${escapeHtml(month)}" required />
+    </div>
+    <div class="fin-form-group">
+      <label>Renda líquida mensal (R$)</label>
+      <input id="fmMethIncome" type="number" min="0.01" step="0.01" placeholder="Ex.: 5000" required />
+    </div>
+    <div class="fin-form-group">
+      <label>Metodologia</label>
+      <div id="fmMethOptions">${opts}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+      <button id="btnMethPreview" class="btn-text" type="button" style="padding:6px 14px;">👁 Pré-visualizar</button>
+      <button id="btnMethApply" class="fin-form-submit" type="button" style="flex:1;">✅ Aplicar ao orçamento</button>
+    </div>
+    <div id="fmMethResult" style="margin-top:14px;"></div>
+  `);
+
+  const doPreviewOrApply = async (apply) => {
+    const income = Number(byId("fmMethIncome")?.value || 0);
+    const methMonth = String(byId("fmMethMonth")?.value || "").trim();
+    const method = document.querySelector("input[name=budgetMethod]:checked")?.value || "50_30_20";
+    if (!income || income <= 0) { showToast("Informe a renda mensal"); return; }
+    try {
+      const resp = await finFetch("/api/finance/cashflow/budget/template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method, income, month: methMonth, apply }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) { showToast(data.error || "Erro"); return; }
+      const resultEl = byId("fmMethResult");
+      if (!resultEl) return;
+
+      const groupsHtml = Object.entries(data.groups || {}).map(([g, v]) =>
+        `<span style="margin-right:12px;"><strong>${escapeHtml(g)}</strong>: ${formatBRL(v)}</span>`
+      ).join("");
+
+      const budgetRows = Object.entries(data.budget || {}).map(([cat, v]) =>
+        `<tr><td>${escapeHtml(cat)}</td><td class="text-right mono">${formatBRL(v)}</td></tr>`
+      ).join("");
+
+      resultEl.innerHTML = `
+        <div style="padding:8px;background:rgba(255,255,255,.04);border-radius:6px;">
+          <div style="font-size:.82em;opacity:.7;margin-bottom:6px;">${escapeHtml(data.description || "")}</div>
+          <div style="margin-bottom:8px;font-size:.85em;">${groupsHtml}</div>
+          <div class="fin-table-wrap" style="max-height:220px;overflow-y:auto;">
+            <table class="fin-table">
+              <thead><tr><th>Categoria</th><th class="text-right">Limite sugerido</th></tr></thead>
+              <tbody>${budgetRows}</tbody>
+            </table>
+          </div>
+          ${apply ? '<div class="fin-up" style="margin-top:8px;font-size:.85em;">✓ Orçamento aplicado com sucesso.</div>' : ""}
+        </div>
+      `;
+      if (apply) {
+        showToast("Metodologia de orçamento aplicada!", "success");
+        await refreshByDomains(["cashflow"]);
+      }
+    } catch {
+      showToast("Erro de rede");
+    }
+  };
+
+  byId("btnMethPreview")?.addEventListener("click", () => doPreviewOrApply(false));
+  byId("btnMethApply")?.addEventListener("click", () => doPreviewOrApply(true));
+}
+
+function openAddCashflowModal(prefill = {}) {
   const today = new Date().toISOString().slice(0, 10);
+  const _pdate = String(prefill.entry_date || today);
+  const _pamount = String(prefill.amount || "");
+  const _pdesc = String(prefill.description || "");
+  const _pcat = String(prefill.category || "");
+  const _ptype = String(prefill.entry_type || "expense");
   openFinModal("Novo Lançamento (Ganho/Gasto)", `
     <form data-form-action="submitAddCashflow">
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Tipo</label>
           <select id="fmCfType">
-            <option value="income">Ganho</option>
-            <option value="expense">Gasto</option>
+            <option value="income" ${_ptype === "income" ? "selected" : ""}>Ganho</option>
+            <option value="expense" ${_ptype === "expense" ? "selected" : ""}>Gasto</option>
           </select>
         </div>
         <div class="fin-form-group">
           <label>Data</label>
-          <input id="fmCfDate" type="date" value="${today}" required />
+          <input id="fmCfDate" type="date" value="${escapeHtml(_pdate)}" required />
         </div>
       </div>
       <div class="fin-form-row">
@@ -494,11 +589,11 @@ function openAddCashflowModal() {
       <div class="fin-form-row">
         <div class="fin-form-group">
           <label>Valor (R$)</label>
-          <input id="fmCfAmount" type="number" min="0.01" step="0.01" required />
+          <input id="fmCfAmount" type="number" min="0.01" step="0.01" value="${escapeHtml(_pamount)}" required />
         </div>
         <div class="fin-form-group">
           <label>Categoria</label>
-          <input id="fmCfCategory" placeholder="Ex.: Salário, Moradia, Alimentação" />
+          <input id="fmCfCategory" placeholder="Ex.: Salário, Moradia, Alimentação" value="${escapeHtml(_pcat)}" />
         </div>
       </div>
       <div class="fin-form-row">
@@ -513,7 +608,7 @@ function openAddCashflowModal() {
       </div>
       <div class="fin-form-group">
         <label>Descrição</label>
-        <input id="fmCfDescription" placeholder="Resumo do lançamento" required />
+        <input id="fmCfDescription" placeholder="Resumo do lançamento" value="${escapeHtml(_pdesc)}" required />
       </div>
       <div class="fin-form-group">
         <label>Tags</label>
@@ -594,6 +689,177 @@ function openCashflowBudgetModal() {
   }
 }
 
+async function openCashflowRecurringModal() {
+  let templates = [];
+  try {
+    const resp = await finFetch("/api/finance/cashflow/recurring?active_only=0");
+    if (resp.ok) templates = await resp.json();
+  } catch { /* show empty */ }
+
+  const freqLabel = { monthly: "Mensal", quarterly: "Trimestral", yearly: "Anual" };
+  const dayRuleLabel = { exact: "Dia exato", last_day: "Último dia do mês", first_weekday: "1º dia útil", last_weekday: "Último dia útil" };
+
+  const rows = (Array.isArray(templates) ? templates : []).map((t) => `
+    <tr>
+      <td>${t.active ? "✅" : "⏸"}</td>
+      <td>${escapeHtml(t.entry_type === "income" ? "Ganho" : "Gasto")}</td>
+      <td>${escapeHtml(t.description || "—")}</td>
+      <td>${escapeHtml(t.category || "—")}</td>
+      <td class="text-right mono">${formatBRL(t.amount || 0)}</td>
+      <td>${escapeHtml(freqLabel[t.frequency] || t.frequency || "Mensal")}</td>
+      <td>${escapeHtml(dayRuleLabel[t.day_rule] || "Dia exato")}</td>
+      <td class="text-center">
+        <button class="fin-del-btn" data-action="editCashflowRecurring" data-id="${t.id}" title="Editar">✎</button>
+        <button class="fin-del-btn" data-action="deleteCashflowRecurring" data-id="${t.id}" title="Excluir">✕</button>
+      </td>
+    </tr>
+  `).join("");
+
+  openFinModal("🔁 Lançamentos Recorrentes", `
+    <div style="margin-bottom:10px;display:flex;gap:8px;">
+      <button id="btnAddRecurring" class="fin-form-submit" type="button" style="flex:0 0 auto;">＋ Novo modelo</button>
+      <span style="opacity:.65;font-size:.82em;align-self:center;">Modelos são gerados automaticamente ao usar "Virada de mês".</span>
+    </div>
+    ${rows.length ? `
+      <div class="fin-table-wrap" style="max-height:320px;overflow:auto;">
+        <table class="fin-table">
+          <thead><tr><th>Ativo</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th class="text-right">Valor</th><th>Freq.</th><th>Regra do dia</th><th></th></tr></thead>
+          <tbody id="recurringTableBody">${rows}</tbody>
+        </table>
+      </div>
+    ` : '<p class="fin-empty">Nenhum modelo recorrente cadastrado.</p>'}
+    <div id="recurringFormArea" style="margin-top:16px;"></div>
+  `);
+
+  const showRecurringForm = (existing = null) => {
+    const area = byId("recurringFormArea");
+    if (!area) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const t = existing || {};
+    area.innerHTML = `
+      <hr style="border-color:rgba(255,255,255,.1);margin:8px 0;" />
+      <h4 style="margin-bottom:10px;">${existing ? "Editar modelo" : "Novo modelo recorrente"}</h4>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmRcType">
+            <option value="expense" ${t.entry_type === "expense" || !t.entry_type ? "selected" : ""}>Gasto</option>
+            <option value="income" ${t.entry_type === "income" ? "selected" : ""}>Ganho</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Valor (R$)</label>
+          <input id="fmRcAmount" type="number" min="0.01" step="0.01" value="${t.amount || ""}" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input id="fmRcCategory" value="${escapeHtml(t.category || "")}" placeholder="Ex.: Moradia" />
+        </div>
+        <div class="fin-form-group">
+          <label>Descrição</label>
+          <input id="fmRcDescription" value="${escapeHtml(t.description || "")}" placeholder="Ex.: Aluguel" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Frequência</label>
+          <select id="fmRcFrequency">
+            <option value="monthly" ${(t.frequency || "monthly") === "monthly" ? "selected" : ""}>Mensal</option>
+            <option value="quarterly" ${t.frequency === "quarterly" ? "selected" : ""}>Trimestral</option>
+            <option value="yearly" ${t.frequency === "yearly" ? "selected" : ""}>Anual</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Regra do dia</label>
+          <select id="fmRcDayRule">
+            <option value="exact" ${(t.day_rule || "exact") === "exact" ? "selected" : ""}>Dia exato do mês</option>
+            <option value="last_day" ${t.day_rule === "last_day" ? "selected" : ""}>Último dia do mês</option>
+            <option value="first_weekday" ${t.day_rule === "first_weekday" ? "selected" : ""}>1º dia útil</option>
+            <option value="last_weekday" ${t.day_rule === "last_weekday" ? "selected" : ""}>Último dia útil</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Dia do mês (para "dia exato")</label>
+          <input id="fmRcDayOfMonth" type="number" min="1" max="31" value="${t.day_of_month || 1}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Ativo</label>
+          <select id="fmRcActive">
+            <option value="1" ${t.active !== false ? "selected" : ""}>Sim</option>
+            <option value="0" ${t.active === false ? "selected" : ""}>Não</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Data início</label>
+          <input id="fmRcStartDate" type="date" value="${escapeHtml(String(t.start_date || "").slice(0, 10))}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Data fim</label>
+          <input id="fmRcEndDate" type="date" value="${escapeHtml(String(t.end_date || "").slice(0, 10))}" />
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button id="btnSaveRecurring" class="fin-form-submit" type="button" data-id="${existing?.id || ""}">💾 Salvar modelo</button>
+        <button id="btnCancelRecurring" class="btn-text" type="button">Cancelar</button>
+      </div>
+    `;
+    byId("btnCancelRecurring")?.addEventListener("click", () => { area.innerHTML = ""; });
+    byId("btnSaveRecurring")?.addEventListener("click", async () => {
+      const id = byId("btnSaveRecurring")?.dataset?.id || "";
+      const payload = {
+        entry_type: String(byId("fmRcType")?.value || "expense"),
+        amount: Number(byId("fmRcAmount")?.value || 0),
+        category: String(byId("fmRcCategory")?.value || "").trim(),
+        description: String(byId("fmRcDescription")?.value || "").trim(),
+        frequency: String(byId("fmRcFrequency")?.value || "monthly"),
+        day_rule: String(byId("fmRcDayRule")?.value || "exact"),
+        day_of_month: Number(byId("fmRcDayOfMonth")?.value || 1),
+        active: byId("fmRcActive")?.value === "1",
+        start_date: String(byId("fmRcStartDate")?.value || "").trim() || null,
+        end_date: String(byId("fmRcEndDate")?.value || "").trim() || null,
+      };
+      if (!payload.amount || payload.amount <= 0) { showToast("Informe o valor"); return; }
+      if (!payload.description) { showToast("Informe a descrição"); return; }
+      try {
+        const url = id ? `/api/finance/cashflow/recurring/${id}` : "/api/finance/cashflow/recurring";
+        const method = id ? "PUT" : "POST";
+        const resp = await finFetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await resp.json();
+        if (!resp.ok) { showToast(data.error || "Erro ao salvar"); return; }
+        showToast(id ? "Modelo atualizado!" : "Modelo criado!", "success");
+        await openCashflowRecurringModal();
+      } catch { showToast("Erro de rede"); }
+    });
+  };
+
+  byId("btnAddRecurring")?.addEventListener("click", () => showRecurringForm(null));
+
+  const modal = document.querySelector("#finModalBody");
+  if (modal) {
+    modal.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const id = Number(btn.dataset.id || 0);
+      if (btn.dataset.action === "editCashflowRecurring") {
+        const tpl = (Array.isArray(templates) ? templates : []).find((t) => Number(t.id) === id);
+        if (tpl) showRecurringForm(tpl);
+      } else if (btn.dataset.action === "deleteCashflowRecurring") {
+        if (!confirm("Excluir este modelo recorrente?")) return;
+        try {
+          const resp = await finFetch(`/api/finance/cashflow/recurring/${id}`, { method: "DELETE" });
+          if (resp.ok) { showToast("Modelo excluído", "success"); await openCashflowRecurringModal(); }
+        } catch { showToast("Erro de rede"); }
+      }
+    }, { once: true });
+  }
+}
+
 function openCashflowRolloverModal() {
   const targetMonth = getSelectedCashflowMonth();
   const sourceMonth = prevMonthKey(targetMonth);
@@ -640,6 +906,33 @@ async function submitAddCashflow(e) {
     payment_status: paymentStatus,
     settled_at: paymentStatus === "paid" ? settledAt : null,
   };
+
+  // Personal spending guard: warn if category budget would be exceeded
+  if (body.entry_type === "expense" && body.category && body.amount > 0) {
+    const month = body.entry_date ? body.entry_date.slice(0, 7) : getSelectedCashflowMonth();
+    try {
+      const chk = await fetch(
+        `/api/finance/cashflow/budget/check?category=${encodeURIComponent(body.category)}&amount=${body.amount}&month=${encodeURIComponent(month)}`
+      );
+      if (chk.ok) {
+        const chkData = await chk.json();
+        if (chkData.has_budget && chkData.over_budget) {
+          const msg = `⚠️ Atenção: este gasto de ${formatBRL(body.amount)} levaria "${body.category}" a ${formatBRL(chkData.would_be_spent)} — acima do limite de ${formatBRL(chkData.limit)} (${chkData.usage_pct.toFixed(0)}% do orçamento). Deseja continuar mesmo assim?`;
+          if (!confirm(msg)) return;
+        }
+      }
+    } catch { /* non-blocking */ }
+  }
+
+  // Offline queue if no connection
+  if (!navigator.onLine && typeof queueOfflineEntry === "function") {
+    await queueOfflineEntry(body);
+    if (typeof updateOfflineBadge === "function") updateOfflineBadge();
+    closeFinModal();
+    showToast("Sem conexão — lançamento salvo localmente e sincronizará quando voltar online.");
+    return;
+  }
+
   try {
     const resp = await finFetch("/api/finance/cashflow", {
       method: "POST",
@@ -657,6 +950,64 @@ async function submitAddCashflow(e) {
   } catch {
     showToast("Erro de rede");
   }
+}
+
+function openReceiptOCRModal() {
+  openFinModal("📷 Analisar Comprovante (OCR)", `
+    <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">
+      Envie uma foto de comprovante ou nota fiscal. O sistema extrairá data, valor e descrição automaticamente.
+      Requer <code>pytesseract</code> instalado no servidor.
+    </div>
+    <div class="fin-form-group">
+      <label>Imagem do comprovante (JPG, PNG, até 5 MB)</label>
+      <input id="fmOcrFile" type="file" accept="image/*" />
+    </div>
+    <button id="btnDoOcr" class="fin-form-submit" type="button">🔍 Analisar</button>
+    <div id="fmOcrResult" style="margin-top:12px"></div>
+  `);
+
+  byId("btnDoOcr")?.addEventListener("click", async () => {
+    const fileEl = byId("fmOcrFile");
+    if (!fileEl?.files?.length) { showToast("Selecione uma imagem"); return; }
+    const btnDoOcr = byId("btnDoOcr");
+    if (btnDoOcr) { btnDoOcr.disabled = true; btnDoOcr.textContent = "Analisando…"; }
+    const formData = new FormData();
+    formData.append("file", fileEl.files[0]);
+    try {
+      const resp = await finFetch("/api/finance/cashflow/ocr", { method: "POST", body: formData });
+      const data = await resp.json();
+      const resultEl = byId("fmOcrResult");
+      if (!resp.ok || !data.ok) {
+        const msg = data.pytesseract_missing
+          ? "pytesseract não instalado no servidor. " + (data.error || "")
+          : (data.error || "Erro ao processar imagem.");
+        if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(msg)}</span>`;
+        return;
+      }
+      if (resultEl) resultEl.innerHTML = `
+        <div class="fin-alert fin-alert-info" style="font-size:.85em;">
+          <strong>Extraído:</strong><br>
+          Data: ${escapeHtml(data.date || "não encontrada")}<br>
+          Valor: ${data.amount != null ? formatBRL(data.amount) : "não encontrado"}<br>
+          Descrição: ${escapeHtml(data.description || "—")}
+          ${data.raw_text ? `<details style="margin-top:6px;"><summary>Texto bruto</summary><pre style="white-space:pre-wrap;font-size:.75em;">${escapeHtml(data.raw_text)}</pre></details>` : ""}
+        </div>
+        <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="margin-top:10px;">✚ Criar lançamento com estes dados</button>
+      `;
+      byId("btnOcrPrefill")?.addEventListener("click", () => {
+        openAddCashflowModal({
+          entry_date: data.date || "",
+          amount: data.amount != null ? String(data.amount) : "",
+          description: data.description || "",
+          category: data.category || "",
+          entry_type: "expense",
+        });
+      });
+    } catch { showToast("Erro de rede"); }
+    finally {
+      if (btnDoOcr) { btnDoOcr.disabled = false; btnDoOcr.textContent = "🔍 Analisar"; }
+    }
+  });
 }
 
 function openCashflowScenarioModal() {
@@ -786,8 +1137,18 @@ function openCashflowImportModal() {
         const errHtml = data.errors?.length
           ? `<ul>${data.errors.map((it) => `<li>Linha ${it.row || it.transaction || "?"}: ${escapeHtml(it.error)}</li>`).join("")}</ul>`
           : "";
+        const dupHtml = data.potential_duplicates?.length
+          ? `<div style="margin-top:8px;border-left:3px solid #f59e0b;padding:6px 10px;font-size:.82em;opacity:.9;">
+              <strong>⚠ ${data.potential_duplicates.length} ignorado(s) como possíveis duplicatas.</strong>
+              <br>Estes lançamentos já existem com data ±3 dias e mesmo valor. Use <code>?force=1</code> na URL para forçar importação.
+              <ul style="margin:4px 0 0 16px;">${data.potential_duplicates.map((p) =>
+                `<li>${escapeHtml(p.candidate.entry_date)} • R$ ${Number(p.candidate.amount).toFixed(2)} • ${escapeHtml(p.candidate.description || "")}</li>`
+              ).join("")}</ul>
+            </div>`
+          : "";
         resultEl.innerHTML = `
           <span class="fin-up">✓ ${data.imported} lançamento(s) importado(s).</span>
+          ${dupHtml}
           ${data.errors?.length ? `<span class="fin-down"> ${data.errors.length} erro(s):</span>${errHtml}` : ""}
         `;
       }
@@ -1029,6 +1390,24 @@ async function submitEditCashflow(e, entryId) {
     payment_status: paymentStatus,
     settled_at: paymentStatus === "paid" ? settledAt : null,
   };
+
+  // Personal spending guard on edit
+  if (body.entry_type === "expense" && body.category && body.amount > 0) {
+    const month = body.entry_date ? body.entry_date.slice(0, 7) : getSelectedCashflowMonth();
+    try {
+      const chk = await fetch(
+        `/api/finance/cashflow/budget/check?category=${encodeURIComponent(body.category)}&amount=${body.amount}&month=${encodeURIComponent(month)}`
+      );
+      if (chk.ok) {
+        const chkData = await chk.json();
+        if (chkData.has_budget && chkData.over_budget) {
+          const msg = `⚠️ Este gasto de ${formatBRL(body.amount)} levaria "${body.category}" a ${formatBRL(chkData.would_be_spent)} — acima do limite de ${formatBRL(chkData.limit)}. Continuar?`;
+          if (!confirm(msg)) return;
+        }
+      }
+    } catch { /* non-blocking */ }
+  }
+
   try {
     const resp = await finFetch(`/api/finance/cashflow/${entryId}`, {
       method: "PUT",

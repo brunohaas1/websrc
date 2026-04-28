@@ -15,6 +15,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_cashflow.js') }}?v={{ asset_hash('finance_cashflow.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='finance_offline.js') }}?v={{ asset_hash('finance_offline.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_shared.js') }}?v={{ asset_hash('finance_shared.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_flags.js') }}?v={{ asset_hash('finance_flags.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_history.js') }}?v={{ asset_hash('finance_history.js') }}" defer></script>
@@ -417,9 +418,12 @@
           <input id="finCashflowTag" class="fin-inline-select" placeholder="Tag" title="Filtrar por tag" />
           <button id="btnCashflowRollover" class="btn-text" title="Copiar lançamentos recorrentes de outro mês">↻ Virada de mês</button>
           <button id="btnCashflowBudget" class="btn-text" title="Configurar orçamento por categoria">⚙ Orçamento</button>
-          <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button>
+          <button id="btnBudgetMethodology" class="btn-text" title="Aplicar metodologia de orçamento pessoal">📐 Metodologia</button>
+          <button id="btnCashflowRecurring" class="btn-text" title="Gerenciar lançamentos recorrentes">🔁 Recorrentes</button>
+          <button id="btnAddCashflow" class="btn-text" title="Cadastrar ganho ou gasto">＋ Lançamento</button><span id="offlinePendingBadge" style="display:none;background:#ef4444;color:#fff;border-radius:999px;font-size:.7em;padding:1px 6px;margin-left:-4px;vertical-align:top;"></span>
           <button id="btnCashflowScenario" class="btn-text" title="Simular redução de gastos">🔮 Cenários</button>
           <button id="btnCashflowImport" class="btn-text" title="Importar extrato CSV ou OFX">📥 Importar</button>
+          <button id="btnReceiptOCR" class="btn-text" title="Analisar comprovante por foto (OCR)">📷 Comprovante</button>
           <button id="btnCashflowAutoClassify" class="btn-text" title="Classificar automaticamente lançamentos sem categoria">🏷 Auto-classificar</button>
           <button id="btnCashflowClosingPdf" class="btn-text" title="Gerar fechamento mensal em PDF">🧾 PDF</button>
         </h2>

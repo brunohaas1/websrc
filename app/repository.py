@@ -78,6 +78,7 @@ class Repository:
                     tags_json TEXT DEFAULT '[]',
                     frequency TEXT NOT NULL DEFAULT 'monthly',
                     day_of_month INTEGER NOT NULL DEFAULT 1,
+                    day_rule TEXT NOT NULL DEFAULT 'exact',
                     start_date DATE,
                     end_date DATE,
                     last_generated_month TEXT,
@@ -85,6 +86,7 @@ class Repository:
                     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 )
                 """,
+                "ALTER TABLE fin_cashflow_recurring ADD COLUMN IF NOT EXISTS day_rule TEXT NOT NULL DEFAULT 'exact'",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
@@ -118,6 +120,7 @@ class Repository:
                     tags_json TEXT DEFAULT '[]',
                     frequency TEXT NOT NULL DEFAULT 'monthly',
                     day_of_month INTEGER NOT NULL DEFAULT 1,
+                    day_rule TEXT NOT NULL DEFAULT 'exact',
                     start_date TEXT,
                     end_date TEXT,
                     last_generated_month TEXT,
@@ -125,6 +128,7 @@ class Repository:
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
                 """,
+                "ALTER TABLE fin_cashflow_recurring ADD COLUMN day_rule TEXT NOT NULL DEFAULT 'exact'",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
@@ -2953,9 +2957,9 @@ class Repository:
                 """
                 INSERT INTO fin_cashflow_recurring
                     (active, entry_type, amount, category, subcategory, cost_center,
-                     description, notes, tags_json, frequency, day_of_month,
+                     description, notes, tags_json, frequency, day_of_month, day_rule,
                      start_date, end_date, last_generated_month)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             )
             if self.is_postgres:
@@ -2976,6 +2980,7 @@ class Repository:
                     json_dumps(data.get("tags") or []),
                     data.get("frequency", "monthly"),
                     data.get("day_of_month", 1),
+                    data.get("day_rule", "exact"),
                     data.get("start_date"),
                     data.get("end_date"),
                     data.get("last_generated_month"),
@@ -3018,6 +3023,7 @@ class Repository:
             "tags",
             "frequency",
             "day_of_month",
+            "day_rule",
             "start_date",
             "end_date",
             "last_generated_month",
@@ -3089,24 +3095,74 @@ class Repository:
         month_num = int(month[5:7])
         days_in_month = calendar.monthrange(year, month_num)[1]
 
-        for tpl in templates:
-            if str(tpl.get("frequency") or "monthly") != "monthly":
-                continue
+        def _resolve_entry_date(tpl: dict[str, Any]) -> str | None:
+            """Resolve entry date in target month based on frequency + day_rule."""
+            freq = str(tpl.get("frequency") or "monthly").lower()
+            day_rule = str(tpl.get("day_rule") or "exact").lower()
+            start_date = str(tpl.get("start_date") or "").strip()
+            end_date = str(tpl.get("end_date") or "").strip()
 
+            # Check date bounds
+            if start_date and start_date[:7] > month:
+                return None
+            if end_date and end_date[:7] < month:
+                return None
+
+            # For quarterly: run every 3 months from start_date (or from month 1)
+            if freq == "quarterly":
+                start_m = int(start_date[5:7]) if len(start_date) >= 7 else 1
+                start_y = int(start_date[:4]) if len(start_date) >= 7 else year
+                # Months elapsed since start
+                months_elapsed = (year - start_y) * 12 + (month_num - start_m)
+                if months_elapsed < 0 or months_elapsed % 3 != 0:
+                    return None
+            elif freq == "yearly":
+                start_m = int(start_date[5:7]) if len(start_date) >= 7 else month_num
+                if month_num != start_m:
+                    return None
+            elif freq != "monthly":
+                return None  # unsupported frequency
+
+            # Resolve exact calendar day
+            if day_rule == "last_day":
+                day = days_in_month
+            elif day_rule == "first_weekday":
+                # Find first Monday–Friday of the month
+                day = 1
+                for d in range(1, days_in_month + 1):
+                    if datetime(year, month_num, d).weekday() < 5:
+                        day = d
+                        break
+            elif day_rule == "last_weekday":
+                # Find last Monday–Friday of the month
+                day = days_in_month
+                for d in range(days_in_month, 0, -1):
+                    if datetime(year, month_num, d).weekday() < 5:
+                        day = d
+                        break
+            else:
+                # exact: use day_of_month, clamp to month length
+                day = max(1, min(days_in_month, int(tpl.get("day_of_month") or 1)))
+
+            return f"{year:04d}-{month_num:02d}-{day:02d}"
+
+        for tpl in templates:
             last_month = str(tpl.get("last_generated_month") or "").strip()
-            if last_month and last_month >= month:
+            freq = str(tpl.get("frequency") or "monthly").lower()
+
+            # For monthly: skip if already generated this month
+            if freq == "monthly" and last_month and last_month >= month:
+                skipped_already_generated += 1
+                continue
+            # For quarterly/yearly: skip if already generated this month
+            if freq in ("quarterly", "yearly") and last_month == month:
                 skipped_already_generated += 1
                 continue
 
-            start_date = str(tpl.get("start_date") or "").strip()
-            end_date = str(tpl.get("end_date") or "").strip()
-            if start_date and start_date[:7] > month:
-                continue
-            if end_date and end_date[:7] < month:
+            entry_date = _resolve_entry_date(tpl)
+            if entry_date is None:
                 continue
 
-            day = max(1, min(days_in_month, int(tpl.get("day_of_month") or 1)))
-            entry_date = f"{year:04d}-{month_num:02d}-{day:02d}"
             signature = (
                 str(tpl.get("entry_type") or "").strip().lower(),
                 round(float(tpl.get("amount") or 0), 2),

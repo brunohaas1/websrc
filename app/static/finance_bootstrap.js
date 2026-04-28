@@ -55,6 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnAddCashflow", openAddCashflowModal);
   bind("btnCashflowRollover", openCashflowRolloverModal);
   bind("btnCashflowBudget", openCashflowBudgetModal);
+    bind("btnBudgetMethodology", openBudgetMethodologyModal);
+    bind("btnCashflowRecurring", openCashflowRecurringModal);
+    bind("btnReceiptOCR", openReceiptOCRModal);
   bind("btnCashflowScenario", openCashflowScenarioModal);
   bind("btnCashflowImport", openCashflowImportModal);
   bind("btnCashflowAutoClassify", runCashflowAutoClassify);
