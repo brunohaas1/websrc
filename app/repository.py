@@ -64,6 +64,8 @@ class Repository:
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS tags_json TEXT DEFAULT '[]'",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_type_date ON fin_cashflow_entries(entry_type, entry_date DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_category_date ON fin_cashflow_entries(category, entry_date DESC)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
                     id BIGSERIAL PRIMARY KEY,
@@ -88,6 +90,7 @@ class Repository:
                 """,
                 "ALTER TABLE fin_cashflow_recurring ADD COLUMN IF NOT EXISTS day_rule TEXT NOT NULL DEFAULT 'exact'",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status ON fin_cashflow_reconcile(status, settled_at DESC)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
                     id BIGSERIAL PRIMARY KEY,
@@ -106,6 +109,8 @@ class Repository:
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN tags_json TEXT DEFAULT '[]'",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_type_date ON fin_cashflow_entries(entry_type, entry_date DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_category_date ON fin_cashflow_entries(category, entry_date DESC)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +135,7 @@ class Repository:
                 """,
                 "ALTER TABLE fin_cashflow_recurring ADD COLUMN day_rule TEXT NOT NULL DEFAULT 'exact'",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status ON fin_cashflow_reconcile(status, settled_at DESC)",
                 """
                 CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2688,6 +2694,14 @@ class Repository:
                 "SELECT * FROM fin_goals ORDER BY created_at DESC",
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_fin_goal(self, goal_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_goals WHERE id = ?"),
+                (goal_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     def update_fin_goal(self, goal_id: int, data: dict[str, Any]) -> bool:
         with get_connection(self.database_target) as conn:

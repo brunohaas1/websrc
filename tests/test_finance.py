@@ -1416,6 +1416,136 @@ class TestCashflowNewFeatures:
         assert data.get("ok") is False
         assert data.get("pytesseract_missing") is True
 
+    def test_cashflow_ocr_manual_text_fallback(self, client, monkeypatch):
+        import builtins
+        from io import BytesIO
+
+        original_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pytesseract" or name == "PIL" or name.startswith("PIL"):
+                raise ImportError("forced for test")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        resp = client.post(
+            "/api/finance/cashflow/ocr",
+            data={
+                "file": (BytesIO(b"x" * 1024), "receipt.jpg"),
+                "manual_text": "SUPERMERCADO XPTO\nTOTAL R$ 123,45",
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert data.get("fallback_used") == "manual_text"
+        assert data.get("category") in ("Alimentação", "Sem categoria", None)
+
+    def test_cashflow_month_plan_returns_weeks_and_projection(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 4000,
+            "category": "Salário",
+            "description": "Receita",
+            "entry_date": "2026-04-02",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 1200,
+            "category": "Moradia",
+            "description": "Aluguel",
+            "entry_date": "2026-04-03",
+        })
+        resp = client.get("/api/finance/cashflow/month-plan?month=2026-04")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("month") == "2026-04"
+        assert isinstance(data.get("weeks"), list)
+        assert "projected_end_balance" in data
+
+    def test_goal_scenario_estimates_months(self, client):
+        created = jpost(client, "/api/finance/goals", {
+            "name": "Reserva",
+            "target_amount": 6000,
+            "current_amount": 1000,
+        })
+        goal_id = created.get_json()["id"]
+
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 5000,
+            "category": "Salário",
+            "description": "Renda",
+            "entry_date": "2026-04-01",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 3500,
+            "category": "Geral",
+            "description": "Despesa",
+            "entry_date": "2026-04-05",
+        })
+
+        resp = jpost(client, f"/api/finance/goals/{goal_id}/scenario", {
+            "month": "2026-04",
+            "extra_monthly": 300,
+            "adjustments": [{"category": "Geral", "reduction_pct": 10}],
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["goal"]["id"] == goal_id
+        assert "simulated_months_to_goal" in data["projection"]
+
+    def test_cashflow_saved_filters_crud(self, client):
+        created = jpost(client, "/api/finance/cashflow/saved-filters", {
+            "name": "Casa pendentes",
+            "filter": {"month": "2026-04", "status": "pending", "cost_center": "Casa"},
+        })
+        assert created.status_code == 201
+        filter_id = created.get_json()["id"]
+
+        listed = client.get("/api/finance/cashflow/saved-filters")
+        assert listed.status_code == 200
+        rows = listed.get_json()
+        assert any(int(r.get("id") or 0) == filter_id for r in rows)
+
+        deleted = client.delete(f"/api/finance/cashflow/saved-filters/{filter_id}")
+        assert deleted.status_code == 200
+
+    def test_cashflow_bulk_update_and_status(self, client):
+        e1 = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Outros",
+            "description": "A",
+            "entry_date": "2026-04-10",
+        }).get_json()["id"]
+        e2 = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 120,
+            "category": "Outros",
+            "description": "B",
+            "entry_date": "2026-04-11",
+        }).get_json()["id"]
+
+        upd = jpost(client, "/api/finance/cashflow/bulk", {
+            "ids": [e1, e2],
+            "action": "update",
+            "updates": {"category": "Alimentação", "tags": ["lote"]},
+        })
+        assert upd.status_code == 200
+        assert upd.get_json()["updated"] == 2
+
+        status = jpost(client, "/api/finance/cashflow/bulk", {
+            "ids": [e1, e2],
+            "action": "status",
+            "updates": {"status": "paid", "settled_at": "2026-04-12"},
+        })
+        assert status.status_code == 200
+        assert status.get_json()["updated"] == 2
+
     def test_csv_import_basic(self, client):
         csv_content = (
             "date,amount,type,category,description\n"

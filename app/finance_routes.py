@@ -1191,6 +1191,95 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _invalidate_cache_prefixes("finance:audit:")
         return jsonify({"ok": True})
 
+    @app.post("/api/finance/goals/<int:goal_id>/scenario")
+    @limiter.limit("20/minute")
+    def finance_goal_scenario(goal_id: int):
+        goal = repo.get_fin_goal(goal_id)
+        if not goal:
+            return jsonify({"error": "Meta não encontrada"}), 404
+
+        body = request.get_json(silent=True) or {}
+        month = sanitize_text(str(body.get("month", "")), 7).strip() or datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        try:
+            extra_monthly = float(body.get("extra_monthly", 0) or 0)
+        except (TypeError, ValueError):
+            extra_monthly = 0.0
+        extra_monthly = max(0.0, extra_monthly)
+
+        adjustments = body.get("adjustments", [])
+        if not isinstance(adjustments, list):
+            adjustments = []
+
+        scenario = repo.get_fin_cashflow_analytics(month=month)
+        expense_by_cat = {
+            str(c.get("category") or ""): float(c.get("amount") or 0)
+            for c in scenario.get("categories", {}).get("expense", [])
+        }
+        reduction_saving = 0.0
+        for adj in adjustments:
+            cat = sanitize_text(str(adj.get("category") or ""), 60).strip()
+            try:
+                pct = float(adj.get("reduction_pct") or 0)
+            except (TypeError, ValueError):
+                pct = 0.0
+            pct = max(0.0, min(100.0, pct))
+            if cat:
+                reduction_saving += expense_by_cat.get(cat, 0.0) * (pct / 100.0)
+
+        summary = repo.get_fin_cashflow_summary(months=3)
+        monthly_rows = summary.get("monthly", [])
+        positive_balances = [
+            float(r.get("balance") or 0)
+            for r in monthly_rows
+            if float(r.get("balance") or 0) > 0
+        ]
+        baseline_monthly = (sum(positive_balances) / len(positive_balances)) if positive_balances else 0.0
+
+        target = float(goal.get("target_amount") or 0)
+        current = float(goal.get("current_amount") or 0)
+        gap = max(0.0, target - current)
+
+        baseline_contribution = max(0.0, baseline_monthly)
+        scenario_contribution = max(0.0, baseline_monthly + extra_monthly + reduction_saving)
+
+        def _months_needed(monthly_contrib: float) -> int | None:
+            if gap <= 0:
+                return 0
+            if monthly_contrib <= 0:
+                return None
+            return int(math.ceil(gap / monthly_contrib))
+
+        baseline_months = _months_needed(baseline_contribution)
+        simulated_months = _months_needed(scenario_contribution)
+
+        return jsonify({
+            "goal": {
+                "id": int(goal.get("id") or goal_id),
+                "name": goal.get("name"),
+                "target_amount": round(target, 2),
+                "current_amount": round(current, 2),
+                "gap": round(gap, 2),
+            },
+            "assumptions": {
+                "month": month,
+                "baseline_monthly_contribution": round(baseline_contribution, 2),
+                "extra_monthly": round(extra_monthly, 2),
+                "monthly_saving_from_reduction": round(reduction_saving, 2),
+            },
+            "projection": {
+                "baseline_months_to_goal": baseline_months,
+                "simulated_months_to_goal": simulated_months,
+                "months_saved": (
+                    baseline_months - simulated_months
+                    if baseline_months is not None and simulated_months is not None
+                    else None
+                ),
+            },
+        })
+
     # ── Cashflow (gains / expenses) ────────────────────────
 
     def _build_simple_pdf(lines: list[str]) -> bytes:
@@ -1273,6 +1362,58 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             limit=max(1, min(2000, limit)),
         )
         return jsonify(payload)
+
+    @app.get("/api/finance/cashflow/saved-filters")
+    @limiter.limit("30/minute")
+    def finance_cashflow_saved_filters_list():
+        rows = repo.list_saved_filters()
+        payload = []
+        for row in rows:
+            name = str(row.get("name") or "")
+            if not name.startswith("cashflow:"):
+                continue
+            payload.append({
+                "id": int(row.get("id") or 0),
+                "name": name.replace("cashflow:", "", 1),
+                "filter": row.get("filter") if isinstance(row.get("filter"), dict) else {},
+                "created_at": row.get("created_at"),
+            })
+        return jsonify(payload)
+
+    @app.post("/api/finance/cashflow/saved-filters")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_saved_filters_add():
+        body = request.get_json(silent=True) or {}
+        name = sanitize_text(str(body.get("name", "")), 80).strip()
+        raw_filter = body.get("filter", {})
+        if not name:
+            return jsonify({"error": "name obrigatório"}), 400
+        if not isinstance(raw_filter, dict):
+            return jsonify({"error": "filter deve ser objeto"}), 400
+
+        allowed_keys = {"month", "type", "status", "cost_center", "subcategory", "tag", "q", "limit"}
+        safe_filter: dict[str, object] = {}
+        for key, value in raw_filter.items():
+            if key not in allowed_keys:
+                continue
+            safe_filter[key] = value
+
+        filter_id = repo.add_saved_filter(f"cashflow:{name}", safe_filter)
+        return jsonify({"ok": True, "id": filter_id}), 201
+
+    @app.delete("/api/finance/cashflow/saved-filters/<int:filter_id>")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_saved_filters_delete(filter_id: int):
+        rows = repo.list_saved_filters()
+        target = next((r for r in rows if int(r.get("id") or 0) == filter_id), None)
+        if not target:
+            return jsonify({"error": "Filtro não encontrado"}), 404
+        if not str(target.get("name") or "").startswith("cashflow:"):
+            return jsonify({"error": "Filtro não pertence ao cashflow"}), 400
+        repo.delete_saved_filter(filter_id)
+        return jsonify({"ok": True})
 
     @app.get("/api/finance/cashflow/summary")
     @limiter.limit("30/minute")
@@ -1667,6 +1808,54 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "projected_income": proj.get("projected_income"),
         })
 
+    def _load_cashflow_classify_rules() -> list[dict[str, str]]:
+        raw_rules = repo.get_setting("cashflow_classify_rules") or "[]"
+        try:
+            rules = json.loads(raw_rules) if isinstance(raw_rules, str) else raw_rules
+        except (json.JSONDecodeError, TypeError):
+            rules = []
+        safe_rules: list[dict[str, str]] = []
+        for r in rules if isinstance(rules, list) else []:
+            kw = sanitize_text(str(r.get("keyword") or ""), 100).strip().lower()
+            cat = sanitize_text(str(r.get("category") or ""), 60).strip()
+            if kw and cat:
+                safe_rules.append({"keyword": kw, "category": cat})
+        return safe_rules
+
+    def _infer_cashflow_category_from_text(text: str, rules: list[dict[str, str]] | None = None) -> str | None:
+        normalized = str(text or "").lower().strip()
+        if not normalized:
+            return None
+
+        for rule in (rules or _load_cashflow_classify_rules()):
+            if rule["keyword"] in normalized:
+                return rule["category"]
+
+        keyword_map = {
+            "mercado": "Alimentação",
+            "supermercado": "Alimentação",
+            "restaurante": "Alimentação",
+            "ifood": "Alimentação",
+            "uber": "Transporte",
+            "99": "Transporte",
+            "posto": "Transporte",
+            "combust": "Transporte",
+            "farmacia": "Saúde",
+            "drogaria": "Saúde",
+            "netflix": "Assinaturas",
+            "spotify": "Assinaturas",
+            "internet": "Contas",
+            "energia": "Contas",
+            "luz": "Contas",
+            "agua": "Contas",
+            "aluguel": "Moradia",
+            "condominio": "Moradia",
+        }
+        for kw, category in keyword_map.items():
+            if kw in normalized:
+                return category
+        return None
+
     @app.post("/api/finance/cashflow/auto-classify")
     @limiter.limit("20/minute")
     @require_finance_key
@@ -1679,12 +1868,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
 
-        # rules stored as app_settings JSON: [{"keyword": "...", "category": "..."}]
-        raw_rules = repo.get_setting("cashflow_classify_rules") or "[]"
-        try:
-            rules: list[dict] = json.loads(raw_rules) if isinstance(raw_rules, str) else raw_rules
-        except (json.JSONDecodeError, TypeError):
-            rules = []
+        rules = _load_cashflow_classify_rules()
 
         entries = repo.list_fin_cashflow_entries(month=month, limit=5000)
         updated = 0
@@ -1692,14 +1876,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             cat = str(entry.get("category") or "").strip()
             if cat and cat.lower() not in ("", "sem categoria", "outros"):
                 continue
-            desc = str(entry.get("description") or "").lower()
-            for rule in rules:
-                kw = str(rule.get("keyword") or "").lower().strip()
-                new_cat = sanitize_text(str(rule.get("category") or ""), 60).strip()
-                if kw and new_cat and kw in desc:
-                    repo.update_fin_cashflow_entry(entry["id"], {"category": new_cat})
-                    updated += 1
-                    break
+            desc = str(entry.get("description") or "")
+            inferred = _infer_cashflow_category_from_text(desc, rules)
+            if inferred:
+                repo.update_fin_cashflow_entry(entry["id"], {"category": inferred})
+                updated += 1
 
         _audit("update", "cashflow_auto_classify", None, {"month": month, "updated": updated})
         return jsonify({"ok": True, "month": month, "updated": updated})
@@ -1707,12 +1888,116 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @app.get("/api/finance/cashflow/classify-rules")
     @limiter.limit("30/minute")
     def finance_cashflow_classify_rules_get():
-        raw = repo.get_setting("cashflow_classify_rules") or "[]"
-        try:
-            rules = json.loads(raw) if isinstance(raw, str) else raw
-        except (json.JSONDecodeError, TypeError):
-            rules = []
+        rules = _load_cashflow_classify_rules()
         return jsonify({"rules": rules})
+
+    @app.get("/api/finance/cashflow/month-plan")
+    @limiter.limit("30/minute")
+    def finance_cashflow_month_plan():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        entries = repo.list_fin_cashflow_entries(month=month, limit=5000)
+        analytics = repo.get_fin_cashflow_analytics(month=month)
+        budget_rows = analytics.get("budget", {}).get("items", [])
+        recurring = repo.list_fin_cashflow_recurring(active_only=True)
+
+        year = int(month[:4])
+        month_num = int(month[5:7])
+        month_start = datetime(year, month_num, 1).date()
+        if month_num == 12:
+            month_end = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+        else:
+            month_end = datetime(year, month_num + 1, 1).date() - timedelta(days=1)
+        today = datetime.now(timezone.utc).date()
+
+        weeks: list[dict[str, object]] = []
+        start_day = 1
+        while start_day <= month_end.day:
+            end_day = min(start_day + 6, month_end.day)
+            ws = datetime(year, month_num, start_day).date()
+            we = datetime(year, month_num, end_day).date()
+            weeks.append({
+                "label": f"{ws.strftime('%d/%m')} - {we.strftime('%d/%m')}",
+                "start": ws.isoformat(),
+                "end": we.isoformat(),
+                "income": 0.0,
+                "expense": 0.0,
+                "expected_income": 0.0,
+                "expected_expense": 0.0,
+            })
+            start_day += 7
+
+        def _bucket_for(date_obj: datetime.date) -> dict[str, object] | None:
+            for w in weeks:
+                if str(w["start"]) <= date_obj.isoformat() <= str(w["end"]):
+                    return w
+            return None
+
+        for row in entries:
+            raw_date = str(row.get("entry_date") or "")[:10]
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", raw_date):
+                continue
+            d = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            bucket = _bucket_for(d)
+            if not bucket:
+                continue
+            amount = float(row.get("amount") or 0)
+            if str(row.get("entry_type") or "") == "income":
+                bucket["income"] = float(bucket["income"]) + amount
+            else:
+                bucket["expense"] = float(bucket["expense"]) + amount
+
+        for tpl in recurring:
+            try:
+                day = int(tpl.get("day_of_month") or 1)
+            except (TypeError, ValueError):
+                day = 1
+            day = max(1, min(month_end.day, day))
+            d = datetime(year, month_num, day).date()
+            if d < max(today, month_start):
+                continue
+            bucket = _bucket_for(d)
+            if not bucket:
+                continue
+            amount = float(tpl.get("amount") or 0)
+            if str(tpl.get("entry_type") or "") == "income":
+                bucket["expected_income"] = float(bucket["expected_income"]) + amount
+            else:
+                bucket["expected_expense"] = float(bucket["expected_expense"]) + amount
+
+        running_balance = float(analytics.get("totals", {}).get("balance") or 0)
+        for bucket in weeks:
+            realized = float(bucket["income"]) - float(bucket["expense"])
+            expected = float(bucket["expected_income"]) - float(bucket["expected_expense"])
+            bucket["net"] = round(realized + expected, 2)
+            running_balance += realized + expected
+            bucket["projected_balance"] = round(running_balance, 2)
+            bucket["income"] = round(float(bucket["income"]), 2)
+            bucket["expense"] = round(float(bucket["expense"]), 2)
+            bucket["expected_income"] = round(float(bucket["expected_income"]), 2)
+            bucket["expected_expense"] = round(float(bucket["expected_expense"]), 2)
+
+        risks = [
+            {
+                "category": r.get("category"),
+                "usage_pct": r.get("usage_pct"),
+                "remaining": r.get("remaining"),
+            }
+            for r in budget_rows
+            if float(r.get("usage_pct") or 0) >= 85
+        ]
+
+        return jsonify({
+            "month": month,
+            "weeks": weeks,
+            "risk_flags": risks,
+            "starting_balance": round(float(analytics.get("totals", {}).get("balance") or 0), 2),
+            "projected_end_balance": round(running_balance, 2),
+        })
 
     @app.put("/api/finance/cashflow/classify-rules")
     @limiter.limit("15/minute")
@@ -1957,30 +2242,51 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @require_finance_key
     def finance_cashflow_ocr():
         """OCR de comprovante: imagem → campos pré-preenchidos para lançamento."""
-        if "file" not in request.files:
-            return jsonify({"ok": False, "error": "Nenhum arquivo enviado (campo 'file')"}), 400
+        f = request.files.get("file")
+        manual_text = sanitize_text(str(request.form.get("manual_text", "")), 2000).strip()
+        if not f and not manual_text:
+            return jsonify({"ok": False, "error": "Envie arquivo no campo 'file' ou texto em 'manual_text'"}), 400
 
-        f = request.files["file"]
-        raw_bytes = f.read(5 * 1024 * 1024)  # max 5 MB
-        if len(raw_bytes) < 100:
-            return jsonify({"ok": False, "error": "Arquivo muito pequeno ou vazio"}), 400
+        raw_bytes = b""
+        if f:
+            raw_bytes = f.read(5 * 1024 * 1024)  # max 5 MB
+            if len(raw_bytes) < 100 and not manual_text:
+                return jsonify({"ok": False, "error": "Arquivo muito pequeno ou vazio"}), 400
 
         try:
             import pytesseract  # noqa: PLC0415
             from PIL import Image  # noqa: PLC0415
         except ImportError:
+            if manual_text:
+                inferred_category = _infer_cashflow_category_from_text(manual_text)
+                lines = [l.strip() for l in manual_text.splitlines() if l.strip()]
+                merchant = sanitize_text(lines[0][:120], 120) if lines else ""
+                return jsonify({
+                    "ok": True,
+                    "fallback_used": "manual_text",
+                    "date": None,
+                    "amount": None,
+                    "description": merchant,
+                    "merchant": merchant,
+                    "category": inferred_category,
+                    "raw_text": manual_text[:1000],
+                })
             return jsonify({
                 "ok": False,
                 "pytesseract_missing": True,
                 "error": "Instale pytesseract e Pillow para OCR automático: pip install pytesseract Pillow",
             }), 501
 
-        try:
-            import io as _io
-            img = Image.open(_io.BytesIO(raw_bytes))
-            raw_text: str = pytesseract.image_to_string(img, lang="por")
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"Erro ao processar imagem: {exc}"}), 422
+        raw_text = manual_text
+        if f:
+            try:
+                import io as _io
+                img = Image.open(_io.BytesIO(raw_bytes))
+                raw_text = pytesseract.image_to_string(img, lang="por")
+            except Exception as exc:
+                if not manual_text:
+                    return jsonify({"ok": False, "error": f"Erro ao processar imagem: {exc}"}), 422
+                raw_text = manual_text
 
         # --- parse date ---
         date_match = re.search(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b", raw_text)
@@ -2001,16 +2307,28 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             except ValueError:
                 pass
 
-        # --- basic description: first non-empty line, max 100 chars ---
+        # --- basic merchant/description: first non-empty line, max 120 chars ---
         lines = [l.strip() for l in raw_text.splitlines() if l.strip() and len(l.strip()) > 3]
-        description = sanitize_text(lines[0][:100] if lines else "", 100)
+        merchant = sanitize_text(lines[0][:120] if lines else "", 120)
+        description = sanitize_text(merchant or (lines[1][:100] if len(lines) > 1 else ""), 100)
+        category = _infer_cashflow_category_from_text("\n".join(lines[:8]))
+        confidence = 0.55
+        if amount is not None:
+            confidence += 0.2
+        if entry_date is not None:
+            confidence += 0.15
+        if category:
+            confidence += 0.1
 
         return jsonify({
             "ok": True,
             "date": entry_date,
             "amount": amount,
             "description": description,
-            "category": None,
+            "merchant": merchant,
+            "category": category,
+            "confidence": round(min(0.99, confidence), 2),
+            "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
         })
 
@@ -2649,6 +2967,92 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             },
         )
         return jsonify({"ok": True})
+
+    @app.post("/api/finance/cashflow/bulk")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_bulk_action():
+        body = request.get_json(silent=True) or {}
+        ids_raw = body.get("ids", [])
+        action = sanitize_text(str(body.get("action", "update")), 20).strip().lower()
+        updates = body.get("updates", {})
+
+        if not isinstance(ids_raw, list) or not ids_raw:
+            return jsonify({"error": "ids deve ser uma lista não vazia"}), 400
+        ids: list[int] = []
+        for item in ids_raw:
+            try:
+                ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        ids = sorted(list({i for i in ids if i > 0}))
+        if not ids:
+            return jsonify({"error": "Nenhum id válido informado"}), 400
+
+        updated = 0
+        deleted = 0
+        not_found = 0
+
+        if action == "delete":
+            for entry_id in ids:
+                entry = repo.get_fin_cashflow_entry(entry_id)
+                if not entry:
+                    not_found += 1
+                    continue
+                repo.delete_fin_cashflow_entry(entry_id)
+                deleted += 1
+            _audit("bulk_delete", "cashflow", None, {"ids": ids, "deleted": deleted, "not_found": not_found})
+            return jsonify({"ok": True, "action": action, "deleted": deleted, "not_found": not_found})
+
+        if action == "status":
+            status = sanitize_text(str(updates.get("status", "")), 12).strip().lower()
+            if status not in ("pending", "paid"):
+                return jsonify({"error": "status inválido (pending|paid)"}), 400
+            settled_at = sanitize_text(str(updates.get("settled_at", "")), 10).strip() or None
+            if settled_at and not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at):
+                return jsonify({"error": "settled_at inválida (use YYYY-MM-DD)"}), 400
+            for entry_id in ids:
+                if repo.set_fin_cashflow_status(entry_id, status, settled_at):
+                    updated += 1
+                else:
+                    not_found += 1
+            _audit("bulk_status", "cashflow", None, {"ids": ids, "updated": updated, "not_found": not_found, "status": status})
+            return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
+
+        if action != "update":
+            return jsonify({"error": "action inválida (update|status|delete)"}), 400
+
+        if not isinstance(updates, dict) or not updates:
+            return jsonify({"error": "updates deve ser objeto não vazio"}), 400
+
+        safe_updates: dict[str, object] = {}
+        if "category" in updates:
+            safe_updates["category"] = sanitize_text(str(updates.get("category", "")), 60)
+        if "subcategory" in updates:
+            safe_updates["subcategory"] = sanitize_text(str(updates.get("subcategory", "")), 60)
+        if "cost_center" in updates:
+            safe_updates["cost_center"] = sanitize_text(str(updates.get("cost_center", "")), 60)
+        if "notes" in updates:
+            safe_updates["notes"] = sanitize_text(str(updates.get("notes", "")), 500)
+        if "tags" in updates:
+            safe_updates["tags"] = _normalize_tags(updates.get("tags"))
+
+        if not safe_updates:
+            return jsonify({"error": "Nenhum campo válido em updates"}), 400
+
+        for entry_id in ids:
+            if repo.update_fin_cashflow_entry(entry_id, safe_updates):
+                updated += 1
+            else:
+                not_found += 1
+
+        _audit("bulk_update", "cashflow", None, {
+            "ids": ids,
+            "updated": updated,
+            "not_found": not_found,
+            "fields": sorted(list(safe_updates.keys())),
+        })
+        return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
 
     @app.get("/api/finance/goals/passive-income")
     @limiter.limit("30/minute")
