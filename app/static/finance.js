@@ -1028,10 +1028,13 @@ async function refreshCashflowPanel() {
   const costCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
   const tag = String(byId("finCashflowTag")?.value || "").trim();
   const [entries, summary, analytics, budgetPayload] = await Promise.all([
-    finFetch(`/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`).then((r) => r.json()),
-    finFetch("/api/finance/cashflow/summary?months=12").then((r) => r.json()),
-    finFetch(`/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
-    finFetch(`/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`).then((r) => r.json()),
+    fetchFinanceJson(
+      `/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`,
+      [],
+    ),
+    fetchFinanceJson("/api/finance/cashflow/summary?months=12", { monthly: [] }),
+    fetchFinanceJson(`/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`, null),
+    fetchFinanceJson(`/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`, { budget: {} }),
   ]);
   FIN.cashflowEntries = Array.isArray(entries) ? entries : [];
   FIN.cashflowSummary = summary || { monthly: [] };

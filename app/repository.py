@@ -61,6 +61,22 @@ class Repository:
         statements: list[str] = []
         if self.is_postgres:
             statements = [
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
+                    id BIGSERIAL PRIMARY KEY,
+                    entry_type TEXT NOT NULL,
+                    amount DOUBLE PRECISION NOT NULL,
+                    category TEXT,
+                    subcategory TEXT,
+                    cost_center TEXT,
+                    description TEXT,
+                    entry_date DATE NOT NULL,
+                    notes TEXT,
+                    tags_json TEXT DEFAULT '[]',
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS tags_json TEXT DEFAULT '[]'",
@@ -116,6 +132,22 @@ class Repository:
             ]
         else:
             statements = [
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_type TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    category TEXT,
+                    subcategory TEXT,
+                    cost_center TEXT,
+                    description TEXT,
+                    entry_date TEXT NOT NULL,
+                    notes TEXT,
+                    tags_json TEXT DEFAULT '[]',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN tags_json TEXT DEFAULT '[]'",
@@ -129,7 +161,7 @@ class Repository:
                 )
                 """,
                 "ALTER TABLE fin_cashflow_reconcile ADD COLUMN settled_at TEXT",
-                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN reconciled_at TEXT DEFAULT CURRENT_TIMESTAMP",
+                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN reconciled_at TEXT",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_type_date ON fin_cashflow_entries(entry_type, entry_date DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_category_date ON fin_cashflow_entries(category, entry_date DESC)",
                 """
