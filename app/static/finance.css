@@ -698,6 +698,30 @@ body.fin-density-comfortable .fin-table td {
   margin-bottom: 12px;
 }
 
+#finCashflowCard > h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+#finCashflowCard > h2 .fin-inline-select {
+  margin-left: 0;
+  flex: 1 1 170px;
+  min-width: 140px;
+  max-width: 100%;
+}
+
+#finCashflowCard > h2 .btn-text {
+  margin-left: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+#finCashflowCard > h2 #offlinePendingBadge {
+  margin-left: 0;
+}
+
 .fin-cashflow-chart-wrap {
   min-height: 240px;
   max-height: 280px;
@@ -707,6 +731,27 @@ body.fin-density-comfortable .fin-table td {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
+}
+
+@media (max-width: 900px) {
+  #finCashflowCard > h2 .fin-inline-select {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  #finCashflowCard > h2 .btn-text {
+    flex: 1 1 calc(50% - 8px);
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+    line-height: 1.2;
+  }
+}
+
+@media (max-width: 560px) {
+  #finCashflowCard > h2 .btn-text {
+    flex-basis: 100%;
+  }
 }
 
 .fin-cashflow-kpi {
