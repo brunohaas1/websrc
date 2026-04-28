@@ -1278,6 +1278,144 @@ class TestCashflowNewFeatures:
         resp = client.post("/api/finance/cashflow/scenario", json={"month": "bad"})
         assert resp.status_code == 400
 
+    def test_budget_template_50_30_20_and_apply(self, client):
+        month = "2026-04"
+        resp = jpost(client, "/api/finance/cashflow/budget/template", {
+            "method": "50_30_20",
+            "income": 5000,
+            "month": month,
+            "apply": True,
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        budget = data.get("budget") or {}
+        assert budget.get("Moradia") == pytest.approx(1250)
+        assert budget.get("Lazer") == pytest.approx(400)
+        assert budget.get("Investimentos") == pytest.approx(750)
+
+        alerts = client.get(f"/api/finance/cashflow/budget/alerts?month={month}")
+        assert alerts.status_code == 200
+        payload = alerts.get_json()
+        all_rows = payload.get("all") or []
+        cats = {str(r.get("category")) for r in all_rows}
+        assert "Moradia" in cats
+        assert "Lazer" in cats
+        assert "Investimentos" in cats
+
+    def test_budget_check_over_budget_flag(self, client):
+        month = "2026-04"
+        jput(client, "/api/finance/cashflow/budget", {
+            "month": month,
+            "budget": {"Alimentação": 300},
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 280,
+            "category": "Alimentação",
+            "description": "Mercado",
+            "entry_date": "2026-04-10",
+        })
+
+        check = client.get(
+            "/api/finance/cashflow/budget/check"
+            "?month=2026-04&category=Alimenta%C3%A7%C3%A3o&amount=50",
+        )
+        assert check.status_code == 200
+        data = check.get_json()
+        assert data["has_budget"] is True
+        assert data["over_budget"] is True
+        assert float(data["would_be_spent"]) == pytest.approx(330)
+
+    def test_cashflow_recurring_last_day_rule_generates_month_end(self, client):
+        create = jpost(client, "/api/finance/cashflow/recurring", {
+            "entry_type": "expense",
+            "amount": 99.9,
+            "category": "Assinaturas",
+            "description": "Plano anual",
+            "frequency": "monthly",
+            "day_rule": "last_day",
+            "day_of_month": 1,
+            "start_date": "2026-01-01",
+        })
+        assert create.status_code == 201
+
+        run = jpost(client, "/api/finance/cashflow/recurring/run", {"month": "2026-02"})
+        assert run.status_code == 200
+        rows = client.get("/api/finance/cashflow?month=2026-02&category=Assinaturas").get_json()
+        assert any(str(r.get("entry_date", "")).startswith("2026-02-28") for r in rows)
+
+    def test_cashflow_recurring_quarterly_skips_non_quarter_month(self, client):
+        create = jpost(client, "/api/finance/cashflow/recurring", {
+            "entry_type": "expense",
+            "amount": 150,
+            "category": "Seguro",
+            "description": "Seguro trimestral",
+            "frequency": "quarterly",
+            "day_rule": "exact",
+            "day_of_month": 5,
+            "start_date": "2026-01-01",
+        })
+        assert create.status_code == 201
+
+        run_feb = jpost(client, "/api/finance/cashflow/recurring/run", {"month": "2026-02"})
+        assert run_feb.status_code == 200
+        feb_rows = client.get("/api/finance/cashflow?month=2026-02&category=Seguro").get_json()
+        assert feb_rows == []
+
+        run_apr = jpost(client, "/api/finance/cashflow/recurring/run", {"month": "2026-04"})
+        assert run_apr.status_code == 200
+        apr_rows = client.get("/api/finance/cashflow?month=2026-04&category=Seguro").get_json()
+        assert len(apr_rows) >= 1
+
+    def test_csv_import_returns_potential_duplicates(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Importado",
+            "description": "Supermercado",
+            "entry_date": "2026-04-10",
+        })
+
+        csv_content = (
+            "date,amount,type,category,description\n"
+            "2026-04-12,100.00,expense,Importado,Supermercado\n"
+        )
+        from io import BytesIO
+
+        resp = client.post(
+            "/api/finance/cashflow/import?month=2026-04",
+            data={"file": (BytesIO(csv_content.encode()), "import.csv")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["imported"] == 0
+        assert len(data.get("potential_duplicates") or []) == 1
+
+    def test_cashflow_ocr_missing_dependency_returns_graceful_error(self, client, monkeypatch):
+        import builtins
+        from io import BytesIO
+
+        original_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pytesseract" or name == "PIL" or name.startswith("PIL"):
+                raise ImportError("forced for test")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        resp = client.post(
+            "/api/finance/cashflow/ocr",
+            data={"file": (BytesIO(b"x" * 1024), "receipt.jpg")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 501
+        data = resp.get_json()
+        assert data.get("ok") is False
+        assert data.get("pytesseract_missing") is True
+
     def test_csv_import_basic(self, client):
         csv_content = (
             "date,amount,type,category,description\n"
