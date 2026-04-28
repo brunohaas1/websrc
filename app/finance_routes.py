@@ -3582,7 +3582,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     rows.append({"captured_at": dt, "price": float(close)})
             else:
                 series_id = benchmark_bcb_map[benchmark]
-                end_date = datetime.utcnow().date()
+                end_date = datetime.now(timezone.utc).date()
                 start_date = end_date - timedelta(days=max(40, limit * 2))
                 b_started = time.perf_counter()
                 resp = http_requests.get(
