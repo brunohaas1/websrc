@@ -1321,6 +1321,66 @@ class TestCashflowNewFeatures:
         )
         assert resp.status_code == 400
 
+    def test_cashflow_attachments_lifecycle(self, client):
+        from io import BytesIO
+
+        created = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 80,
+            "category": "Teste",
+            "description": "Anexo",
+            "entry_date": "2026-04-18",
+        })
+        assert created.status_code == 201
+        entry_id = created.get_json()["id"]
+
+        upload = client.post(
+            f"/api/finance/cashflow/{entry_id}/attachments",
+            data={"file": (BytesIO(b"comprovante-teste"), "comprovante.txt")},
+            content_type="multipart/form-data",
+        )
+        assert upload.status_code == 201
+        attachment_id = upload.get_json()["id"]
+
+        listed = client.get(f"/api/finance/cashflow/{entry_id}/attachments")
+        assert listed.status_code == 200
+        rows = listed.get_json()
+        assert len(rows) == 1
+        assert rows[0]["id"] == attachment_id
+        assert rows[0]["file_name"] == "comprovante.txt"
+
+        downloaded = client.get(f"/api/finance/cashflow/attachments/{attachment_id}/download")
+        assert downloaded.status_code == 200
+        assert downloaded.data == b"comprovante-teste"
+        assert downloaded.headers.get("Content-Type", "").startswith("text/plain")
+
+        deleted = client.delete(f"/api/finance/cashflow/attachments/{attachment_id}")
+        assert deleted.status_code == 200
+
+        listed_after = client.get(f"/api/finance/cashflow/{entry_id}/attachments")
+        assert listed_after.status_code == 200
+        assert listed_after.get_json() == []
+
+    def test_cashflow_closing_pdf_endpoint(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 5000,
+            "category": "Salario",
+            "entry_date": "2026-04-01",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 2100,
+            "category": "Moradia",
+            "entry_date": "2026-04-03",
+        })
+
+        resp = client.get("/api/finance/cashflow/closing-pdf?month=2026-04")
+        assert resp.status_code == 200
+        assert resp.data.startswith(b"%PDF")
+        assert resp.headers.get("Content-Type", "").startswith("application/pdf")
+        assert "fechamento-2026-04.pdf" in resp.headers.get("Content-Disposition", "")
+
 
 class TestFinanceAdvanced:
     def test_performance_metrics(self, client):

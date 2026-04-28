@@ -339,6 +339,19 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status
 ON fin_cashflow_reconcile(status, settled_at DESC);
 
+CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    file_blob BLOB NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (entry_id) REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_attachments_entry
+ON fin_cashflow_attachments(entry_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     asset_id INTEGER NOT NULL,
@@ -679,6 +692,18 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_reconcile_status
 ON fin_cashflow_reconcile(status, settled_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
+    id BIGSERIAL PRIMARY KEY,
+    entry_id BIGINT NOT NULL REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    file_blob BYTEA NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_attachments_entry
+ON fin_cashflow_attachments(entry_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS fin_dividends (
     id BIGSERIAL PRIMARY KEY,

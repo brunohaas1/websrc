@@ -58,6 +58,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnCashflowScenario", openCashflowScenarioModal);
   bind("btnCashflowImport", openCashflowImportModal);
   bind("btnCashflowAutoClassify", runCashflowAutoClassify);
+  bind("btnCashflowClosingPdf", exportCashflowClosingPdf);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
@@ -168,7 +169,9 @@ document.addEventListener("DOMContentLoaded", () => {
     deleteAsset,
     deleteTransaction,
     openEditCashflowModal,
+    openCashflowAttachmentModal,
     deleteCashflowEntry,
+    deleteCashflowAttachment,
     toggleCashflowStatus,
     deleteWatchlistItem,
     deleteGoal,

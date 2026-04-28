@@ -86,6 +86,18 @@ class Repository:
                 )
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
+                    id BIGSERIAL PRIMARY KEY,
+                    entry_id BIGINT NOT NULL REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE,
+                    file_name TEXT NOT NULL,
+                    mime_type TEXT,
+                    file_size BIGINT NOT NULL DEFAULT 0,
+                    file_blob BYTEA NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_attachments_entry ON fin_cashflow_attachments(entry_id, created_at DESC)",
             ]
         else:
             statements = [
@@ -114,6 +126,19 @@ class Repository:
                 )
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_recurring_active ON fin_cashflow_recurring(active, frequency, day_of_month)",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id INTEGER NOT NULL,
+                    file_name TEXT NOT NULL,
+                    mime_type TEXT,
+                    file_size INTEGER NOT NULL DEFAULT 0,
+                    file_blob BLOB NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (entry_id) REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_attachments_entry ON fin_cashflow_attachments(entry_id, created_at DESC)",
             ]
 
         with get_connection(self.database_target) as conn:
@@ -2841,6 +2866,83 @@ class Repository:
                     f"UPDATE fin_cashflow_entries SET {', '.join(fields)} WHERE id = ?"
                 ),
                 tuple(values),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def add_fin_cashflow_attachment(
+        self,
+        entry_id: int,
+        file_name: str,
+        mime_type: str,
+        file_blob: bytes,
+    ) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_cashflow_attachments
+                    (entry_id, file_name, mime_type, file_size, file_blob)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cur = conn.execute(
+                q,
+                (
+                    int(entry_id),
+                    str(file_name or "arquivo"),
+                    str(mime_type or "application/octet-stream"),
+                    int(len(file_blob or b"")),
+                    file_blob,
+                ),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cur.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cur.lastrowid or 0)
+
+    def list_fin_cashflow_attachments(self, entry_id: int) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, entry_id, file_name, mime_type, file_size, created_at
+                    FROM fin_cashflow_attachments
+                    WHERE entry_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    """,
+                ),
+                (int(entry_id),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_fin_cashflow_attachment(self, attachment_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, entry_id, file_name, mime_type, file_size, file_blob, created_at
+                    FROM fin_cashflow_attachments
+                    WHERE id = ?
+                    """,
+                ),
+                (int(attachment_id),),
+            ).fetchone()
+            if not row:
+                return None
+            out = dict(row)
+            blob = out.get("file_blob")
+            if isinstance(blob, memoryview):
+                out["file_blob"] = blob.tobytes()
+            return out
+
+    def delete_fin_cashflow_attachment(self, attachment_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql("DELETE FROM fin_cashflow_attachments WHERE id = ?"),
+                (int(attachment_id),),
             )
             conn.commit()
             return bool(cur.rowcount)

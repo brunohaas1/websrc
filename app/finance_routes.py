@@ -1193,6 +1193,56 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     # ── Cashflow (gains / expenses) ────────────────────────
 
+    def _build_simple_pdf(lines: list[str]) -> bytes:
+        """Generate a small single-page PDF without external dependencies."""
+
+        def _esc(text: str) -> str:
+            return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+        safe_lines = [sanitize_text(str(line or ""), 240) for line in lines[:80]]
+        content_lines = ["BT", "/F1 10 Tf", "40 800 Td", "12 TL"]
+        for idx, line in enumerate(safe_lines):
+            if idx > 0:
+                content_lines.append("T*")
+            content_lines.append(f"({_esc(line)}) Tj")
+        content_lines.append("ET")
+        stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+        objs: list[bytes] = []
+        objs.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+        objs.append(b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>")
+        objs.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        objs.append(
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n"
+            + stream
+            + b"\nendstream"
+        )
+
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for i, obj in enumerate(objs, start=1):
+            offsets.append(len(out))
+            out.extend(f"{i} 0 obj\n".encode("ascii"))
+            out.extend(obj)
+            out.extend(b"\nendobj\n")
+
+        xref_pos = len(out)
+        out.extend(f"xref\n0 {len(objs) + 1}\n".encode("ascii"))
+        out.extend(b"0000000000 65535 f \n")
+        for off in offsets[1:]:
+            out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+        out.extend(
+            (
+                f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\n"
+                f"startxref\n{xref_pos}\n%%EOF"
+            ).encode("ascii")
+        )
+        return bytes(out)
+
     @app.get("/api/finance/cashflow")
     @limiter.limit("30/minute")
     def finance_list_cashflow():
@@ -1703,6 +1753,150 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "filename": filename, "imported": len(imported), "errors": len(errors),
         })
         return jsonify({"ok": True, "imported": len(imported), "errors": errors})
+
+    @app.get("/api/finance/cashflow/<int:entry_id>/attachments")
+    @limiter.limit("30/minute")
+    def finance_cashflow_attachments_list(entry_id: int):
+        entry = repo.get_fin_cashflow_entry(entry_id)
+        if not entry:
+            return jsonify({"error": "Lançamento não encontrado"}), 404
+        return jsonify(repo.list_fin_cashflow_attachments(entry_id))
+
+    @app.post("/api/finance/cashflow/<int:entry_id>/attachments")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_attachments_upload(entry_id: int):
+        entry = repo.get_fin_cashflow_entry(entry_id)
+        if not entry:
+            return jsonify({"error": "Lançamento não encontrado"}), 404
+
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "Envie o arquivo no campo 'file'"}), 400
+
+        raw_name = sanitize_text(str(f.filename), 180).strip() or "anexo.bin"
+        safe_name = re.sub(r"[^\w\-. ]", "_", raw_name)
+        blob = f.read(2 * 1024 * 1024)
+        if not blob:
+            return jsonify({"error": "Arquivo vazio"}), 400
+        if len(blob) > 2 * 1024 * 1024:
+            return jsonify({"error": "Arquivo excede 2 MB"}), 400
+
+        mime_type = sanitize_text(str(f.mimetype or "application/octet-stream"), 120).strip()
+        attachment_id = repo.add_fin_cashflow_attachment(
+            entry_id=entry_id,
+            file_name=safe_name,
+            mime_type=mime_type,
+            file_blob=blob,
+        )
+        _audit(
+            "add",
+            "cashflow_attachment",
+            attachment_id,
+            {
+                "entry_id": entry_id,
+                "file_name": safe_name,
+                "file_size": len(blob),
+                "mime_type": mime_type,
+            },
+        )
+        return jsonify({"ok": True, "id": attachment_id}), 201
+
+    @app.get("/api/finance/cashflow/attachments/<int:attachment_id>/download")
+    @limiter.limit("30/minute")
+    def finance_cashflow_attachments_download(attachment_id: int):
+        row = repo.get_fin_cashflow_attachment(attachment_id)
+        if not row:
+            return jsonify({"error": "Anexo não encontrado"}), 404
+
+        file_name = sanitize_text(str(row.get("file_name") or "anexo.bin"), 180).strip() or "anexo.bin"
+        mime_type = sanitize_text(str(row.get("mime_type") or "application/octet-stream"), 120).strip()
+        blob = row.get("file_blob")
+        if not isinstance(blob, (bytes, bytearray)):
+            return jsonify({"error": "Conteúdo do anexo inválido"}), 500
+
+        return app.response_class(
+            bytes(blob),
+            mimetype=mime_type,
+            headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        )
+
+    @app.delete("/api/finance/cashflow/attachments/<int:attachment_id>")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_attachments_delete(attachment_id: int):
+        row = repo.get_fin_cashflow_attachment(attachment_id)
+        if not row:
+            return jsonify({"error": "Anexo não encontrado"}), 404
+        repo.delete_fin_cashflow_attachment(attachment_id)
+        _audit(
+            "delete",
+            "cashflow_attachment",
+            attachment_id,
+            {
+                "entry_id": int(row.get("entry_id") or 0),
+                "file_name": row.get("file_name"),
+                "file_size": int(row.get("file_size") or 0),
+            },
+        )
+        return jsonify({"ok": True})
+
+    @app.get("/api/finance/cashflow/closing-pdf")
+    @limiter.limit("10/minute")
+    def finance_cashflow_closing_pdf():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        summary = repo.get_fin_cashflow_summary(months=18)
+        analytics = repo.get_fin_cashflow_analytics(month=month)
+        budget = analytics.get("budget", {})
+        totals = analytics.get("totals", {})
+
+        month_rows = [
+            row for row in (summary.get("monthly") or []) if str(row.get("month") or "") == month
+        ]
+        month_row = month_rows[0] if month_rows else {}
+
+        lines = [
+            "Fechamento Mensal - Fluxo de Caixa",
+            f"Mes de referencia: {month}",
+            f"Gerado em: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+            "",
+            "Resumo:",
+            f"- Receitas: R$ {float(totals.get('income') or 0):,.2f}",
+            f"- Despesas: R$ {float(totals.get('expense') or 0):,.2f}",
+            f"- Saldo: R$ {float(totals.get('balance') or 0):,.2f}",
+            f"- Taxa de poupanca: {float(totals.get('savings_rate_pct') or 0):.2f}%",
+            "",
+            "Orcamento:",
+            f"- Total gasto: R$ {float(budget.get('total_spent') or 0):,.2f}",
+            f"- Total limite: R$ {float(budget.get('total_limit') or 0):,.2f}",
+            f"- Restante: R$ {float(budget.get('total_remaining') or 0):,.2f}",
+            "",
+            "Top categorias de gasto:",
+        ]
+        for row in (analytics.get("top_expenses") or [])[:5]:
+            lines.append(f"- {row.get('category')}: R$ {float(row.get('amount') or 0):,.2f}")
+
+        lines.extend([
+            "",
+            "Comparativo do mes (serie mensal):",
+            f"- Receita mensal: R$ {float(month_row.get('income') or 0):,.2f}",
+            f"- Despesa mensal: R$ {float(month_row.get('expense') or 0):,.2f}",
+            f"- Saldo mensal: R$ {float(month_row.get('balance') or 0):,.2f}",
+        ])
+
+        pdf_bytes = _build_simple_pdf(lines)
+        return app.response_class(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=fechamento-{month}.pdf",
+            },
+        )
 
     @app.post("/api/finance/cashflow/rollover")
     @limiter.limit("10/minute")
