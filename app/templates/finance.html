@@ -187,6 +187,17 @@
       </section>
 
 
+      <!-- ── Transactions ─────────────────────────────── -->
+      <section class="fin-card fin-wide" id="finTransactionsCard">
+        <h2>
+          🔄 Transações
+          <button id="btnAddTransaction" class="btn-text" title="Registrar nova transação">＋ Transação</button>
+        </h2>
+        <div id="finTransactionsContent" class="fin-card-body">
+          {{ fin_skeleton('transactions') }}
+        </div>
+      </section>
+
       <!-- ── Watchlist ────────────────────────────────── -->
       <section class="fin-card" id="finWatchlistCard">
         <h2>
