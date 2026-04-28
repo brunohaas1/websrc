@@ -1988,6 +1988,7 @@ function renderGoals(goals) {
           <div class="fin-goal-header">
             <span class="fin-goal-name">${escapeHtml(g.name)}</span>
             <div class="fin-goal-actions">
+              <button class="fin-del-btn" data-action="openGoalScenarioModal" data-id="${g.id}" title="Simular prazo">📉</button>
               <button class="fin-del-btn" data-action="openEditGoalModal" data-id="${g.id}" title="Editar">✎</button>
               <button class="fin-del-btn" data-action="deleteGoal" data-id="${g.id}" title="Excluir">✕</button>
             </div>

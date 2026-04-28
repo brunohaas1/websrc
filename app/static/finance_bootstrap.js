@@ -60,9 +60,13 @@ document.addEventListener("DOMContentLoaded", () => {
     bind("btnReceiptOCR", openReceiptOCRModal);
   bind("btnCashflowScenario", openCashflowScenarioModal);
   bind("btnCashflowImport", openCashflowImportModal);
+  bind("btnCashflowMonthPlan", openCashflowMonthPlanModal);
+  bind("btnCashflowSavedFilters", openCashflowSavedFiltersModal);
+  bind("btnCashflowBulk", openCashflowBulkModal);
   bind("btnCashflowAutoClassify", runCashflowAutoClassify);
   bind("btnCashflowClosingPdf", exportCashflowClosingPdf);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
+  bind("btnGoalScenario", openGoalScenarioModal);
   bind("btnAddDividend", openAddDividendModal);
   bind("btnBrowseDividends", () => openCadastroBrowserModal("dividends"));
   bind("btnEditAllocation", openAllocationModal);
@@ -179,6 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
     deleteWatchlistItem,
     deleteGoal,
     openEditGoalModal,
+    openGoalScenarioModal,
     deleteDividend,
     openEditTransactionModal,
     openEditWatchlistModal,

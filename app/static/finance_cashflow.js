@@ -956,11 +956,15 @@ function openReceiptOCRModal() {
   openFinModal("📷 Analisar Comprovante (OCR)", `
     <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">
       Envie uma foto de comprovante ou nota fiscal. O sistema extrairá data, valor e descrição automaticamente.
-      Requer <code>pytesseract</code> instalado no servidor.
+      Se OCR não estiver disponível, você pode colar o texto manualmente.
     </div>
     <div class="fin-form-group">
       <label>Imagem do comprovante (JPG, PNG, até 5 MB)</label>
       <input id="fmOcrFile" type="file" accept="image/*" />
+    </div>
+    <div class="fin-form-group">
+      <label>Texto manual (fallback opcional)</label>
+      <textarea id="fmOcrManualText" rows="4" placeholder="Cole aqui o texto do comprovante caso o OCR não esteja disponível."></textarea>
     </div>
     <button id="btnDoOcr" class="fin-form-submit" type="button">🔍 Analisar</button>
     <div id="fmOcrResult" style="margin-top:12px"></div>
@@ -968,11 +972,16 @@ function openReceiptOCRModal() {
 
   byId("btnDoOcr")?.addEventListener("click", async () => {
     const fileEl = byId("fmOcrFile");
-    if (!fileEl?.files?.length) { showToast("Selecione uma imagem"); return; }
+    const manualText = String(byId("fmOcrManualText")?.value || "").trim();
+    if (!fileEl?.files?.length && !manualText) {
+      showToast("Selecione uma imagem ou preencha o texto manual");
+      return;
+    }
     const btnDoOcr = byId("btnDoOcr");
     if (btnDoOcr) { btnDoOcr.disabled = true; btnDoOcr.textContent = "Analisando…"; }
     const formData = new FormData();
-    formData.append("file", fileEl.files[0]);
+    if (fileEl?.files?.length) formData.append("file", fileEl.files[0]);
+    if (manualText) formData.append("manual_text", manualText);
     try {
       const resp = await finFetch("/api/finance/cashflow/ocr", { method: "POST", body: formData });
       const data = await resp.json();
@@ -989,7 +998,10 @@ function openReceiptOCRModal() {
           <strong>Extraído:</strong><br>
           Data: ${escapeHtml(data.date || "não encontrada")}<br>
           Valor: ${data.amount != null ? formatBRL(data.amount) : "não encontrado"}<br>
-          Descrição: ${escapeHtml(data.description || "—")}
+          Estabelecimento: ${escapeHtml(data.merchant || "—")}<br>
+          Categoria: ${escapeHtml(data.category || "—")}<br>
+          Descrição: ${escapeHtml(data.description || "—")}<br>
+          Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}
           ${data.raw_text ? `<details style="margin-top:6px;"><summary>Texto bruto</summary><pre style="white-space:pre-wrap;font-size:.75em;">${escapeHtml(data.raw_text)}</pre></details>` : ""}
         </div>
         <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="margin-top:10px;">✚ Criar lançamento com estes dados</button>
@@ -1534,4 +1546,356 @@ async function toggleCashflowStatus(entryId, btnEl) {
   } catch {
     showToast("Erro de rede");
   }
+}
+
+function _collectCurrentCashflowFilter() {
+  return {
+    month: String(byId("finCashflowMonth")?.value || "").trim(),
+    type: String(byId("finCashflowType")?.value || "").trim(),
+    status: String(byId("finCashflowStatus")?.value || "").trim(),
+    cost_center: String(byId("finCashflowCostCenter")?.value || "").trim(),
+    tag: String(byId("finCashflowTag")?.value || "").trim(),
+    q: String(byId("finCashflowQ")?.value || "").trim(),
+  };
+}
+
+function _applyCashflowFilter(filter) {
+  byId("finCashflowMonth").value = String(filter.month || "").trim();
+  byId("finCashflowType").value = String(filter.type || "").trim();
+  byId("finCashflowStatus").value = String(filter.status || "").trim();
+  byId("finCashflowCostCenter").value = String(filter.cost_center || "").trim();
+  byId("finCashflowTag").value = String(filter.tag || "").trim();
+  byId("finCashflowQ").value = String(filter.q || "").trim();
+}
+
+async function openCashflowMonthPlanModal() {
+  const month = getSelectedCashflowMonth();
+  openFinModal("🗓 Plano Mensal Automático", `
+    <div class="fin-form-group">
+      <label>Mês</label>
+      <input id="fmMonthPlanMonth" type="month" value="${escapeHtml(month)}" />
+    </div>
+    <button id="btnRunMonthPlan" class="fin-form-submit" type="button">Gerar plano</button>
+    <div id="fmMonthPlanResult" style="margin-top:12px;"></div>
+  `);
+
+  const run = async () => {
+    const target = String(byId("fmMonthPlanMonth")?.value || "").trim();
+    const resultEl = byId("fmMonthPlanResult");
+    try {
+      const resp = await finFetch(`/api/finance/cashflow/month-plan?month=${encodeURIComponent(target)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Erro")}</span>`;
+        return;
+      }
+
+      const rows = (data.weeks || []).map((w) => `
+        <tr>
+          <td>${escapeHtml(w.label || "")}</td>
+          <td class="text-right mono fin-up">${formatBRL(w.income || 0)}</td>
+          <td class="text-right mono fin-down">${formatBRL(w.expense || 0)}</td>
+          <td class="text-right mono">${formatBRL(w.expected_income || 0)}</td>
+          <td class="text-right mono">${formatBRL(w.expected_expense || 0)}</td>
+          <td class="text-right mono ${Number(w.net || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(w.net || 0)}</td>
+          <td class="text-right mono ${Number(w.projected_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(w.projected_balance || 0)}</td>
+        </tr>
+      `).join("");
+
+      const riskHtml = (data.risk_flags || []).length
+        ? `<div style="margin-top:8px;">${data.risk_flags.map((r) =>
+            `<span class="fin-budget-alert-badge fin-alert-warn">⚠ ${escapeHtml(r.category || "")}: ${Number(r.usage_pct || 0).toFixed(1)}%</span>`
+          ).join("")}</div>`
+        : "";
+
+      if (resultEl) {
+        resultEl.innerHTML = `
+          <div class="fin-cashflow-kpis" style="margin-bottom:8px;">
+            <div class="fin-cashflow-kpi"><span>Saldo inicial</span><strong>${formatBRL(data.starting_balance || 0)}</strong></div>
+            <div class="fin-cashflow-kpi"><span>Saldo projetado fim do mês</span><strong class="${Number(data.projected_end_balance || 0) >= 0 ? "fin-up" : "fin-down"}">${formatBRL(data.projected_end_balance || 0)}</strong></div>
+          </div>
+          <div class="fin-table-wrap" style="max-height:280px;overflow:auto;">
+            <table class="fin-table">
+              <thead><tr><th>Semana</th><th class="text-right">Realizado +</th><th class="text-right">Realizado -</th><th class="text-right">Previsto +</th><th class="text-right">Previsto -</th><th class="text-right">Líquido</th><th class="text-right">Saldo proj.</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${riskHtml}
+        `;
+      }
+    } catch {
+      if (resultEl) resultEl.innerHTML = '<span class="fin-down">Erro de rede</span>';
+    }
+  };
+
+  byId("btnRunMonthPlan")?.addEventListener("click", run);
+  run();
+}
+
+async function openCashflowSavedFiltersModal() {
+  const current = _collectCurrentCashflowFilter();
+  let rows = [];
+  try {
+    const resp = await finFetch("/api/finance/cashflow/saved-filters");
+    if (resp.ok) rows = await resp.json();
+  } catch { /* ignore */ }
+
+  const listHtml = (rows || []).length
+    ? rows.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.name || "Filtro")}</td>
+        <td>${escapeHtml(JSON.stringify(r.filter || {}))}</td>
+        <td class="text-center">
+          <button class="fin-del-btn" data-action="applyCashflowSavedFilter" data-id="${r.id}" title="Aplicar">✓</button>
+          <button class="fin-del-btn" data-action="deleteCashflowSavedFilter" data-id="${r.id}" title="Excluir">✕</button>
+        </td>
+      </tr>
+    `).join("")
+    : '<tr><td colspan="3" class="text-center">Nenhum filtro salvo</td></tr>';
+
+  openFinModal("🔖 Filtros Salvos do Cashflow", `
+    <div class="fin-form-group">
+      <label>Nome do filtro atual</label>
+      <input id="fmCashflowFilterName" placeholder="Ex.: Casa pendentes" />
+      <small style="display:block;opacity:.7;margin-top:4px;">Filtro atual: ${escapeHtml(JSON.stringify(current))}</small>
+    </div>
+    <button id="btnSaveCashflowFilter" class="fin-form-submit" type="button">Salvar filtro atual</button>
+    <div class="fin-table-wrap" style="max-height:260px;overflow:auto;margin-top:12px;">
+      <table class="fin-table">
+        <thead><tr><th>Nome</th><th>Conteúdo</th><th></th></tr></thead>
+        <tbody id="fmCashflowSavedFiltersRows">${listHtml}</tbody>
+      </table>
+    </div>
+  `);
+
+  byId("btnSaveCashflowFilter")?.addEventListener("click", async () => {
+    const name = String(byId("fmCashflowFilterName")?.value || "").trim();
+    if (!name) { showToast("Informe um nome para o filtro"); return; }
+    try {
+      const resp = await finFetch("/api/finance/cashflow/saved-filters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, filter: _collectCurrentCashflowFilter() }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) { showToast(data.error || "Erro ao salvar filtro"); return; }
+      showToast("Filtro salvo", "success");
+      await openCashflowSavedFiltersModal();
+    } catch { showToast("Erro de rede"); }
+  });
+
+  const modal = document.querySelector("#finModalBody");
+  modal?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const id = Number(btn.dataset.id || 0);
+    if (btn.dataset.action === "applyCashflowSavedFilter") {
+      const item = (rows || []).find((x) => Number(x.id) === id);
+      if (!item) return;
+      _applyCashflowFilter(item.filter || {});
+      closeFinModal();
+      await refreshByDomains(["cashflow"]);
+      showToast("Filtro aplicado", "success");
+      return;
+    }
+    if (btn.dataset.action === "deleteCashflowSavedFilter") {
+      if (!confirm("Excluir este filtro salvo?")) return;
+      try {
+        const resp = await finFetch(`/api/finance/cashflow/saved-filters/${id}`, { method: "DELETE" });
+        if (!resp.ok) { showToast("Erro ao excluir filtro"); return; }
+        showToast("Filtro removido", "success");
+        await openCashflowSavedFiltersModal();
+      } catch { showToast("Erro de rede"); }
+    }
+  }, { once: true });
+}
+
+async function openCashflowBulkModal() {
+  const rows = Array.isArray(FIN.cashflowEntries) ? FIN.cashflowEntries : [];
+  if (!rows.length) {
+    showToast("Nenhum lançamento carregado para ação em lote");
+    return;
+  }
+
+  const entriesHtml = rows.slice(0, 300).map((r) => `
+    <label style="display:flex;gap:8px;align-items:center;padding:4px 0;">
+      <input type="checkbox" data-bulk-id="${r.id}" />
+      <span style="flex:1;">${escapeHtml(String(r.entry_date || "").slice(0, 10))} • ${escapeHtml(r.category || "—")} • ${escapeHtml(r.description || "—")}</span>
+      <strong class="${String(r.entry_type) === "income" ? "fin-up" : "fin-down"}">${formatBRL(r.amount || 0)}</strong>
+    </label>
+  `).join("");
+
+  openFinModal("🧩 Ações em Lote (Cashflow)", `
+    <div class="fin-form-row">
+      <div class="fin-form-group">
+        <label>Ação</label>
+        <select id="fmBulkAction">
+          <option value="update">Atualizar categoria/tags/notas</option>
+          <option value="status">Alterar status (pago/pendente)</option>
+          <option value="delete">Excluir lançamentos</option>
+        </select>
+      </div>
+      <div class="fin-form-group">
+        <label>Status</label>
+        <select id="fmBulkStatus">
+          <option value="paid">Pago</option>
+          <option value="pending">Pendente</option>
+        </select>
+      </div>
+    </div>
+    <div class="fin-form-row">
+      <div class="fin-form-group">
+        <label>Categoria</label>
+        <input id="fmBulkCategory" placeholder="Ex.: Alimentação" />
+      </div>
+      <div class="fin-form-group">
+        <label>Tags</label>
+        <input id="fmBulkTags" placeholder="Ex.: recorrente, essencial" />
+      </div>
+    </div>
+    <div class="fin-form-group">
+      <label>Notas</label>
+      <input id="fmBulkNotes" placeholder="Opcional" />
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <button id="btnBulkSelectAll" class="btn-text" type="button">Marcar todos</button>
+      <button id="btnBulkClearAll" class="btn-text" type="button">Limpar</button>
+      <button id="btnBulkRun" class="fin-form-submit" type="button" style="margin-left:auto;">Executar</button>
+    </div>
+    <div style="max-height:300px;overflow:auto;border:1px solid rgba(255,255,255,.08);padding:8px;border-radius:6px;">${entriesHtml}</div>
+  `);
+
+  byId("btnBulkSelectAll")?.addEventListener("click", () => {
+    document.querySelectorAll("input[data-bulk-id]").forEach((el) => { el.checked = true; });
+  });
+  byId("btnBulkClearAll")?.addEventListener("click", () => {
+    document.querySelectorAll("input[data-bulk-id]").forEach((el) => { el.checked = false; });
+  });
+
+  byId("btnBulkRun")?.addEventListener("click", async () => {
+    const ids = Array.from(document.querySelectorAll("input[data-bulk-id]:checked"))
+      .map((el) => Number(el.dataset.bulkId || 0))
+      .filter((n) => n > 0);
+    if (!ids.length) { showToast("Selecione ao menos 1 lançamento"); return; }
+    const action = String(byId("fmBulkAction")?.value || "update");
+    const updates = {};
+    if (action === "status") {
+      updates.status = String(byId("fmBulkStatus")?.value || "pending");
+      if (updates.status === "paid") updates.settled_at = new Date().toISOString().slice(0, 10);
+    } else if (action === "update") {
+      const category = String(byId("fmBulkCategory")?.value || "").trim();
+      const notes = String(byId("fmBulkNotes")?.value || "").trim();
+      const tags = parseTagsInput(String(byId("fmBulkTags")?.value || ""));
+      if (category) updates.category = category;
+      if (notes) updates.notes = notes;
+      if (tags.length) updates.tags = tags;
+      if (!Object.keys(updates).length) { showToast("Informe ao menos um campo para atualizar"); return; }
+    } else if (action === "delete") {
+      if (!confirm(`Excluir ${ids.length} lançamento(s)?`)) return;
+    }
+
+    try {
+      const resp = await finFetch("/api/finance/cashflow/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, action, updates }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) { showToast(data.error || "Erro na ação em lote"); return; }
+      closeFinModal();
+      await refreshByDomains(["cashflow"]);
+      showToast(`Ação em lote concluída. Atualizados: ${data.updated || 0}, excluídos: ${data.deleted || 0}.`, "success");
+    } catch {
+      showToast("Erro de rede");
+    }
+  });
+}
+
+function openGoalScenarioModal(goalId) {
+  const goals = Array.isArray(FIN.goals) ? FIN.goals : [];
+  if (!goals.length) {
+    showToast("Cadastre uma meta para simular cenários");
+    return;
+  }
+  const selectedId = Number(goalId || goals[0].id);
+  const month = getSelectedCashflowMonth();
+  const expenseCats = Array.isArray(FIN.cashflowAnalytics?.categories?.expense)
+    ? FIN.cashflowAnalytics.categories.expense
+    : [];
+
+  const options = goals.map((g) =>
+    `<option value="${g.id}" ${Number(g.id) === selectedId ? "selected" : ""}>${escapeHtml(g.name)} (${formatBRL(g.current_amount || 0)} / ${formatBRL(g.target_amount || 0)})</option>`
+  ).join("");
+
+  const catRows = expenseCats.map((c, i) => `
+    <div class="fin-form-row" data-goal-sc-row="${i}">
+      <div class="fin-form-group" style="flex:2">
+        <label>Categoria</label>
+        <input data-goal-cat value="${escapeHtml(c.category || "")}" readonly />
+      </div>
+      <div class="fin-form-group">
+        <label>Redução %</label>
+        <input data-goal-pct type="number" min="0" max="100" step="1" value="0" />
+      </div>
+    </div>
+  `).join("");
+
+  openFinModal("📉 Cenário de Meta", `
+    <div class="fin-form-group">
+      <label>Meta</label>
+      <select id="fmGoalScenarioGoal">${options}</select>
+    </div>
+    <div class="fin-form-row">
+      <div class="fin-form-group">
+        <label>Mês base</label>
+        <input id="fmGoalScenarioMonth" type="month" value="${escapeHtml(month)}" />
+      </div>
+      <div class="fin-form-group">
+        <label>Aporte extra mensal (R$)</label>
+        <input id="fmGoalScenarioExtra" type="number" min="0" step="0.01" value="0" />
+      </div>
+    </div>
+    <div id="fmGoalScenarioAdjustments">${catRows}</div>
+    <button id="btnRunGoalScenario" class="fin-form-submit" type="button">Simular</button>
+    <div id="fmGoalScenarioResult" style="margin-top:12px;"></div>
+  `);
+
+  byId("btnRunGoalScenario")?.addEventListener("click", async () => {
+    const targetGoalId = Number(byId("fmGoalScenarioGoal")?.value || 0);
+    const targetMonth = String(byId("fmGoalScenarioMonth")?.value || "").trim();
+    const extraMonthly = Number(byId("fmGoalScenarioExtra")?.value || 0);
+    const adjustments = [];
+    document.querySelectorAll("[data-goal-sc-row]").forEach((row) => {
+      const cat = String(row.querySelector("[data-goal-cat]")?.value || "").trim();
+      const pct = Number(row.querySelector("[data-goal-pct]")?.value || 0);
+      if (cat && pct > 0) adjustments.push({ category: cat, reduction_pct: pct });
+    });
+
+    const resultEl = byId("fmGoalScenarioResult");
+    try {
+      const resp = await finFetch(`/api/finance/goals/${targetGoalId}/scenario`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: targetMonth, extra_monthly: extraMonthly, adjustments }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Erro")}</span>`;
+        return;
+      }
+
+      if (resultEl) {
+        resultEl.innerHTML = `
+          <div class="fin-cashflow-kpis">
+            <div class="fin-cashflow-kpi"><span>Gap atual</span><strong>${formatBRL(data.goal?.gap || 0)}</strong></div>
+            <div class="fin-cashflow-kpi"><span>Prazo base</span><strong>${data.projection?.baseline_months_to_goal ?? "—"} meses</strong></div>
+            <div class="fin-cashflow-kpi"><span>Prazo simulado</span><strong class="fin-up">${data.projection?.simulated_months_to_goal ?? "—"} meses</strong></div>
+            <div class="fin-cashflow-kpi"><span>Meses ganhos</span><strong class="fin-up">${data.projection?.months_saved ?? "—"}</strong></div>
+          </div>
+        `;
+      }
+    } catch {
+      if (resultEl) resultEl.innerHTML = '<span class="fin-down">Erro de rede</span>';
+    }
+  });
 }
