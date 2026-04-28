@@ -3818,7 +3818,7 @@ function openCadastroBrowserModal(initialType = "assets") {
         <option value="assets" ${initialType === "assets" ? "selected" : ""}>Ativos</option>
         <option value="watchlist" ${initialType === "watchlist" ? "selected" : ""}>Watchlist</option>
         <option value="goals" ${initialType === "goals" ? "selected" : ""}>Metas</option>
-        <option value="cashflow" ${initialType === "cashflow" ? "selected" : ""}>Ganhos/Gastos</option>
+        <option value="cashflow" ${initialType === "cashflow" ? "selected" : ""}>Gestor Financeiro</option>
         <option value="dividends" ${initialType === "dividends" ? "selected" : ""}>Dividendos</option>
       </select>
       <input id="fmCadastroSearch" class="fin-cadastro-search" placeholder="Filtrar por nome, símbolo, nota, categoria..." />

@@ -1,6 +1,6 @@
 /* ══════════════════════════════════════════════════════════
-   Finance Cashflow Domain
-   ══════════════════════════════════════════════════════════ */
+  Finance Gestor Financeiro Domain
+  ══════════════════════════════════════════════════════════ */
 
 function currentMonthKey() {
   const now = new Date();
@@ -383,7 +383,7 @@ function renderCashflow(entries) {
   const rows = Array.isArray(entries) ? entries : [];
   if (!rows.length) {
     el.innerHTML = renderEmptyState(
-      "Nenhum lançamento de ganhos/gastos para este mês.",
+      "Nenhum lançamento no Gestor Financeiro para este mês.",
       "Adicionar lançamento",
       "addCashflow",
     );
@@ -558,7 +558,7 @@ function openAddCashflowModal(prefill = {}) {
   const _pdesc = String(prefill.description || "");
   const _pcat = String(prefill.category || "");
   const _ptype = String(prefill.entry_type || "expense");
-  openFinModal("Novo Lançamento (Ganho/Gasto)", `
+  openFinModal("Novo Lançamento (Gestor Financeiro)", `
     <form data-form-action="submitAddCashflow">
       <div class="fin-form-row">
         <div class="fin-form-group">
@@ -654,7 +654,7 @@ function openCashflowBudgetModal() {
     `;
   }).join("");
 
-  openFinModal("Orçamento Mensal por Categoria", `
+  openFinModal("Orçamento Mensal (Gestor Financeiro)", `
     <form data-form-action="submitCashflowBudget">
       <div class="fin-form-group">
         <label>Mês</label>
@@ -715,7 +715,7 @@ async function openCashflowRecurringModal() {
     </tr>
   `).join("");
 
-  openFinModal("🔁 Lançamentos Recorrentes", `
+  openFinModal("🔁 Lançamentos Recorrentes (Gestor Financeiro)", `
     <div style="margin-bottom:10px;display:flex;gap:8px;">
       <button id="btnAddRecurring" class="fin-form-submit" type="button" style="flex:0 0 auto;">＋ Novo modelo</button>
       <span style="opacity:.65;font-size:.82em;align-self:center;">Modelos são gerados automaticamente ao usar "Virada de mês".</span>
@@ -863,7 +863,7 @@ async function openCashflowRecurringModal() {
 function openCashflowRolloverModal() {
   const targetMonth = getSelectedCashflowMonth();
   const sourceMonth = prevMonthKey(targetMonth);
-  openFinModal("Virada de Mês (Lançamentos Recorrentes)", `
+  openFinModal("Virada de Mês (Gestor Financeiro)", `
     <form data-form-action="submitCashflowRollover">
       <div class="fin-form-row">
         <div class="fin-form-group">
@@ -1046,7 +1046,7 @@ function openCashflowScenarioModal() {
     </div>
   `).join("");
 
-  openFinModal("🔮 Simulador de Cenários", `
+  openFinModal("🔮 Simulador de Cenários (Gestor Financeiro)", `
     <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">Simule o impacto de reduzir gastos em cada categoria.</div>
     <div class="fin-form-group">
       <label>Mês base</label>
@@ -1107,7 +1107,7 @@ function openCashflowScenarioModal() {
 
 function openCashflowImportModal() {
   const month = getSelectedCashflowMonth();
-  openFinModal("📥 Importar Extratos (CSV / OFX)", `
+  openFinModal("📥 Importar Extratos (Gestor Financeiro)", `
     <div style="margin-bottom:8px;opacity:.75;font-size:.85em;">
       CSV: colunas <code>date, amount, type, category, description</code>.<br>
       OFX: extrato bancário padrão OFX/QFX.<br>
@@ -1250,7 +1250,7 @@ async function openCashflowAttachmentModal(entryId) {
     `
     : '<p class="fin-empty">Nenhum anexo para este lançamento.</p>';
 
-  openFinModal("📎 Anexos do Lançamento", `
+  openFinModal("📎 Anexos do Lançamento (Gestor Financeiro)", `
     <div class="fin-form-group">
       <label>Enviar arquivo (máx. 2 MB)</label>
       <input id="fmAttachFile" type="file" />
@@ -1320,7 +1320,7 @@ function openEditCashflowModal(entryId) {
     showToast("Lançamento não encontrado");
     return;
   }
-  openFinModal("Editar Lançamento", `
+  openFinModal("Editar Lançamento (Gestor Financeiro)", `
     <form data-form-action="submitEditCashflow" data-form-arg="${entryId}">
       <div class="fin-form-row">
         <div class="fin-form-group">
@@ -1570,7 +1570,7 @@ function _applyCashflowFilter(filter) {
 
 async function openCashflowMonthPlanModal() {
   const month = getSelectedCashflowMonth();
-  openFinModal("🗓 Plano Mensal Automático", `
+  openFinModal("🗓 Plano Mensal do Gestor Financeiro", `
     <div class="fin-form-group">
       <label>Mês</label>
       <input id="fmMonthPlanMonth" type="month" value="${escapeHtml(month)}" />
@@ -1653,7 +1653,7 @@ async function openCashflowSavedFiltersModal() {
     `).join("")
     : '<tr><td colspan="3" class="text-center">Nenhum filtro salvo</td></tr>';
 
-  openFinModal("🔖 Filtros Salvos do Cashflow", `
+  openFinModal("🔖 Filtros Salvos do Gestor Financeiro", `
     <div class="fin-form-group">
       <label>Nome do filtro atual</label>
       <input id="fmCashflowFilterName" placeholder="Ex.: Casa pendentes" />
@@ -1725,7 +1725,7 @@ async function openCashflowBulkModal() {
     </label>
   `).join("");
 
-  openFinModal("🧩 Ações em Lote (Cashflow)", `
+  openFinModal("🧩 Ações em Lote (Gestor Financeiro)", `
     <div class="fin-form-row">
       <div class="fin-form-group">
         <label>Ação</label>
