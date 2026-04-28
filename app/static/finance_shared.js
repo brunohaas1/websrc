@@ -78,6 +78,15 @@ async function fetchFinanceJson(url, fallbackValue) {
       console.warn("Finance endpoint returned non-OK status", { url, status: response.status });
       return fallbackValue;
     }
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      console.warn("Finance endpoint returned non-JSON response", {
+        url,
+        status: response.status,
+        contentType,
+      });
+      return fallbackValue;
+    }
     return await response.json();
   } catch (err) {
     console.warn("Finance endpoint request failed", { url, err });

@@ -64,6 +64,16 @@ class Repository:
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS tags_json TEXT DEFAULT '[]'",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
+                    entry_id BIGINT PRIMARY KEY REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL,
+                    settled_at DATE,
+                    reconciled_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN IF NOT EXISTS settled_at DATE",
+                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_type_date ON fin_cashflow_entries(entry_type, entry_date DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_category_date ON fin_cashflow_entries(category, entry_date DESC)",
                 """
@@ -109,6 +119,17 @@ class Repository:
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN subcategory TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN cost_center TEXT",
                 "ALTER TABLE fin_cashflow_entries ADD COLUMN tags_json TEXT DEFAULT '[]'",
+                """
+                CREATE TABLE IF NOT EXISTS fin_cashflow_reconcile (
+                    entry_id INTEGER PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    settled_at TEXT,
+                    reconciled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (entry_id) REFERENCES fin_cashflow_entries(id) ON DELETE CASCADE
+                )
+                """,
+                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN settled_at TEXT",
+                "ALTER TABLE fin_cashflow_reconcile ADD COLUMN reconciled_at TEXT DEFAULT CURRENT_TIMESTAMP",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_type_date ON fin_cashflow_entries(entry_type, entry_date DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_category_date ON fin_cashflow_entries(category, entry_date DESC)",
                 """
