@@ -1125,9 +1125,34 @@ function openCashflowImportModal() {
       <label>Arquivo (.csv ou .ofx)</label>
       <input id="fmImportFile" type="file" accept=".csv,.ofx,.qfx" />
     </div>
+    <div id="fmImportPreview" style="margin:8px 0 10px 0;"></div>
     <button id="btnDoImport" class="fin-form-submit" type="button">📥 Importar</button>
     <div id="fmImportResult" style="margin-top:12px"></div>
   `);
+
+  byId("fmImportFile")?.addEventListener("change", async () => {
+    const fileEl = byId("fmImportFile");
+    const previewEl = byId("fmImportPreview");
+    if (!previewEl) return;
+    if (!fileEl?.files?.length) {
+      previewEl.innerHTML = "";
+      return;
+    }
+    const file = fileEl.files[0];
+    try {
+      const text = await file.text();
+      const name = String(file.name || "").toLowerCase();
+      if (name.endsWith(".csv")) {
+        previewEl.innerHTML = _renderCashflowCsvPreview(text);
+      } else if (name.endsWith(".ofx") || name.endsWith(".qfx")) {
+        previewEl.innerHTML = _renderCashflowOfxPreview(text);
+      } else {
+        previewEl.innerHTML = `<span class="fin-empty">Formato não suportado para preview.</span>`;
+      }
+    } catch {
+      previewEl.innerHTML = `<span class="fin-down">Não foi possível ler o arquivo para preview.</span>`;
+    }
+  });
 
   byId("btnDoImport")?.addEventListener("click", async () => {
     const importMonth = String(byId("fmImportMonth")?.value || "").trim();
@@ -1175,6 +1200,105 @@ function openCashflowImportModal() {
   });
 }
 
+function _parseCsvLine(line, sep) {
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === sep && !inQuotes) {
+      out.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function _renderCashflowCsvPreview(text) {
+  const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim()).slice(0, 8);
+  if (lines.length < 2) return `<p class="fin-empty">Arquivo CSV sem linhas suficientes para preview.</p>`;
+  const sep = lines[0].includes(";") ? ";" : ",";
+  const header = _parseCsvLine(lines[0], sep).map((h) => h.toLowerCase());
+  const col = {
+    date: header.findIndex((h) => ["date", "data", "dt"].includes(h)),
+    amount: header.findIndex((h) => ["amount", "valor", "value"].includes(h)),
+    type: header.findIndex((h) => ["type", "tipo"].includes(h)),
+    category: header.findIndex((h) => ["category", "categoria"].includes(h)),
+    description: header.findIndex((h) => ["description", "descricao", "hist"].includes(h)),
+  };
+  const rows = lines.slice(1, 6).map((line) => _parseCsvLine(line, sep));
+  const pick = (cells, idx) => (idx >= 0 && idx < cells.length ? cells[idx] : "");
+  const body = rows.map((cells) => `
+    <tr>
+      <td>${escapeHtml(pick(cells, col.date))}</td>
+      <td>${escapeHtml(pick(cells, col.amount))}</td>
+      <td>${escapeHtml(pick(cells, col.type))}</td>
+      <td>${escapeHtml(pick(cells, col.category))}</td>
+      <td>${escapeHtml(pick(cells, col.description))}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <div style="border:1px solid var(--border,rgba(255,255,255,.12));border-radius:10px;padding:8px;">
+      <div style="font-size:.82em;opacity:.82;margin-bottom:6px;">Preview CSV (primeiras linhas mapeadas)</div>
+      <div class="fin-table-wrap">
+        <table class="fin-table">
+          <thead><tr><th>Data</th><th>Valor</th><th>Tipo</th><th>Categoria</th><th>Descrição</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function _renderCashflowOfxPreview(text) {
+  const blocks = String(text || "").match(/<STMTTRN>(.*?)<\/STMTTRN>/gis) || [];
+  if (!blocks.length) return `<p class="fin-empty">Nenhuma transação OFX encontrada para preview.</p>`;
+  const pickTag = (block, tag) => {
+    const m = block.match(new RegExp(`<${tag}>([^\n\r<]+)`, "i"));
+    return (m && m[1]) ? String(m[1]).trim() : "";
+  };
+  const rows = blocks.slice(0, 5).map((block) => {
+    const rawDate = pickTag(block, "DTPOSTED");
+    const date = /^\d{8}/.test(rawDate) ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}` : rawDate;
+    const amount = pickTag(block, "TRNAMT");
+    const type = pickTag(block, "TRNTYPE");
+    const memo = pickTag(block, "MEMO") || pickTag(block, "NAME");
+    return `
+      <tr>
+        <td>${escapeHtml(date)}</td>
+        <td>${escapeHtml(amount)}</td>
+        <td>${escapeHtml(type)}</td>
+        <td>${escapeHtml(memo)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <div style="border:1px solid var(--border,rgba(255,255,255,.12));border-radius:10px;padding:8px;">
+      <div style="font-size:.82em;opacity:.82;margin-bottom:6px;">Preview OFX (primeiras transações)</div>
+      <div class="fin-table-wrap">
+        <table class="fin-table">
+          <thead><tr><th>Data</th><th>Valor</th><th>Tipo OFX</th><th>Memo</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 async function runCashflowAutoClassify() {
   const month = getSelectedCashflowMonth();
   try {
@@ -1190,6 +1314,28 @@ async function runCashflowAutoClassify() {
     }
     showToast(`${data.updated} lançamento(s) classificado(s) automaticamente`, "success");
     if (data.updated > 0) await refreshByDomains(["cashflow"]);
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function runCashflowAutoReconcile() {
+  const month = getSelectedCashflowMonth();
+  try {
+    const resp = await finFetch("/api/finance/cashflow/reconcile-auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month, min_score: 60, apply: true }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.error || "Erro ao conciliar automaticamente");
+      return;
+    }
+    const updated = Number(data.updated || 0);
+    const total = Number(data.candidates || 0);
+    showToast(`Conciliação automática: ${updated}/${total} lançamento(s) atualizado(s).`, "success");
+    if (updated > 0) await refreshByDomains(["cashflow"]);
   } catch {
     showToast("Erro de rede");
   }

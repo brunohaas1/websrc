@@ -64,6 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnCashflowSavedFilters", openCashflowSavedFiltersModal);
   bind("btnCashflowBulk", openCashflowBulkModal);
   bind("btnCashflowAutoClassify", runCashflowAutoClassify);
+  bind("btnCashflowAutoReconcile", runCashflowAutoReconcile);
   bind("btnCashflowClosingPdf", exportCashflowClosingPdf);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnGoalScenario", openGoalScenarioModal);

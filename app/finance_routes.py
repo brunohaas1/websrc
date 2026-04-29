@@ -64,6 +64,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     FINANCE_CACHE_TTLS = {
         "summary": 60,
+        "cashflow_summary": 30,
+        "cashflow_analytics": 30,
         "market": 300,
         "portfolio_history": 120,
         "asset_history": 120,
@@ -109,6 +111,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if include_market:
             prefixes.append("finance:market")
         _invalidate_cache_prefixes(*prefixes)
+
+    def _invalidate_cashflow_cache() -> None:
+        _invalidate_cache_prefixes(
+            "finance:cashflow-summary:",
+            "finance:cashflow-analytics:",
+        )
 
     # ── Page ────────────────────────────────────────────────
 
@@ -1419,7 +1427,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_cashflow_summary():
         months = int(request.args.get("months", "6"))
-        payload = repo.get_fin_cashflow_summary(months=max(1, min(24, months)))
+        safe_months = max(1, min(24, months))
+        cache_key = f"finance:cashflow-summary:{safe_months}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+
+        payload = repo.get_fin_cashflow_summary(months=safe_months)
+        cache.set(cache_key, payload, FINANCE_CACHE_TTLS["cashflow_summary"])
         return jsonify(payload)
 
     @app.get("/api/finance/cashflow/alerts")
@@ -1510,7 +1525,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         month = sanitize_text(str(request.args.get("month", "")), 7).strip()
         if month and not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
-        payload = repo.get_fin_cashflow_analytics(month=month or None)
+        target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        cache_key = f"finance:cashflow-analytics:{target_month}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+
+        payload = repo.get_fin_cashflow_analytics(month=target_month)
+        cache.set(cache_key, payload, FINANCE_CACHE_TTLS["cashflow_analytics"])
         return jsonify(payload)
 
     @app.get("/api/finance/cashflow/budget")
@@ -1555,6 +1577,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             safe_budget[category] = round(amount, 2)
 
         repo.set_fin_cashflow_budget(month, safe_budget)
+        _invalidate_cashflow_cache()
         _audit(
             "update",
             "cashflow_budget",
@@ -2230,6 +2253,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "filename": filename, "imported": len(imported_ids),
             "duplicates_skipped": len(potential_duplicates), "errors": len(errors),
         })
+        if imported_ids:
+            _invalidate_cashflow_cache()
         return jsonify({
             "ok": True,
             "imported": len(imported_ids),
@@ -2874,6 +2899,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 },
             },
         )
+        _invalidate_cashflow_cache()
         return jsonify({"ok": True, "id": entry_id}), 201
 
     @app.put("/api/finance/cashflow/<int:entry_id>")
@@ -2965,6 +2991,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "after": {**after, "payment_status": after_status.get("status"), "settled_at": after_status.get("settled_at")},
             },
         )
+        _invalidate_cashflow_cache()
         return jsonify({"ok": True})
 
     @app.put("/api/finance/cashflow/<int:entry_id>/status")
@@ -3005,11 +3032,120 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "after_status": after_status,
             },
         )
+        _invalidate_cashflow_cache()
         return jsonify({
             "ok": True,
             "id": entry_id,
             "status": after_status.get("status"),
             "settled_at": after_status.get("settled_at"),
+        })
+
+    @app.post("/api/finance/cashflow/reconcile-auto")
+    @limiter.limit("10/minute")
+    @require_finance_key
+    def finance_cashflow_auto_reconcile():
+        body = request.get_json(silent=True) or {}
+        month = sanitize_text(str(body.get("month", "")), 7).strip()
+        if month and not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+
+        try:
+            min_score = float(body.get("min_score", 60))
+        except (TypeError, ValueError):
+            min_score = 60.0
+        min_score = max(40.0, min(90.0, min_score))
+        apply = bool(body.get("apply", True))
+
+        rows = repo.list_fin_cashflow_entries(
+            month=month or None,
+            entry_type="expense",
+            payment_status="pending",
+            limit=3000,
+        )
+        today = datetime.now(timezone.utc).date()
+        keyword_pattern = re.compile(r"\b(pix|debito|débito|cartao|cartão|boleto|pagamento|ifood|uber|99|transferencia|transferência)\b", re.IGNORECASE)
+        fixed_pattern = re.compile(r"\b(aluguel|condominio|condomínio|energia|luz|agua|água|internet|telefone|assinatura|fatura)\b", re.IGNORECASE)
+
+        suggestions: list[dict] = []
+        for row in rows:
+            entry_date = str(row.get("entry_date") or "")[:10]
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+                continue
+            try:
+                due = datetime.strptime(entry_date, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            age_days = (today - due).days
+            if age_days < 0:
+                continue
+
+            text_blob = " ".join([
+                str(row.get("description") or ""),
+                str(row.get("notes") or ""),
+                str(row.get("category") or ""),
+                str(row.get("subcategory") or ""),
+                str(row.get("cost_center") or ""),
+            ]).lower()
+            amount = float(row.get("amount") or 0)
+
+            score = 0.0
+            reasons: list[str] = []
+            if age_days >= 2:
+                score += 35
+                reasons.append("vencido há pelo menos 2 dias")
+            if age_days >= 7:
+                score += 20
+                reasons.append("vencido há pelo menos 7 dias")
+            if keyword_pattern.search(text_blob):
+                score += 25
+                reasons.append("descrição sugere pagamento realizado")
+            if fixed_pattern.search(text_blob):
+                score += 15
+                reasons.append("categoria típica de despesa recorrente")
+            if amount <= 500:
+                score += 10
+                reasons.append("valor baixo/moderado")
+
+            if score >= min_score:
+                suggestions.append({
+                    "id": int(row.get("id") or 0),
+                    "entry_date": entry_date,
+                    "amount": round(amount, 2),
+                    "description": str(row.get("description") or ""),
+                    "category": str(row.get("category") or ""),
+                    "score": round(score, 2),
+                    "reasons": reasons,
+                })
+
+        suggestions.sort(key=lambda s: (-(float(s.get("score") or 0)), str(s.get("entry_date") or "")))
+        updated = 0
+        if apply:
+            for item in suggestions:
+                if repo.set_fin_cashflow_status(int(item["id"]), "paid", str(item["entry_date"])):
+                    updated += 1
+            if updated > 0:
+                _invalidate_cashflow_cache()
+
+        _audit(
+            "auto_reconcile",
+            "cashflow",
+            None,
+            {
+                "month": month,
+                "min_score": min_score,
+                "candidates": len(suggestions),
+                "updated": updated,
+                "apply": apply,
+            },
+        )
+        return jsonify({
+            "ok": True,
+            "month": month,
+            "min_score": min_score,
+            "apply": apply,
+            "candidates": len(suggestions),
+            "updated": updated,
+            "suggestions": suggestions[:50],
         })
 
     @app.delete("/api/finance/cashflow/<int:entry_id>")
@@ -3031,6 +3167,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 },
             },
         )
+        _invalidate_cashflow_cache()
         return jsonify({"ok": True})
 
     @app.post("/api/finance/cashflow/bulk")
@@ -3067,6 +3204,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 repo.delete_fin_cashflow_entry(entry_id)
                 deleted += 1
             _audit("bulk_delete", "cashflow", None, {"ids": ids, "deleted": deleted, "not_found": not_found})
+            if deleted > 0:
+                _invalidate_cashflow_cache()
             return jsonify({"ok": True, "action": action, "deleted": deleted, "not_found": not_found})
 
         if action == "status":
@@ -3082,6 +3221,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 else:
                     not_found += 1
             _audit("bulk_status", "cashflow", None, {"ids": ids, "updated": updated, "not_found": not_found, "status": status})
+            if updated > 0:
+                _invalidate_cashflow_cache()
             return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
 
         if action != "update":
@@ -3117,6 +3258,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "not_found": not_found,
             "fields": sorted(list(safe_updates.keys())),
         })
+        if updated > 0:
+            _invalidate_cashflow_cache()
         return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
 
     @app.get("/api/finance/goals/passive-income")
