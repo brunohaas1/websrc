@@ -2843,7 +2843,10 @@ class Repository:
         params: list[Any] = []
 
         if month:
-            query += " AND substr(e.entry_date, 1, 7) = ?"
+            if self.is_postgres:
+                query += " AND to_char(e.entry_date, 'YYYY-MM') = ?"
+            else:
+                query += " AND substr(e.entry_date, 1, 7) = ?"
             params.append(month)
 
         if entry_type:
@@ -2897,7 +2900,10 @@ class Repository:
         fallback_params: list[Any] = []
 
         if month:
-            fallback_query += " AND substr(e.entry_date, 1, 7) = ?"
+            if self.is_postgres:
+                fallback_query += " AND to_char(e.entry_date, 'YYYY-MM') = ?"
+            else:
+                fallback_query += " AND substr(e.entry_date, 1, 7) = ?"
             fallback_params.append(month)
 
         if entry_type:
