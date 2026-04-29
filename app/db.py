@@ -148,6 +148,11 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     filter_json TEXT NOT NULL,
+    is_favorite INTEGER DEFAULT 0,
+    is_template INTEGER DEFAULT 0,
+    description TEXT,
+    last_used_at TEXT,
+    use_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -506,6 +511,11 @@ CREATE TABLE IF NOT EXISTS saved_filters (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     filter_json TEXT NOT NULL,
+    is_favorite BOOLEAN DEFAULT FALSE,
+    is_template BOOLEAN DEFAULT FALSE,
+    description TEXT,
+    last_used_at TIMESTAMPTZ,
+    use_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 

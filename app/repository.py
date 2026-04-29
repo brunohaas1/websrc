@@ -1568,7 +1568,7 @@ class Repository:
     def list_saved_filters(self) -> list[dict[str, Any]]:
         with get_connection(self.database_target) as conn:
             rows = conn.execute(
-                "SELECT * FROM saved_filters ORDER BY created_at DESC",
+                "SELECT * FROM saved_filters ORDER BY is_favorite DESC, last_used_at DESC, created_at DESC",
             ).fetchall()
             result = []
             for r in rows:
@@ -1576,6 +1576,76 @@ class Repository:
                 item["filter"] = json_loads(item.get("filter_json"))
                 result.append(item)
             return result
+
+    def get_saved_filter_templates(self) -> list[dict[str, Any]]:
+        """Get predefined filter templates."""
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM saved_filters WHERE is_template = ? ORDER BY name ASC",
+                (True,),
+            ).fetchall()
+            result = []
+            for r in rows:
+                item = dict(r)
+                item["filter"] = json_loads(item.get("filter_json"))
+                result.append(item)
+            return result
+
+    def toggle_saved_filter_favorite(self, filter_id: int) -> bool:
+        """Toggle favorite status for a filter."""
+        with get_connection(self.database_target) as conn:
+            query = (
+                "UPDATE saved_filters SET is_favorite = NOT is_favorite "
+                "WHERE id = ?"
+            )
+            if self.is_postgres:
+                query += " RETURNING id"
+            cursor = conn.execute(self._sql(query), (filter_id,))
+            conn.commit()
+            return (cursor.rowcount or 0) > 0
+
+    def track_filter_usage(self, filter_id: int) -> bool:
+        """Record filter usage: update last_used_at and increment use_count."""
+        from datetime import datetime, timezone
+        
+        now = datetime.now(timezone.utc).isoformat()
+        with get_connection(self.database_target) as conn:
+            query = (
+                "UPDATE saved_filters SET "
+                "last_used_at = ?, use_count = COALESCE(use_count, 0) + 1 "
+                "WHERE id = ?"
+            )
+            if self.is_postgres:
+                query = query.replace("?", "%s")
+            cursor = conn.execute(self._sql(query), (now, filter_id))
+            conn.commit()
+            return (cursor.rowcount or 0) > 0
+
+    def add_filter_template(
+        self,
+        name: str,
+        filter_data: dict[str, Any],
+        description: str = "",
+    ) -> int:
+        """Add a predefined filter template (admin/system only)."""
+        filter_json = json_dumps(filter_data)
+        with get_connection(self.database_target) as conn:
+            query = (
+                "INSERT INTO saved_filters "
+                "(name, filter_json, is_template, description) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            if self.is_postgres:
+                query += " RETURNING id"
+            cursor = conn.execute(
+                self._sql(query),
+                (name, filter_json, True, description),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
 
     def delete_saved_filter(self, filter_id: int) -> bool:
         with get_connection(self.database_target) as conn:

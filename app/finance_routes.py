@@ -18,6 +18,21 @@ from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 
 from .cache import get_cache
+from .finance_cashflow_features import (
+    SmartDedupeCache,
+    apply_bulk_cashflow_updates,
+    bulk_delete_cashflow_entries,
+    evaluate_data_quality_alerts,
+    validate_bulk_operation_ids,
+)
+from .finance_cashflow_helpers import (
+    build_reconcile_suggestions,
+    cashflow_dedupe_hash,
+    find_potential_cashflow_duplicate,
+    normalize_cashflow_text,
+    parse_cashflow_import_candidates,
+    tokenize_cashflow_text,
+)
 from .repository import Repository
 from .security import require_finance_key, sanitize_text
 
@@ -63,6 +78,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     repo = Repository(app.config["DATABASE_TARGET"])
     cache = get_cache(app.config)
     app._finance_cache = cache  # exposed for tests
+
+    # Initialize smart dedup cache (1 hour TTL, Redis with fallback to memory)
+    dedup_ttl = int(app.config.get("CASHFLOW_DEDUP_TTL_SECONDS", 3600))
+    _dedupe_cache = SmartDedupeCache(
+        backend_cache=cache,
+        ttl_seconds=dedup_ttl,
+        prefix="cashflow:dedup:",
+    )
 
     FINANCE_CACHE_TTLS = {
         "summary": 60,
@@ -150,161 +173,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             for key in expired:
                 _cashflow_import_jobs.pop(key, None)
 
-    def _normalize_cashflow_text(value: str) -> str:
-        text = str(value or "").strip().lower()
-        text = re.sub(r"\s+", " ", text)
-        text = re.sub(r"[^a-z0-9\s]", "", text)
-        return text
-
-    def _cashflow_dedupe_hash(
-        entry_type: str,
-        amount: float,
-        entry_date: str,
-        description: str,
-    ) -> str:
-        payload = "|".join([
-            str(entry_type or "").strip().lower(),
-            f"{round(float(amount or 0), 2):.2f}",
-            str(entry_date or "")[:10],
-            _normalize_cashflow_text(description),
-        ])
-        return hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:16]
-
-    def _tokenize_cashflow_text(value: str) -> set[str]:
-        parts = [p for p in _normalize_cashflow_text(value).split(" ") if p]
-        return {p for p in parts if len(p) > 2}
-
-    def _find_potential_cashflow_duplicate(
-        *,
-        existing_entries: list[dict],
-        entry_type: str,
-        amount: float,
-        entry_date: str,
-        description: str,
-    ) -> dict | None:
-        try:
-            target_dt = datetime.strptime(entry_date, "%Y-%m-%d")
-        except ValueError:
-            return None
-
-        target_tokens = _tokenize_cashflow_text(description)
-        target_hash = _cashflow_dedupe_hash(entry_type, amount, entry_date, description)
-        best: dict | None = None
-
-        for ex in existing_entries:
-            ex_type = str(ex.get("entry_type") or "").strip().lower()
-            if ex_type != str(entry_type or "").strip().lower():
-                continue
-
-            ex_amount = round(float(ex.get("amount") or 0), 2)
-            if abs(ex_amount - round(float(amount or 0), 2)) > 0.01:
-                continue
-
-            ex_date = str(ex.get("entry_date") or "")[:10]
-            try:
-                ex_dt = datetime.strptime(ex_date, "%Y-%m-%d")
-            except ValueError:
-                continue
-
-            day_delta = abs((target_dt - ex_dt).days)
-            if day_delta > 3:
-                continue
-
-            ex_desc = str(ex.get("description") or "")
-            ex_tokens = _tokenize_cashflow_text(ex_desc)
-            intersect = len(target_tokens & ex_tokens)
-            union = len(target_tokens | ex_tokens)
-            jaccard = (intersect / union) if union > 0 else 0.0
-            exact_desc = _normalize_cashflow_text(ex_desc) == _normalize_cashflow_text(description)
-            score = 40.0
-            score += max(0.0, 30.0 - (day_delta * 8.0))
-            score += jaccard * 25.0
-            if exact_desc:
-                score += 10.0
-
-            confidence = "high" if score >= 80 else ("medium" if score >= 60 else "low")
-            candidate = {
-                "id": int(ex.get("id") or 0),
-                "entry_date": ex_date,
-                "description": ex_desc,
-                "amount": ex_amount,
-                "score": round(score, 2),
-                "confidence": confidence,
-                "dedupe_hash": _cashflow_dedupe_hash(ex_type, ex_amount, ex_date, ex_desc),
-                "same_hash": target_hash == _cashflow_dedupe_hash(ex_type, ex_amount, ex_date, ex_desc),
-            }
-            if best is None or float(candidate["score"]) > float(best.get("score") or 0.0):
-                best = candidate
-
-        return best
-
-    def _parse_cashflow_import_candidates(filename: str, raw_bytes: bytes) -> tuple[list[dict], list[dict]]:
-        candidates: list[dict] = []
-        errors: list[dict] = []
-
-        if filename.endswith(".csv"):
-            text = raw_bytes.decode("utf-8", errors="replace")
-            reader = csv.DictReader(io.StringIO(text))
-            for i, row in enumerate(reader):
-                try:
-                    entry_date = sanitize_text(str(row.get("date") or row.get("data") or ""), 10).strip()
-                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
-                        raise ValueError(f"data inválida: {entry_date}")
-                    raw_amount = str(row.get("amount") or row.get("valor") or "0").replace(",", ".")
-                    amount = round(float(raw_amount), 2)
-                    if amount <= 0:
-                        raise ValueError("amount deve ser positivo")
-                    entry_type_raw = str(row.get("type") or row.get("tipo") or "expense").strip().lower()
-                    entry_type = entry_type_raw if entry_type_raw in ("income", "expense") else "expense"
-                    category = sanitize_text(str(row.get("category") or row.get("categoria") or "Importado"), 60).strip()
-                    description = sanitize_text(str(row.get("description") or row.get("descricao") or ""), 200).strip()
-                    candidates.append({
-                        "entry_type": entry_type,
-                        "amount": amount,
-                        "category": category,
-                        "description": description,
-                        "entry_date": entry_date,
-                        "notes": "Importado via CSV",
-                    })
-                except (ValueError, TypeError, KeyError) as exc:
-                    errors.append({"row": i + 2, "error": str(exc)})
-            return candidates, errors
-
-        if filename.endswith(".ofx") or filename.endswith(".qfx"):
-            text = raw_bytes.decode("utf-8", errors="replace")
-            transactions = re.findall(r"<STMTTRN>(.*?)</STMTTRN>", text, re.DOTALL | re.IGNORECASE)
-            for i, block in enumerate(transactions):
-                try:
-                    def _ofx_val(tag: str) -> str:
-                        m = re.search(rf"<{tag}>\s*([^\n<]+)", block, re.IGNORECASE)
-                        return m.group(1).strip() if m else ""
-
-                    raw_amt = _ofx_val("TRNAMT").replace(",", ".")
-                    amount = float(raw_amt)
-                    entry_type = "income" if amount >= 0 else "expense"
-                    amount = round(abs(amount), 2)
-                    if amount == 0:
-                        continue
-
-                    raw_date = _ofx_val("DTPOSTED")[:8]
-                    if len(raw_date) != 8:
-                        raise ValueError(f"DTPOSTED inválido: {raw_date}")
-                    entry_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
-
-                    description = sanitize_text(_ofx_val("MEMO") or _ofx_val("NAME") or "OFX", 200)
-                    candidates.append({
-                        "entry_type": entry_type,
-                        "amount": amount,
-                        "category": "Importado",
-                        "description": description,
-                        "entry_date": entry_date,
-                        "notes": "Importado via OFX",
-                    })
-                except (ValueError, TypeError, IndexError) as exc:
-                    errors.append({"transaction": i + 1, "error": str(exc)})
-            return candidates, errors
-
-        raise ValueError("Formato não suportado. Use .csv, .ofx ou .qfx")
+    def _build_reconcile_suggestions(
+        month: str | None,
+        min_score: float,
+    ) -> list[dict]:
+        rows = repo.list_fin_cashflow_entries(month=month or None, limit=5000)
+        return build_reconcile_suggestions(rows, min_score)
 
     def _execute_cashflow_import(
         *,
@@ -314,69 +188,78 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         force: bool,
         merge_strategy: str,
     ) -> dict:
-        existing_entries = repo.list_fin_cashflow_entries(month=month, limit=5000) if not force else []
-        candidates, errors = _parse_cashflow_import_candidates(filename, raw_bytes)
+        candidates, parse_errors = parse_cashflow_import_candidates(filename, raw_bytes)
+        existing_entries = repo.list_fin_cashflow_entries(month=month, limit=5000)
 
-        imported_ids: list[int] = []
-        potential_duplicates: list[dict] = []
+        imported = 0
         merged = 0
+        inserted_ids: list[int] = []
+        potential_duplicates: list[dict] = []
 
-        for c in candidates:
-            dedupe_hash = _cashflow_dedupe_hash(
-                str(c.get("entry_type") or "expense"),
-                float(c.get("amount") or 0),
-                str(c.get("entry_date") or ""),
-                str(c.get("description") or ""),
-            )
-            dup = _find_potential_cashflow_duplicate(
-                existing_entries=existing_entries,
-                entry_type=str(c.get("entry_type") or "expense"),
-                amount=float(c.get("amount") or 0),
-                entry_date=str(c.get("entry_date") or ""),
-                description=str(c.get("description") or ""),
-            )
+        for candidate in candidates:
+            entry_date = str(candidate.get("entry_date") or "")[:10]
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+                parse_errors.append({"error": "entry_date inválida", "entry_date": entry_date})
+                continue
 
-            if dup and not force:
-                merged_this = False
-                if merge_strategy == "append_notes" and int(dup.get("id") or 0) > 0:
-                    existing = repo.get_fin_cashflow_entry(int(dup.get("id") or 0)) or {}
-                    base_notes = str(existing.get("notes") or "").strip()
-                    extra_note = f"Import dedupe: {str(c.get('description') or '').strip()}"
-                    if extra_note and extra_note not in base_notes:
-                        merged_note = f"{base_notes} | {extra_note}".strip(" |")
-                        repo.update_fin_cashflow_entry(int(dup.get("id") or 0), {"notes": merged_note[:500]})
-                        merged += 1
-                        merged_this = True
-                potential_duplicates.append({
-                    "candidate": {
-                        "entry_type": c.get("entry_type"),
-                        "amount": c.get("amount"),
-                        "entry_date": c.get("entry_date"),
-                        "description": c.get("description"),
-                        "dedupe_hash": dedupe_hash,
-                    },
-                    "matched": dup,
-                    "merge_suggestion": {
-                        "strategy": "append_notes",
-                        "applied": merged_this,
-                    },
+            if str(entry_date)[:7] != month:
+                parse_errors.append({
+                    "error": "entry_date fora do month informado",
+                    "entry_date": entry_date,
+                    "month": month,
                 })
                 continue
 
-            imported_id = int(repo.add_fin_cashflow_entry(c))
-            imported_ids.append(imported_id)
+            duplicate = None
             if not force:
-                existing_entries.append({"id": imported_id, **c})
+                duplicate = find_potential_cashflow_duplicate(
+                    existing_entries=existing_entries,
+                    entry_type=str(candidate.get("entry_type") or ""),
+                    amount=float(candidate.get("amount") or 0),
+                    entry_date=entry_date,
+                    description=str(candidate.get("description") or ""),
+                )
 
-        if imported_ids or merged:
-            _invalidate_cashflow_cache()
+            if duplicate and float(duplicate.get("score") or 0) >= 60.0:
+                potential_duplicates.append({
+                    "incoming": {
+                        "entry_type": candidate.get("entry_type"),
+                        "amount": candidate.get("amount"),
+                        "entry_date": entry_date,
+                        "description": candidate.get("description"),
+                    },
+                    "existing": duplicate,
+                })
+
+                if merge_strategy == "append_notes":
+                    existing_id = int(duplicate.get("id") or 0)
+                    existing_row = repo.get_fin_cashflow_entry(existing_id) or {}
+                    current_notes = str(existing_row.get("notes") or "").strip()
+                    append_text = (
+                        "Import dedupe: "
+                        f"{entry_date} {str(candidate.get('description') or '').strip()}"
+                    )
+                    new_notes = (
+                        f"{current_notes} | {append_text}" if current_notes else append_text
+                    )[:500]
+                    if repo.update_fin_cashflow_entry(existing_id, {"notes": new_notes}):
+                        merged += 1
+                continue
+
+            entry_id = repo.add_fin_cashflow_entry(candidate)
+            inserted_ids.append(int(entry_id))
+            imported += 1
+            existing_entries.append({**candidate, "id": entry_id})
 
         return {
             "ok": True,
-            "imported": len(imported_ids),
+            "month": month,
+            "filename": filename,
+            "imported": imported,
             "merged": merged,
+            "inserted_ids": inserted_ids,
             "potential_duplicates": potential_duplicates,
-            "errors": errors,
+            "errors": parse_errors,
         }
 
     def _enqueue_cashflow_import_job(
@@ -394,23 +277,24 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             _cashflow_import_jobs[job_id] = {
                 "id": job_id,
                 "status": "queued",
-                "created_at": now_iso,
                 "created_ts": time.time(),
+                "created_at": now_iso,
                 "updated_at": now_iso,
+                "rows_estimate": max(0, raw_bytes.count(b"\n") - 1),
                 "month": month,
                 "filename": filename,
-                "rows_estimate": max(0, raw_bytes.count(b"\n") - 1),
                 "result": None,
                 "error": None,
             }
 
-        def _worker() -> None:
+        def _run_job() -> None:
             with _cashflow_import_jobs_lock:
                 row = _cashflow_import_jobs.get(job_id)
-                if row is None:
+                if not row:
                     return
                 row["status"] = "running"
                 row["updated_at"] = datetime.now(timezone.utc).isoformat()
+
             try:
                 result = _execute_cashflow_import(
                     month=month,
@@ -421,7 +305,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 )
                 with _cashflow_import_jobs_lock:
                     row = _cashflow_import_jobs.get(job_id)
-                    if row is None:
+                    if not row:
                         return
                     row["status"] = "done"
                     row["result"] = result
@@ -429,84 +313,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             except Exception as exc:
                 with _cashflow_import_jobs_lock:
                     row = _cashflow_import_jobs.get(job_id)
-                    if row is None:
+                    if not row:
                         return
                     row["status"] = "failed"
                     row["error"] = str(exc)
                     row["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        _cashflow_import_executor.submit(_worker)
+        _cashflow_import_executor.submit(_run_job)
         return job_id
-
-    def _build_reconcile_suggestions(month: str | None, min_score: float) -> list[dict]:
-        rows = repo.list_fin_cashflow_entries(
-            month=month or None,
-            entry_type="expense",
-            payment_status="pending",
-            limit=3000,
-        )
-        today = datetime.now(timezone.utc).date()
-        keyword_pattern = re.compile(r"\b(pix|debito|débito|cartao|cartão|boleto|pagamento|ifood|uber|99|transferencia|transferência)\b", re.IGNORECASE)
-        fixed_pattern = re.compile(r"\b(aluguel|condominio|condomínio|energia|luz|agua|água|internet|telefone|assinatura|fatura)\b", re.IGNORECASE)
-
-        suggestions: list[dict] = []
-        for row in rows:
-            entry_date = str(row.get("entry_date") or "")[:10]
-            if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
-                continue
-            try:
-                due = datetime.strptime(entry_date, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            age_days = (today - due).days
-            if age_days < 0:
-                continue
-
-            text_blob = " ".join([
-                str(row.get("description") or ""),
-                str(row.get("notes") or ""),
-                str(row.get("category") or ""),
-                str(row.get("subcategory") or ""),
-                str(row.get("cost_center") or ""),
-            ]).lower()
-            amount = float(row.get("amount") or 0)
-
-            score = 0.0
-            reasons: list[str] = []
-            if age_days >= 2:
-                score += 35
-                reasons.append("vencido há pelo menos 2 dias")
-            if age_days >= 7:
-                score += 20
-                reasons.append("vencido há pelo menos 7 dias")
-            if keyword_pattern.search(text_blob):
-                score += 25
-                reasons.append("descrição sugere pagamento realizado")
-            if fixed_pattern.search(text_blob):
-                score += 15
-                reasons.append("categoria típica de despesa recorrente")
-            if amount <= 500:
-                score += 10
-                reasons.append("valor baixo/moderado")
-
-            if score >= min_score:
-                suggestions.append({
-                    "id": int(row.get("id") or 0),
-                    "entry_date": entry_date,
-                    "amount": round(amount, 2),
-                    "description": str(row.get("description") or ""),
-                    "category": str(row.get("category") or ""),
-                    "score": round(score, 2),
-                    "reasons": reasons,
-                })
-
-        suggestions.sort(
-            key=lambda s: (
-                -(float(s.get("score") or 0)),
-                str(s.get("entry_date") or ""),
-            ),
-        )
-        return suggestions
 
     # ── Page ────────────────────────────────────────────────
 
@@ -1774,6 +1588,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "id": int(row.get("id") or 0),
                 "name": name.replace("cashflow:", "", 1),
                 "filter": row.get("filter") if isinstance(row.get("filter"), dict) else {},
+                "is_favorite": bool(row.get("is_favorite")),
+                "use_count": int(row.get("use_count") or 0),
+                "last_used_at": row.get("last_used_at"),
                 "created_at": row.get("created_at"),
             })
         return jsonify(payload)
@@ -1812,6 +1629,62 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"error": "Filtro não pertence ao cashflow"}), 400
         repo.delete_saved_filter(filter_id)
         return jsonify({"ok": True})
+
+    @app.put("/api/finance/cashflow/saved-filters/<int:filter_id>/favorite")
+    @limiter.limit("30/minute")
+    @require_finance_key
+    def finance_cashflow_saved_filters_toggle_favorite(filter_id: int):
+        """Toggle favorite status on a saved filter."""
+        rows = repo.list_saved_filters()
+        target = next((r for r in rows if int(r.get("id") or 0) == filter_id), None)
+        if not target:
+            return jsonify({"error": "Filtro não encontrado"}), 404
+        if not str(target.get("name") or "").startswith("cashflow:"):
+            return jsonify({"error": "Filtro não pertence ao cashflow"}), 400
+        
+        success = repo.toggle_saved_filter_favorite(filter_id)
+        is_favorite = not bool(target.get("is_favorite"))
+        return jsonify({
+            "ok": success,
+            "id": filter_id,
+            "is_favorite": is_favorite,
+        })
+
+    @app.post("/api/finance/cashflow/saved-filters/<int:filter_id>/apply")
+    @limiter.limit("30/minute")
+    def finance_cashflow_saved_filters_apply(filter_id: int):
+        """Apply a saved filter and track usage."""
+        rows = repo.list_saved_filters()
+        target = next((r for r in rows if int(r.get("id") or 0) == filter_id), None)
+        if not target:
+            return jsonify({"error": "Filtro não encontrado"}), 404
+        
+        # Track usage
+        repo.track_filter_usage(filter_id)
+        
+        return jsonify({
+            "ok": True,
+            "filter": target.get("filter") if isinstance(target.get("filter"), dict) else {},
+            "usage_count": int(target.get("use_count") or 0) + 1,
+        })
+
+    @app.get("/api/finance/cashflow/filters/templates")
+    @limiter.limit("30/minute")
+    def finance_cashflow_filters_templates():
+        """Get predefined filter templates."""
+        templates = repo.get_saved_filter_templates()
+        payload = []
+        for row in templates:
+            name = str(row.get("name") or "")
+            if not name.startswith("cashflow:"):
+                continue
+            payload.append({
+                "id": int(row.get("id") or 0),
+                "name": name.replace("cashflow:", "", 1),
+                "description": row.get("description") or "",
+                "filter": row.get("filter") if isinstance(row.get("filter"), dict) else {},
+            })
+        return jsonify(payload)
 
     @app.get("/api/finance/cashflow/summary")
     @limiter.limit("30/minute")
@@ -1933,7 +1806,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 except ValueError:
                     pass
 
-            dup_key = _cashflow_dedupe_hash(entry_type, amount, entry_date, description)
+            dup_key = cashflow_dedupe_hash(
+                entry_type,
+                amount,
+                entry_date,
+                description,
+            )
             duplicate_map.setdefault(dup_key, []).append(row)
 
         duplicate_groups = [items for items in duplicate_map.values() if len(items) > 1]
@@ -2015,6 +1893,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             },
         ]
 
+        # Add quality alerts (NEW)
+        alerts_payload = evaluate_data_quality_alerts(
+            score=score,
+            issues=issues,
+        )
+
         return jsonify({
             "month": month,
             "score": score,
@@ -2025,7 +1909,37 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "Revise duplicatas antes de fechar o mês.",
                 "Valide despesas fora do padrão para evitar classificação incorreta.",
             ],
+            "quality_alerts": alerts_payload,
         })
+
+    @app.get("/api/finance/cashflow/bulk/dedup-stats")
+    @limiter.limit("30/minute")
+    def finance_cashflow_dedup_stats():
+        """Get dedup cache statistics with per-operation metrics."""
+        stats = _dedupe_cache.stats()
+        return jsonify({
+            "ok": True,
+            "cache_backend": (
+                "redis" if hasattr(cache, "redis")
+                else "memory"
+            ),
+            "cache_stats": stats,
+            "recommendation": (
+                "Cache working well" if stats.get("hit_rate", 0) >= 0.5
+                else "Low hit rate: consider increasing TTL or request volume"
+            ),
+        })
+
+    @app.post("/api/finance/cashflow/bulk/dedup-reset")
+    @limiter.limit("5/minute")
+    @require_finance_key
+    def finance_cashflow_dedup_reset():
+        """Clear dedup cache (admin only)."""
+        _dedupe_cache.clear()
+        _audit("dedup_cache_reset", "cashflow", None, {
+            "reason": "Manual reset via admin endpoint",
+        })
+        return jsonify({"ok": True, "message": "Dedup cache cleared"})
 
     @app.get("/api/finance/cashflow/audit")
     @limiter.limit("20/minute")
@@ -3675,91 +3589,109 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_cashflow_bulk_action():
         body = request.get_json(silent=True) or {}
         ids_raw = body.get("ids", [])
-        action = sanitize_text(str(body.get("action", "update")), 20).strip().lower()
+        raw_action = body.get("action", body.get("operation", "update"))
+        action = sanitize_text(str(raw_action), 20).strip().lower()
         updates = body.get("updates", {})
 
-        if not isinstance(ids_raw, list) or not ids_raw:
-            return jsonify({"error": "ids deve ser uma lista não vazia"}), 400
-        ids: list[int] = []
-        for item in ids_raw:
-            try:
-                ids.append(int(item))
-            except (TypeError, ValueError):
-                continue
-        ids = sorted(list({i for i in ids if i > 0}))
-        if not ids:
-            return jsonify({"error": "Nenhum id válido informado"}), 400
-
-        updated = 0
-        deleted = 0
-        not_found = 0
+        ok, ids, err_msg = validate_bulk_operation_ids(ids_raw, max_ids=500)
+        if not ok:
+            return jsonify({"error": err_msg}), 400
 
         if action == "delete":
-            for entry_id in ids:
-                entry = repo.get_fin_cashflow_entry(entry_id)
-                if not entry:
-                    not_found += 1
-                    continue
-                repo.delete_fin_cashflow_entry(entry_id)
-                deleted += 1
-            _audit("bulk_delete", "cashflow", None, {"ids": ids, "deleted": deleted, "not_found": not_found})
+            result = bulk_delete_cashflow_entries(entry_ids=ids, repo=repo)
+            deleted = int(result.get("deleted") or 0)
+            failed = int(result.get("failed") or 0)
+            _audit("bulk_delete", "cashflow", None, {
+                "ids": ids,
+                "deleted": deleted,
+                "failed": failed,
+            })
             if deleted > 0:
                 _invalidate_cashflow_cache()
-            return jsonify({"ok": True, "action": action, "deleted": deleted, "not_found": not_found})
+            return jsonify({
+                "ok": True,
+                "action": action,
+                "deleted": deleted,
+                "not_found": failed,
+                "failed": failed,
+                "total_requested": len(ids),
+                "errors": result.get("errors"),
+            })
 
         if action == "status":
+            if not isinstance(updates, dict):
+                return jsonify({"error": "updates deve ser um objeto"}), 400
             status = sanitize_text(str(updates.get("status", "")), 12).strip().lower()
             if status not in ("pending", "paid"):
                 return jsonify({"error": "status inválido (pending|paid)"}), 400
             settled_at = sanitize_text(str(updates.get("settled_at", "")), 10).strip() or None
             if settled_at and not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at):
                 return jsonify({"error": "settled_at inválida (use YYYY-MM-DD)"}), 400
-            for entry_id in ids:
-                if repo.set_fin_cashflow_status(entry_id, status, settled_at):
-                    updated += 1
-                else:
-                    not_found += 1
-            _audit("bulk_status", "cashflow", None, {"ids": ids, "updated": updated, "not_found": not_found, "status": status})
+            payload = {
+                "status": status,
+                "settled_at": settled_at,
+            }
+            result = apply_bulk_cashflow_updates(
+                entry_ids=ids,
+                updates=payload,
+                repo=repo,
+            )
+            updated = int(result.get("updated") or 0)
+            failed = int(result.get("failed") or 0)
+            _audit("bulk_status", "cashflow", None, {
+                "ids": ids,
+                "updated": updated,
+                "failed": failed,
+                "status": str(payload.get("status") or ""),
+            })
             if updated > 0:
                 _invalidate_cashflow_cache()
-            return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
+            return jsonify({
+                "ok": True,
+                "action": action,
+                "updated": updated,
+                "not_found": failed,
+                "failed": failed,
+                "total_requested": len(ids),
+                "errors": result.get("errors"),
+            })
 
         if action != "update":
-            return jsonify({"error": "action inválida (update|status|delete)"}), 400
+            return jsonify({"error": "action/operation inválida (update|status|delete)"}), 400
 
         if not isinstance(updates, dict) or not updates:
             return jsonify({"error": "updates deve ser objeto não vazio"}), 400
 
-        safe_updates: dict[str, object] = {}
-        if "category" in updates:
-            safe_updates["category"] = sanitize_text(str(updates.get("category", "")), 60)
-        if "subcategory" in updates:
-            safe_updates["subcategory"] = sanitize_text(str(updates.get("subcategory", "")), 60)
-        if "cost_center" in updates:
-            safe_updates["cost_center"] = sanitize_text(str(updates.get("cost_center", "")), 60)
-        if "notes" in updates:
-            safe_updates["notes"] = sanitize_text(str(updates.get("notes", "")), 500)
-        if "tags" in updates:
-            safe_updates["tags"] = _normalize_tags(updates.get("tags"))
-
-        if not safe_updates:
-            return jsonify({"error": "Nenhum campo válido em updates"}), 400
-
-        for entry_id in ids:
-            if repo.update_fin_cashflow_entry(entry_id, safe_updates):
-                updated += 1
-            else:
-                not_found += 1
-
+        normalized_updates = dict(updates)
+        if "tags" in normalized_updates:
+            normalized_updates["tags"] = _normalize_tags(
+                normalized_updates.get("tags"),
+            )
+        result = apply_bulk_cashflow_updates(
+            entry_ids=ids,
+            updates=normalized_updates,
+            repo=repo,
+        )
+        updated = int(result.get("updated") or 0)
+        failed = int(result.get("failed") or 0)
         _audit("bulk_update", "cashflow", None, {
             "ids": ids,
             "updated": updated,
-            "not_found": not_found,
-            "fields": sorted(list(safe_updates.keys())),
+            "failed": failed,
+            "fields": sorted(list(normalized_updates.keys())),
+            "payment_status": normalized_updates.get("payment_status") or normalized_updates.get("status"),
         })
         if updated > 0:
             _invalidate_cashflow_cache()
-        return jsonify({"ok": True, "action": action, "updated": updated, "not_found": not_found})
+        return jsonify({
+            "ok": True,
+            "action": action,
+            "updated": updated,
+            "not_found": failed,
+            "failed": failed,
+            "total_requested": len(ids),
+            "errors": result.get("errors"),
+        })
 
     @app.get("/api/finance/goals/passive-income")
     @limiter.limit("30/minute")

@@ -1943,38 +1943,111 @@ async function openCashflowMonthPlanModal() {
 async function openCashflowSavedFiltersModal() {
   const current = _collectCurrentCashflowFilter();
   let rows = [];
+  let templates = [];
   try {
-    const resp = await finFetch("/api/finance/cashflow/saved-filters");
-    if (resp.ok) rows = await resp.json();
+    const [filtersResp, templatesResp] = await Promise.all([
+      finFetch("/api/finance/cashflow/saved-filters"),
+      finFetch("/api/finance/cashflow/filters/templates"),
+    ]);
+    if (filtersResp.ok) rows = await filtersResp.json();
+    if (templatesResp.ok) templates = await templatesResp.json();
   } catch { /* ignore */ }
 
-  const listHtml = (rows || []).length
-    ? rows.map((r) => `
-      <tr>
-        <td>${escapeHtml(r.name || "Filtro")}</td>
-        <td>${escapeHtml(JSON.stringify(r.filter || {}))}</td>
-        <td class="text-center">
-          <button class="fin-del-btn" data-action="applyCashflowSavedFilter" data-id="${r.id}" title="Aplicar">✓</button>
-          <button class="fin-del-btn" data-action="deleteCashflowSavedFilter" data-id="${r.id}" title="Excluir">✕</button>
-        </td>
-      </tr>
-    `).join("")
-    : '<tr><td colspan="3" class="text-center">Nenhum filtro salvo</td></tr>';
+  // Sort by favorite first, then by usage count
+  const sortedRows = (rows || []).sort((a, b) => {
+    if (a.is_favorite !== b.is_favorite) return b.is_favorite ? 1 : -1;
+    return (b.use_count || 0) - (a.use_count || 0);
+  });
 
-  openFinModal("🔖 Filtros Salvos do Gestor Financeiro", `
-    <div class="fin-form-group">
-      <label>Nome do filtro atual</label>
-      <input id="fmCashflowFilterName" placeholder="Ex.: Casa pendentes" />
-      <small style="display:block;opacity:.7;margin-top:4px;">Filtro atual: ${escapeHtml(JSON.stringify(current))}</small>
+  const renderFilterRow = (r) => `
+    <div class="fin-filter-row" data-filter-id="${r.id}">
+      <div class="fin-filter-name">
+        <div class="fin-filter-title">${escapeHtml(r.name || "Filtro")}</div>
+        <div class="fin-filter-meta">
+          <span class="fin-filter-usage">
+            <span>${r.use_count || 0}×</span>
+          </span>
+          ${r.last_used_at ? `<span title="Última utilização">↻ ${escapeHtml(String(r.last_used_at).slice(0, 10))}</span>` : ''}
+        </div>
+      </div>
+      <div class="fin-filter-actions">
+        <span class="fin-filter-star ${r.is_favorite ? 'is-favorite' : ''}" 
+              data-action="toggleFavFilter" 
+              data-id="${r.id}" 
+              title="Favorito">★</span>
+        <button class="fin-filter-btn" data-action="applyCashflowSavedFilter" data-id="${r.id}" title="Aplicar">Usar</button>
+        <button class="fin-filter-btn delete" data-action="deleteCashflowSavedFilter" data-id="${r.id}" title="Excluir">×</button>
+      </div>
     </div>
-    <button id="btnSaveCashflowFilter" class="fin-form-submit" type="button">Salvar filtro atual</button>
-    <div class="fin-table-wrap" style="max-height:260px;overflow:auto;margin-top:12px;">
-      <table class="fin-table">
-        <thead><tr><th>Nome</th><th>Conteúdo</th><th></th></tr></thead>
-        <tbody id="fmCashflowSavedFiltersRows">${listHtml}</tbody>
-      </table>
+  `;
+
+  const renderTemplateRow = (t) => `
+    <div class="fin-template-row">
+      <div class="fin-template-title">${escapeHtml(t.name || "Template")}</div>
+      <div class="fin-template-desc">${escapeHtml(t.description || "(Sem descrição)")}</div>
+      <button class="fin-template-btn" data-action="applyTemplateFilter" data-id="${t.id}">Usar template</button>
+    </div>
+  `;
+
+  const myFiltersHtml = sortedRows.length
+    ? sortedRows.map(renderFilterRow).join("")
+    : '<div class="fin-filters-empty"><div class="fin-filters-empty-icon">📭</div><div>Nenhum filtro salvo</div></div>';
+
+  const templatesHtml = templates.length
+    ? templates.map(renderTemplateRow).join("")
+    : '<div class="fin-filters-empty"><div class="fin-filters-empty-icon">📋</div><div>Nenhum template disponível</div></div>';
+
+  openFinModal("🔖 Filtros & Templates", `
+    <div class="fin-filter-tabs">
+      <button id="tabMyFilters" class="fin-filter-tab active">
+        Meus Filtros <span style="font-size:0.8em;opacity:0.7;">(${sortedRows.length})</span>
+      </button>
+      <button id="tabTemplates" class="fin-filter-tab">
+        Templates <span style="font-size:0.8em;opacity:0.7;">(${templates.length})</span>
+      </button>
+    </div>
+
+    <div id="myFiltersTab" style="display:block;">
+      <div class="fin-form-group">
+        <label>Nome do filtro atual</label>
+        <input id="fmCashflowFilterName" placeholder="Ex.: Pagamentos pendentes" />
+        <small style="display:block;opacity:.7;margin-top:4px;">Filtro: ${escapeHtml(JSON.stringify(current).substring(0, 60))}...</small>
+      </div>
+      <button id="btnSaveCashflowFilter" class="fin-form-submit" type="button">💾 Salvar filtro atual</button>
+      <div class="fin-filter-list" style="margin-top:12px;">
+        ${myFiltersHtml}
+      </div>
+    </div>
+
+    <div id="templatesTab" style="display:none;">
+      <p style="opacity:0.7;font-size:0.9em;margin-bottom:12px;">
+        Templates são filtros pré-configurados para casos de uso comuns. Clique em "Usar template" para aplicar.
+      </p>
+      <div class="fin-template-list">
+        ${templatesHtml}
+      </div>
     </div>
   `);
+
+  // Tab switching
+  const tabMyFilters = byId("tabMyFilters");
+  const tabTemplates = byId("tabTemplates");
+  const myFiltersTab = byId("myFiltersTab");
+  const templatesTab = byId("templatesTab");
+
+  tabMyFilters?.addEventListener("click", () => {
+    myFiltersTab.style.display = "block";
+    templatesTab.style.display = "none";
+    tabMyFilters.classList.add("active");
+    tabTemplates.classList.remove("active");
+  });
+
+  tabTemplates?.addEventListener("click", () => {
+    myFiltersTab.style.display = "none";
+    templatesTab.style.display = "block";
+    tabMyFilters.classList.remove("active");
+    tabTemplates.classList.add("active");
+  });
 
   byId("btnSaveCashflowFilter")?.addEventListener("click", async () => {
     const name = String(byId("fmCashflowFilterName")?.value || "").trim();
@@ -1997,15 +2070,50 @@ async function openCashflowSavedFiltersModal() {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
     const id = Number(btn.dataset.id || 0);
+
+    if (btn.dataset.action === "toggleFavFilter") {
+      try {
+        const resp = await finFetch(`/api/finance/cashflow/saved-filters/${id}/favorite`, {
+          method: "PUT",
+        });
+        if (!resp.ok) { showToast("Erro ao marcar favorito"); return; }
+        const star = btn;
+        star.classList.toggle("is-favorite");
+        showToast("Favorito atualizado", "success");
+      } catch { showToast("Erro de rede"); }
+      return;
+    }
+
     if (btn.dataset.action === "applyCashflowSavedFilter") {
       const item = (rows || []).find((x) => Number(x.id) === id);
       if (!item) return;
+      try {
+        await finFetch(`/api/finance/cashflow/saved-filters/${id}/apply`, {
+          method: "POST",
+        });
+      } catch { /* ignore usage tracking error */ }
       _applyCashflowFilter(item.filter || {});
       closeFinModal();
       await refreshByDomains(["cashflow"]);
       showToast("Filtro aplicado", "success");
       return;
     }
+
+    if (btn.dataset.action === "applyTemplateFilter") {
+      const item = (templates || []).find((x) => Number(x.id) === id);
+      if (!item) return;
+      try {
+        await finFetch(`/api/finance/cashflow/saved-filters/${id}/apply`, {
+          method: "POST",
+        });
+      } catch { /* ignore usage tracking */ }
+      _applyCashflowFilter(item.filter || {});
+      closeFinModal();
+      await refreshByDomains(["cashflow"]);
+      showToast(`Template "${item.name}" aplicado`, "success");
+      return;
+    }
+
     if (btn.dataset.action === "deleteCashflowSavedFilter") {
       if (!confirm("Excluir este filtro salvo?")) return;
       try {
@@ -2015,8 +2123,9 @@ async function openCashflowSavedFiltersModal() {
         await openCashflowSavedFiltersModal();
       } catch { showToast("Erro de rede"); }
     }
-  }, { once: true });
+  });
 }
+
 
 async function openCashflowBulkModal() {
   const rows = Array.isArray(FIN.cashflowEntries) ? FIN.cashflowEntries : [];

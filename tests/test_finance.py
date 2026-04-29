@@ -1644,6 +1644,74 @@ class TestCashflowNewFeatures:
         deleted = client.delete(f"/api/finance/cashflow/saved-filters/{filter_id}")
         assert deleted.status_code == 200
 
+    def test_cashflow_saved_filters_favorite_toggle(self, client):
+        """Test toggling filter favorite status."""
+        created = jpost(client, "/api/finance/cashflow/saved-filters", {
+            "name": "Favorito",
+            "filter": {"month": "2026-04"},
+        })
+        filter_id = created.get_json()["id"]
+        
+        # Toggle favorite
+        resp = client.put(f"/api/finance/cashflow/saved-filters/{filter_id}/favorite")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert data.get("is_favorite") is True
+        
+        # Verify it's in list as favorite
+        listed = client.get("/api/finance/cashflow/saved-filters")
+        rows = listed.get_json()
+        target = next((r for r in rows if int(r.get("id") or 0) == filter_id), None)
+        assert target and target.get("is_favorite") is True
+
+    def test_cashflow_saved_filters_track_usage(self, client):
+        """Test filter usage tracking (apply endpoint)."""
+        created = jpost(client, "/api/finance/cashflow/saved-filters", {
+            "name": "Rastreado",
+            "filter": {"month": "2026-04"},
+        })
+        filter_id = created.get_json()["id"]
+        
+        # Apply filter (track usage)
+        resp = client.post(f"/api/finance/cashflow/saved-filters/{filter_id}/apply")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert data.get("usage_count") == 1
+        
+        # Apply again
+        resp2 = client.post(f"/api/finance/cashflow/saved-filters/{filter_id}/apply")
+        assert resp2.status_code == 200
+        assert resp2.get_json().get("usage_count") == 2
+
+    def test_cashflow_filters_templates_endpoint(self, client, app):
+        """Test filter templates (predefined filters)."""
+        # Add a template via repository (simulating admin setup)
+        from app.repository import Repository
+        repo = Repository(app.config["DATABASE_TARGET"])
+        template_id = repo.add_filter_template(
+            "cashflow:Pendências do mês",
+            {"status": "pending"},
+            "Mostra todas as transações pendentes do mês",
+        )
+        assert template_id > 0
+        
+        # Get templates endpoint
+        resp = client.get("/api/finance/cashflow/filters/templates")
+        assert resp.status_code == 200
+        templates = resp.get_json()
+        assert any(int(t.get("id") or 0) == template_id for t in templates)
+        
+        # Verify template has description
+        target_template = next(
+            (t for t in templates if int(t.get("id") or 0) == template_id),
+            None,
+        )
+        assert target_template
+        assert target_template.get("description")
+        assert "pendentes" in target_template.get("description").lower()
+
     def test_cashflow_bulk_update_and_status(self, client):
         e1 = jpost(client, "/api/finance/cashflow", {
             "entry_type": "expense",
@@ -1778,6 +1846,185 @@ class TestCashflowNewFeatures:
         assert resp.data.startswith(b"%PDF")
         assert resp.headers.get("Content-Type", "").startswith("application/pdf")
         assert "fechamento-2026-04.pdf" in resp.headers.get("Content-Disposition", "")
+
+    def test_bulk_cashflow_update_category(self, client):
+        """Test bulk update of multiple entries."""
+        month = "2026-04"
+        # Create 3 entries
+        ids = []
+        for i in range(3):
+            resp = jpost(client, "/api/finance/cashflow", {
+                "entry_type": "expense",
+                "amount": 100 + i * 10,
+                "category": "Vário",
+                "description": f"Item {i}",
+                "entry_date": f"{month}-{10 + i:02d}",
+            })
+            ids.append(resp.get_json()["id"])
+
+        # Bulk update category
+        resp = client.post(
+            "/api/finance/cashflow/bulk",
+            json={
+                "operation": "update",
+                "ids": ids,
+                "updates": {"category": "Alimentação"},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("updated") == 3
+        assert data.get("failed") == 0
+
+        # Verify category was changed
+        entries = client.get(f"/api/finance/cashflow?month={month}").get_json()
+        categories = {e.get("category") for e in entries if int(e.get("id") or 0) in ids}
+        assert categories == {"Alimentação"}
+
+    def test_bulk_cashflow_update_status(self, client):
+        """Test bulk update of payment status."""
+        month = "2026-04"
+        ids = []
+        for i in range(2):
+            resp = jpost(client, "/api/finance/cashflow", {
+                "entry_type": "expense",
+                "amount": 50,
+                "category": "Teste",
+                "description": f"Pend {i}",
+                "entry_date": f"{month}-15",
+                "payment_status": "pending",
+            })
+            ids.append(resp.get_json()["id"])
+
+        # Bulk mark as paid
+        resp = client.post(
+            "/api/finance/cashflow/bulk",
+            json={
+                "operation": "update",
+                "ids": ids,
+                "updates": {"payment_status": "paid"},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["updated"] == 2
+
+        # Verify status changed
+        paid = client.get(f"/api/finance/cashflow?month={month}&status=paid").get_json()
+        paid_ids = {e["id"] for e in paid}
+        assert all(eid in paid_ids for eid in ids)
+
+    def test_bulk_cashflow_delete(self, client):
+        """Test bulk delete operation."""
+        month = "2026-04"
+        ids = []
+        for i in range(2):
+            resp = jpost(client, "/api/finance/cashflow", {
+                "entry_type": "expense",
+                "amount": 75,
+                "category": "Descarte",
+                "description": f"Delete {i}",
+                "entry_date": f"{month}-20",
+            })
+            ids.append(resp.get_json()["id"])
+
+        # Bulk delete
+        resp = client.post(
+            "/api/finance/cashflow/bulk",
+            json={"operation": "delete", "ids": ids},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["deleted"] == 2
+
+        # Verify deleted
+        entries = client.get(f"/api/finance/cashflow?month={month}").get_json()
+        remaining_ids = {e["id"] for e in entries}
+        assert not any(eid in remaining_ids for eid in ids)
+
+    def test_bulk_operation_max_ids_exceeded(self, client):
+        """Test max IDs validation."""
+        resp = client.post(
+            "/api/finance/cashflow/bulk",
+            json={
+                "operation": "update",
+                "ids": list(range(601)),
+                "updates": {"category": "Test"},
+            },
+        )
+        assert resp.status_code == 400
+        assert "máximo" in resp.get_json().get("error", "").lower()
+
+    def test_data_quality_with_alerts(self, client):
+        """Test data quality endpoint returns alerts."""
+        month = "2026-04"
+        # Create entries with various issues
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "",  # Missing category
+            "description": "Test",
+            "entry_date": f"{month}-10",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Teste",
+            "description": "Test",
+            "entry_date": f"{month}-11",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Teste",
+            "description": "Test",
+            "entry_date": f"{month}-12",
+        })
+
+        resp = client.get(f"/api/finance/cashflow/data-quality?month={month}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "quality_alerts" in data
+        alerts = data["quality_alerts"]
+        assert "alerts" in alerts
+        assert "severity" in alerts
+        assert alerts["severity"] in ("critical", "warning", "info", "healthy")
+
+    def test_dedup_cache_stats(self, client):
+        """Test cache statistics endpoint."""
+        resp = client.get("/api/finance/cashflow/bulk/dedup-stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert "cache_stats" in data
+        stats = data["cache_stats"]
+        assert "hits" in stats
+        assert "misses" in stats
+        assert "hit_rate" in stats
+
+    def test_dedup_cache_reset_endpoint(self, client):
+        """Test cache reset endpoint (admin only)."""
+        resp = client.post("/api/finance/cashflow/bulk/dedup-reset")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert "message" in data
+
+    def test_dedup_cache_per_operation_metrics(self, client):
+        """Test cache per-operation metrics tracking."""
+        # Add some cashflow entries
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Test",
+            "description": "Entry 1",
+            "entry_date": "2026-04-15",
+        })
+        # Get stats - should have by_operation breakdown
+        resp = client.get("/api/finance/cashflow/bulk/dedup-stats")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        stats = data.get("cache_stats", {})
+        # New multi-backend cache should support per-operation tracking
+        assert "by_operation" in stats or "total" in stats
 
 
 class TestFinanceAdvanced:
