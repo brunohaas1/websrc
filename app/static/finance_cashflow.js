@@ -1016,7 +1016,7 @@ function openReceiptOCRModal() {
           amount: data.amount != null ? String(data.amount) : "",
           description: data.description || "",
           category: data.category || "",
-          entry_type: "expense",
+          entry_type: data.entry_type || "expense",
         });
       });
     } catch { showToast("Erro de rede"); }

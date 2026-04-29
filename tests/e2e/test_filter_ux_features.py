@@ -66,16 +66,34 @@ class TestFilterModalUX:
         await page.wait_for_selector(".fin-card")
         
         await open_filters_modal(page)
-        
-        tabs = page.locator(".fin-filter-tab")
-        if await tabs.count() > 1:
-            tab = tabs.nth(1)
-            if await tab.is_visible(timeout=2000):
-                await tab.click()
-                await page.wait_for_timeout(300)
-        
-        prefs = await page.evaluate("() => localStorage.getItem('fin_filters_modal_prefs')")
-        assert prefs is not None, "Modal preferences should exist"
+
+        switched = await page.evaluate(
+            """() => {
+                const btn = document.querySelector('#tabTemplates');
+                if (!btn) return false;
+                btn.click();
+                return true;
+            }"""
+        )
+        assert switched, "Templates tab button should exist"
+        await page.wait_for_timeout(300)
+
+        prefs = await page.evaluate(
+            "() => JSON.parse(localStorage.getItem('fin_filters_modal_prefs') || '{}').activeTab"
+        )
+        assert prefs == 1, "Modal should persist templates tab preference"
+
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(250)
+        await open_filters_modal(page, reset_active_tab=False)
+
+        templates_visible = await page.evaluate(
+            """() => {
+                const el = document.querySelector('#templatesTab');
+                return !!el && getComputedStyle(el).display !== 'none';
+            }"""
+        )
+        assert templates_visible, "Templates tab should be restored on reopen"
 
     @pytest.mark.slow
     async def test_keyboard_shortcuts_modal(self, page: Page):

@@ -5,39 +5,13 @@ Tests filter creation, favorites, templates, and UI interactions
 
 import pytest
 from playwright.async_api import Page
+from tests.e2e.helpers import open_filters_modal, save_current_filter
 
 pytestmark = [pytest.mark.e2e]
 
 
 async def _open_filters_modal(page: Page) -> None:
-    await page.wait_for_selector("#btnCashflowSavedFilters", state="attached", timeout=10000)
-    # Reset tab preference so My Filters tab is shown by default
-    await page.evaluate("() => { try { const p = JSON.parse(localStorage.getItem('fin_filters_modal_prefs') || '{}'); p.activeTab = 0; localStorage.setItem('fin_filters_modal_prefs', JSON.stringify(p)); } catch(e) {} }")
-    await page.wait_for_function("() => typeof openCashflowSavedFiltersModal === 'function'", timeout=10000)
-
-    # Retry opening because UI startup can race with event binding/rendering.
-    for _ in range(3):
-        await page.evaluate("""
-            async () => {
-                if (typeof openCashflowSavedFiltersModal === 'function') {
-                    await openCashflowSavedFiltersModal();
-                    return;
-                }
-                const btn = document.querySelector('#btnCashflowSavedFilters');
-                btn?.click();
-            }
-        """)
-
-        has_modal_content = await page.evaluate(
-            "() => !!document.querySelector('#tabTemplates') && !!document.querySelector('#fmCashflowFilterName')"
-        )
-        if has_modal_content:
-            await page.wait_for_selector("#finModalOverlay", state="visible", timeout=10000)
-            return
-
-        await page.wait_for_timeout(400)
-
-    await page.wait_for_selector("#tabTemplates", state="attached", timeout=10000)
+    await open_filters_modal(page)
 
 
 @pytest.mark.asyncio
@@ -88,14 +62,7 @@ class TestFiltersModal:
         
         # Type filter name
         filter_name = "Test Filter Automation"
-        await page.wait_for_selector("#fmCashflowFilterName", state="attached", timeout=5000)
-        await page.evaluate(f"() => {{ const el = document.querySelector('#fmCashflowFilterName'); if (el) {{ el.value = {repr(filter_name)}; el.dispatchEvent(new Event('input')); }} }}")
-        
-        # Click save button via JS (modal re-renders so Playwright locator may become stale)
-        await page.evaluate("() => document.querySelector('#btnSaveCashflowFilter')?.click()")
-        
-        # Wait for success toast
-        await page.wait_for_selector(".fin-toast, .toast", timeout=5000)
+        await save_current_filter(page, filter_name)
         
         # Verify filter appears in list
         await page.wait_for_selector(f"text={filter_name}", timeout=5000)
@@ -108,10 +75,7 @@ class TestFiltersModal:
         
         # Save a test filter first
         filter_name = "Favorite Test Filter"
-        await page.wait_for_selector("#fmCashflowFilterName", state="attached", timeout=5000)
-        await page.evaluate(f"() => {{ const el = document.querySelector('#fmCashflowFilterName'); if (el) {{ el.value = {repr(filter_name)}; el.dispatchEvent(new Event('input')); }} }}")
-        await page.evaluate("() => document.querySelector('#btnSaveCashflowFilter')?.click()")
-        await page.wait_for_selector(".fin-toast, .toast", timeout=5000)
+        await save_current_filter(page, filter_name)
         
         # Find and click star icon for the created filter via JS
         await page.wait_for_timeout(500)  # Wait for modal to re-render after save

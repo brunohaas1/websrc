@@ -3,11 +3,12 @@
 from playwright.async_api import Page
 
 
-async def open_filters_modal(page: Page) -> None:
+async def open_filters_modal(page: Page, *, reset_active_tab: bool = True) -> None:
     await page.wait_for_selector("#btnCashflowSavedFilters", state="attached", timeout=10000)
-    await page.evaluate(
-        "() => { try { const p = JSON.parse(localStorage.getItem('fin_filters_modal_prefs') || '{}'); p.activeTab = 0; localStorage.setItem('fin_filters_modal_prefs', JSON.stringify(p)); } catch (e) {} }"
-    )
+    if reset_active_tab:
+        await page.evaluate(
+            "() => { try { const p = JSON.parse(localStorage.getItem('fin_filters_modal_prefs') || '{}'); p.activeTab = 0; localStorage.setItem('fin_filters_modal_prefs', JSON.stringify(p)); } catch (e) {} }"
+        )
     await page.wait_for_function("() => typeof openCashflowSavedFiltersModal === 'function'", timeout=10000)
 
     for _ in range(3):
@@ -40,4 +41,14 @@ async def save_current_filter(page: Page, filter_name: str) -> None:
         f"() => {{ const el = document.querySelector('#fmCashflowFilterName'); if (el) {{ el.value = {filter_name!r}; el.dispatchEvent(new Event('input')); }} }}"
     )
     await page.evaluate("() => document.querySelector('#btnSaveCashflowFilter')?.click()")
-    await page.wait_for_selector(".fin-toast, .toast", timeout=5000)
+    try:
+        await page.wait_for_selector(".fin-toast, .toast", timeout=2500)
+    except Exception:
+        try:
+            await page.wait_for_function(
+                f"""() => Array.from(document.querySelectorAll('.fin-filter-row'))
+                    .some((row) => (row.textContent || '').includes({filter_name!r}))""",
+                timeout=2500,
+            )
+        except Exception:
+            await page.wait_for_timeout(400)

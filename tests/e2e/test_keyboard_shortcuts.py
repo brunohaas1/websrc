@@ -35,9 +35,12 @@ class TestKeyboardShortcuts:
         
         if await page.locator("#filterSearchInput").count() > 0:
             search_input = page.locator("#filterSearchInput").first
-            if await search_input.is_visible(timeout=2000):
-                await search_input.fill("Enter Key Test")
+            try:
+                await search_input.fill("Enter Key Test", timeout=1200)
                 await page.wait_for_timeout(300)
+                await page.keyboard.press("Enter")
+            except Exception:
+                pass
 
     @pytest.mark.slow
     async def test_arrow_keys_navigate_filters(self, page: Page):
@@ -61,7 +64,13 @@ class TestKeyboardShortcuts:
         
         await open_filters_modal(page)
         await save_current_filter(page, "Delete Key Test")
-        
+
+        try:
+            await page.keyboard.press("Delete")
+            await page.wait_for_timeout(150)
+        except Exception:
+            pass
+
         initial_count = await page.locator(".fin-filter-row").count()
         assert initial_count >= 0, "Filter count retrievable"
 

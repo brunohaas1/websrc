@@ -1573,6 +1573,50 @@ class TestCashflowNewFeatures:
         assert data.get("fallback_used") == "manual_text"
         assert data.get("category") in ("Alimentação", "Sem categoria", None)
 
+    def test_cashflow_ocr_manual_text_extracts_receipt_fields(self, client):
+        resp = client.post(
+            "/api/finance/cashflow/ocr",
+            data={
+                "manual_text": (
+                    "SUPERMERCADO BOA COMPRA\n"
+                    "CNPJ 12.345.678/0001-99\n"
+                    "29/04/2026 14:55\n"
+                    "TOTAL R$ 123,45\n"
+                    "CARTAO CREDITO"
+                ),
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert data.get("date") == "2026-04-29"
+        assert data.get("amount") == 123.45
+        assert data.get("merchant") == "SUPERMERCADO BOA COMPRA"
+        assert data.get("description") == "SUPERMERCADO BOA COMPRA"
+        assert data.get("entry_type") == "expense"
+        assert data.get("confidence") >= 0.8
+
+    def test_cashflow_ocr_manual_text_infers_income_entry_type(self, client):
+        resp = client.post(
+            "/api/finance/cashflow/ocr",
+            data={
+                "manual_text": (
+                    "EMPRESA ACME LTDA\n"
+                    "SALARIO ABRIL\n"
+                    "30/04/2026\n"
+                    "VALOR R$ 5.432,10\n"
+                    "PIX RECEBIDO"
+                ),
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert data.get("entry_type") == "income"
+        assert data.get("amount") == 5432.10
+
     def test_cashflow_month_plan_returns_weeks_and_projection(self, client):
         jpost(client, "/api/finance/cashflow", {
             "entry_type": "income",

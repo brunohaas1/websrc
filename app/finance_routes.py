@@ -1,6 +1,7 @@
 """Financial dashboard routes."""
 
 import csv
+import html
 import hashlib
 import io
 import json
@@ -2319,6 +2320,33 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 return category
         return None
 
+    def _infer_cashflow_entry_type_from_text(text: str, category: str | None = None) -> str:
+        normalized = str(text or "").lower()
+        cat = str(category or "").lower().strip()
+
+        # Common expense patterns that contain the word "credito" but represent spending.
+        if any(marker in normalized for marker in ("cartao credito", "cartão crédito", "fatura")):
+            return "expense"
+
+        income_keywords = (
+            "salario", "salário", "provento", "rendimento", "recebido", "pix recebido",
+            "deposito recebido", "depósito recebido", "reembolso", "dividendo", "juros", "bonus", "bônus",
+        )
+        expense_keywords = (
+            "compra", "pagamento", "debito", "débito", "pix enviado", "boleto", "fatura",
+            "mercado", "supermercado", "ifood", "uber", "aluguel", "conta", "taxa", "tarifa",
+        )
+
+        if cat in {"salário", "renda extra", "investimentos", "reembolsos"}:
+            return "income"
+
+        if any(kw in normalized for kw in income_keywords):
+            return "income"
+        if any(kw in normalized for kw in expense_keywords):
+            return "expense"
+
+        return "expense"
+
     @app.post("/api/finance/cashflow/auto-classify")
     @limiter.limit("20/minute")
     @require_finance_key
@@ -2647,13 +2675,115 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             }
         return jsonify(payload)
 
+    def _normalize_ocr_text(raw_text: str) -> str:
+        text = str(raw_text or "").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{2,}", "\n", text)
+        return text.strip()
+
+    def _sanitize_ocr_manual_text(value: str, max_len: int = 2000) -> str:
+        text = html.escape(str(value or "").strip())
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.replace("\r", "\n").split("\n")]
+        return "\n".join(line for line in lines if line)[:max_len]
+
+    def _extract_receipt_date(raw_text: str) -> str | None:
+        matches = re.findall(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})", raw_text or "")
+        for day, month, year in matches:
+            year = year if len(year) == 4 else f"20{year}"
+            try:
+                parsed = datetime(int(year), int(month), int(day))
+            except ValueError:
+                continue
+            return parsed.strftime("%Y-%m-%d")
+        return None
+
+    def _extract_receipt_amount(raw_text: str) -> float | None:
+        candidates: list[float] = []
+        patterns = [
+            r"(?:TOTAL|VALOR TOTAL|VALOR|PAGO|PAGAR|TOTAL A PAGAR|TOTAL R\$)\D{0,16}([\d.,]+)",
+            r"R\$\s*([\d.]+,\d{2})",
+            r"\b([\d.]+,\d{2})\b",
+        ]
+        for pattern in patterns:
+            for match in re.findall(pattern, raw_text or "", re.IGNORECASE):
+                raw_val = str(match).strip().replace(" ", "")
+                normalized = raw_val.replace(".", "").replace(",", ".") if "," in raw_val else raw_val
+                try:
+                    value = round(float(normalized), 2)
+                except ValueError:
+                    continue
+                if 0.01 <= value <= 1_000_000:
+                    candidates.append(value)
+        return max(candidates) if candidates else None
+
+    def _extract_receipt_merchant(raw_text: str) -> str:
+        ignored_prefixes = (
+            "CNPJ", "CPF", "ITEM", "QTD", "TOTAL", "SUBTOTAL", "VALOR", "CARTAO",
+            "CREDITO", "DEBITO", "AUTORIZACAO", "NSU", "COD", "OPERADOR", "CAIXA",
+            "VENDA", "DATA", "HORA", "PAGAMENTO", "CLIENTE", "TROCO", "BANCO",
+        )
+        for line in (raw_text or "").splitlines():
+            cleaned = sanitize_text(line.strip(), 120)
+            if len(cleaned) < 4:
+                continue
+            upper = cleaned.upper()
+            if upper.startswith(ignored_prefixes):
+                continue
+            if re.search(r"\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b", cleaned):
+                continue
+            if re.fullmatch(r"[\d\s./:-]+", cleaned):
+                continue
+            return cleaned
+        return ""
+
+    def _score_ocr_candidate(raw_text: str) -> int:
+        score = min(len(raw_text or ""), 200)
+        if _extract_receipt_amount(raw_text) is not None:
+            score += 80
+        if _extract_receipt_date(raw_text) is not None:
+            score += 50
+        if _extract_receipt_merchant(raw_text):
+            score += 40
+        if re.search(r"(?:TOTAL|VALOR|R\$)", raw_text or "", re.IGNORECASE):
+            score += 30
+        return score
+
+    def _extract_text_from_receipt_image(raw_bytes: bytes) -> str:
+        import io as _io
+        import pytesseract  # noqa: PLC0415
+        from PIL import Image, ImageFilter, ImageOps  # noqa: PLC0415
+
+        img = Image.open(_io.BytesIO(raw_bytes))
+        img.load()
+
+        base = ImageOps.exif_transpose(img).convert("L")
+        enlarged = base.resize((max(1, base.width * 2), max(1, base.height * 2)))
+        sharpened = ImageOps.autocontrast(enlarged).filter(ImageFilter.SHARPEN)
+        thresholded = sharpened.point(lambda px: 255 if px > 170 else 0)
+
+        configs = ("--oem 3 --psm 6", "--oem 3 --psm 11", "--oem 3 --psm 4")
+        variants = (base, enlarged, sharpened, thresholded)
+        candidates: list[str] = []
+
+        for variant in variants:
+            for config in configs:
+                try:
+                    text = pytesseract.image_to_string(variant, lang="por+eng", config=config)
+                except Exception:
+                    continue
+                normalized = _normalize_ocr_text(text)
+                if normalized:
+                    candidates.append(normalized)
+
+        return max(candidates, key=_score_ocr_candidate) if candidates else ""
+
     @app.post("/api/finance/cashflow/ocr")
     @limiter.limit("10/minute")
     @require_finance_key
     def finance_cashflow_ocr():
         """OCR de comprovante: imagem → campos pré-preenchidos para lançamento."""
         f = request.files.get("file")
-        manual_text = sanitize_text(str(request.form.get("manual_text", "")), 2000).strip()
+        manual_text = _sanitize_ocr_manual_text(str(request.form.get("manual_text", "")), 2000)
         if not f and not manual_text:
             return jsonify({"ok": False, "error": "Envie arquivo no campo 'file' ou texto em 'manual_text'"}), 400
 
@@ -2668,18 +2798,37 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             from PIL import Image  # noqa: PLC0415
         except ImportError:
             if manual_text:
+                normalized_manual_text = _normalize_ocr_text(manual_text)
                 inferred_category = _infer_cashflow_category_from_text(manual_text)
-                lines = [l.strip() for l in manual_text.splitlines() if l.strip()]
-                merchant = sanitize_text(lines[0][:120], 120) if lines else ""
+                inferred_entry_type = _infer_cashflow_entry_type_from_text(
+                    normalized_manual_text,
+                    inferred_category,
+                )
+                lines = [l.strip() for l in normalized_manual_text.splitlines() if l.strip()]
+                parsed_date = _extract_receipt_date(normalized_manual_text)
+                parsed_amount = _extract_receipt_amount(normalized_manual_text)
+                merchant = _extract_receipt_merchant(normalized_manual_text)
+                description = sanitize_text(merchant or (lines[1][:100] if len(lines) > 1 else ""), 100)
+                confidence = 0.45
+                if parsed_amount is not None:
+                    confidence += 0.2
+                if parsed_date is not None:
+                    confidence += 0.15
+                if merchant:
+                    confidence += 0.1
+                if inferred_category:
+                    confidence += 0.1
                 return jsonify({
                     "ok": True,
                     "fallback_used": "manual_text",
-                    "date": None,
-                    "amount": None,
-                    "description": merchant,
+                    "date": parsed_date,
+                    "amount": parsed_amount,
+                    "description": description,
                     "merchant": merchant,
                     "category": inferred_category,
-                    "raw_text": manual_text[:1000],
+                    "entry_type": inferred_entry_type,
+                    "confidence": round(min(0.99, confidence), 2),
+                    "raw_text": normalized_manual_text[:1000],
                 })
             return jsonify({
                 "ok": False,
@@ -2690,43 +2839,32 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         raw_text = manual_text
         if f:
             try:
-                import io as _io
-                img = Image.open(_io.BytesIO(raw_bytes))
-                raw_text = pytesseract.image_to_string(img, lang="por")
+                extracted_text = _extract_text_from_receipt_image(raw_bytes)
+                raw_text = "\n".join(part for part in [extracted_text, manual_text] if part).strip()
             except Exception as exc:
                 if not manual_text:
                     return jsonify({"ok": False, "error": f"Erro ao processar imagem: {exc}"}), 422
                 raw_text = manual_text
 
-        # --- parse date ---
-        date_match = re.search(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b", raw_text)
-        entry_date = None
-        if date_match:
-            d, m, y = date_match.group(1), date_match.group(2), date_match.group(3)
-            entry_date = f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+        raw_text = _normalize_ocr_text(raw_text)
 
-        # --- parse amount (look for TOTAL / R$ patterns) ---
-        amount = None
-        total_match = re.search(r"(?:TOTAL|VALOR|PAGO|PAGAR)\D{0,10}([\d.,]+)", raw_text, re.IGNORECASE)
-        if not total_match:
-            total_match = re.search(r"R\$\s*([\d.,]+)", raw_text, re.IGNORECASE)
-        if total_match:
-            raw_val = total_match.group(1).replace(".", "").replace(",", ".")
-            try:
-                amount = round(float(raw_val), 2)
-            except ValueError:
-                pass
+        entry_date = _extract_receipt_date(raw_text)
+        amount = _extract_receipt_amount(raw_text)
 
-        # --- basic merchant/description: first non-empty line, max 120 chars ---
         lines = [l.strip() for l in raw_text.splitlines() if l.strip() and len(l.strip()) > 3]
-        merchant = sanitize_text(lines[0][:120] if lines else "", 120)
+        merchant = _extract_receipt_merchant(raw_text)
         description = sanitize_text(merchant or (lines[1][:100] if len(lines) > 1 else ""), 100)
         category = _infer_cashflow_category_from_text("\n".join(lines[:8]))
-        confidence = 0.55
+        entry_type = _infer_cashflow_entry_type_from_text(raw_text, category)
+        confidence = 0.45
+        if f and raw_text:
+            confidence += 0.1
         if amount is not None:
             confidence += 0.2
         if entry_date is not None:
             confidence += 0.15
+        if merchant:
+            confidence += 0.1
         if category:
             confidence += 0.1
 
@@ -2737,6 +2875,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "description": description,
             "merchant": merchant,
             "category": category,
+            "entry_type": entry_type,
             "confidence": round(min(0.99, confidence), 2),
             "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
