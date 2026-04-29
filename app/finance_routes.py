@@ -2766,10 +2766,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         import pytesseract  # noqa: PLC0415
         from PIL import Image, ImageFilter, ImageOps  # noqa: PLC0415
 
-        img = Image.open(_io.BytesIO(raw_bytes))
-        img.load()
+        if not raw_bytes:
+            raise ValueError("Image bytes are empty")
+        
+        try:
+            img = Image.open(_io.BytesIO(raw_bytes))
+            img.load()
+        except Exception as e:
+            raise ValueError(f"Falha ao abrir imagem (pode estar corrompida): {e}")
 
-        base = ImageOps.exif_transpose(img).convert("L")
+        try:
+            base = ImageOps.exif_transpose(img).convert("L")
+        except Exception as e:
+            raise ValueError(f"Falha ao processar imagem: {e}")
 
         # Cap resolution to max 1800px on the longest side to keep Tesseract fast.
         _MAX_DIM = 1800
@@ -2883,11 +2892,44 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         raw_text = manual_text
         if f:
             try:
+                from PIL import Image as PILImage  # noqa: PLC0415
+                import io as _io_verify  # noqa: PLC0415
+                
+                # Validate image before OCR
+                try:
+                    test_img = PILImage.open(_io_verify.BytesIO(raw_bytes))
+                    test_img.verify()
+                except Exception as img_err:
+                    if not manual_text:
+                        return jsonify({
+                            "ok": False,
+                            "error": f"Arquivo não é uma imagem válida. Envie JPG ou PNG. Detalhes: {img_err}",
+                        }), 422
+                    raw_text = manual_text
+                    return jsonify({
+                        "ok": True,
+                        "fallback_used": "manual_text",
+                        "image_error": str(img_err),
+                        "date": _extract_receipt_date(manual_text),
+                        "amount": _extract_receipt_amount(manual_text),
+                        "description": sanitize_text(
+                            _extract_receipt_merchant(manual_text) or "", 100
+                        ),
+                        "category": _infer_cashflow_category_from_text(manual_text),
+                        "entry_type": _infer_cashflow_entry_type_from_text(manual_text),
+                        "confidence": 0.5,
+                    })
+                
                 extracted_text = _extract_text_from_receipt_image(raw_bytes)
                 raw_text = "\n".join(part for part in [extracted_text, manual_text] if part).strip()
             except Exception as exc:
                 if not manual_text:
-                    return jsonify({"ok": False, "error": f"Erro ao processar imagem: {exc}"}), 422
+                    import traceback
+                    return jsonify({
+                        "ok": False,
+                        "error": f"Erro ao processar imagem: {exc}",
+                        "debug": traceback.format_exc()[:500],
+                    }), 422
                 raw_text = manual_text
 
         raw_text = _normalize_ocr_text(raw_text)
