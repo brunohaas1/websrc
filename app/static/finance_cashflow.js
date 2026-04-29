@@ -1940,6 +1940,68 @@ async function openCashflowMonthPlanModal() {
   run();
 }
 
+/* ══════════════════════════════════════════════════════════
+   Utility Functions for Performance Optimization
+   ══════════════════════════════════════════════════════════ */
+
+function _debounce(func, delay = 300) {
+  let timeoutId;
+  return function(...args) {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => func(...args), delay);
+  };
+}
+
+/* ══════════════════════════════════════════════════════════
+   localStorage Utilities for Filters Modal
+   ══════════════════════════════════════════════════════════ */
+
+function _getFilterModalPreferences() {
+  try {
+    const stored = localStorage.getItem("fin_filters_modal_prefs");
+    return stored ? JSON.parse(stored) : { activeTab: 0, recentFilters: [] };
+  } catch {
+    return { activeTab: 0, recentFilters: [] };
+  }
+}
+
+function _saveFilterModalPreferences(prefs) {
+  try {
+    localStorage.setItem("fin_filters_modal_prefs", JSON.stringify(prefs));
+  } catch {
+    // Fail silently if localStorage is unavailable
+  }
+}
+
+function _addToRecentFilters(filterId, filterName) {
+  const prefs = _getFilterModalPreferences();
+  const recent = prefs.recentFilters || [];
+  
+  // Add to beginning, remove if already exists
+  const filtered = recent.filter(f => f.id !== filterId);
+  filtered.unshift({ id: filterId, name: filterName, timestamp: Date.now() });
+  
+  // Keep only last 10
+  prefs.recentFilters = filtered.slice(0, 10);
+  _saveFilterModalPreferences(prefs);
+}
+
+function _getRecentFilters() {
+  const prefs = _getFilterModalPreferences();
+  return (prefs.recentFilters || []).filter(f => Date.now() - f.timestamp < 7 * 24 * 60 * 60 * 1000); // 7 days
+}
+
+function _setActiveFilterTab(tabIndex) {
+  const prefs = _getFilterModalPreferences();
+  prefs.activeTab = tabIndex;
+  _saveFilterModalPreferences(prefs);
+}
+
+function _getActiveFilterTab() {
+  const prefs = _getFilterModalPreferences();
+  return prefs.activeTab || 0;
+}
+
 async function openCashflowSavedFiltersModal() {
   const current = _collectCurrentCashflowFilter();
   let rows = [];
@@ -1958,6 +2020,9 @@ async function openCashflowSavedFiltersModal() {
     if (a.is_favorite !== b.is_favorite) return b.is_favorite ? 1 : -1;
     return (b.use_count || 0) - (a.use_count || 0);
   });
+
+  // Get recent filters
+  const recentFilters = _getRecentFilters();
 
   const renderFilterRow = (r) => `
     <div class="fin-filter-row" data-filter-id="${r.id}">
@@ -1989,6 +2054,13 @@ async function openCashflowSavedFiltersModal() {
     </div>
   `;
 
+  const renderRecentRow = (r) => `
+    <div class="fin-recent-filter" data-filter-id="${r.id}">
+      <span class="fin-recent-label">🕐 ${escapeHtml(r.name)}</span>
+      <button class="fin-recent-btn" data-action="applyRecentFilter" data-id="${r.id}">Usar</button>
+    </div>
+  `;
+
   const myFiltersHtml = sortedRows.length
     ? sortedRows.map(renderFilterRow).join("")
     : '<div class="fin-filters-empty"><div class="fin-filters-empty-icon">📭</div><div>Nenhum filtro salvo</div></div>';
@@ -1996,6 +2068,10 @@ async function openCashflowSavedFiltersModal() {
   const templatesHtml = templates.length
     ? templates.map(renderTemplateRow).join("")
     : '<div class="fin-filters-empty"><div class="fin-filters-empty-icon">📋</div><div>Nenhum template disponível</div></div>';
+
+  const recentHtml = recentFilters.length
+    ? recentFilters.map(renderRecentRow).join("")
+    : '';
 
   openFinModal("🔖 Filtros & Templates", `
     <div class="fin-filter-tabs">
@@ -2014,7 +2090,27 @@ async function openCashflowSavedFiltersModal() {
         <small style="display:block;opacity:.7;margin-top:4px;">Filtro: ${escapeHtml(JSON.stringify(current).substring(0, 60))}...</small>
       </div>
       <button id="btnSaveCashflowFilter" class="fin-form-submit" type="button">💾 Salvar filtro atual</button>
-      <div class="fin-filter-list" style="margin-top:12px;">
+
+      ${recentHtml ? `
+        <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+          <div style="font-size:0.9em;font-weight:500;margin-bottom:8px;color:var(--text-secondary);">Filtros Recentes</div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            ${recentHtml}
+          </div>
+        </div>
+      ` : ''}
+
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
+        <div style="font-size:0.9em;font-weight:500;margin-bottom:8px;color:var(--text-secondary);">
+          🔍 Buscar
+        </div>
+        <input id="filterSearchInput" 
+               type="text" 
+               placeholder="Buscar filtro por nome..." 
+               style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;margin-bottom:8px;" />
+      </div>
+
+      <div class="fin-filter-list" style="margin-top:8px;">
         ${myFiltersHtml}
       </div>
     </div>
@@ -2029,7 +2125,7 @@ async function openCashflowSavedFiltersModal() {
     </div>
   `);
 
-  // Tab switching
+  // Tab switching with localStorage
   const tabMyFilters = byId("tabMyFilters");
   const tabTemplates = byId("tabTemplates");
   const myFiltersTab = byId("myFiltersTab");
@@ -2040,6 +2136,7 @@ async function openCashflowSavedFiltersModal() {
     templatesTab.style.display = "none";
     tabMyFilters.classList.add("active");
     tabTemplates.classList.remove("active");
+    _setActiveFilterTab(0);
   });
 
   tabTemplates?.addEventListener("click", () => {
@@ -2047,7 +2144,44 @@ async function openCashflowSavedFiltersModal() {
     templatesTab.style.display = "block";
     tabMyFilters.classList.remove("active");
     tabTemplates.classList.add("active");
+    _setActiveFilterTab(1);
   });
+
+  // Restore last active tab from localStorage
+  if (_getActiveFilterTab() === 1) {
+    tabTemplates?.click();
+  }
+
+  // Search functionality with debouncing
+  const searchInput = byId("filterSearchInput");
+  if (searchInput) {
+    const performSearch = (e) => {
+      const query = String(e.target.value).toLowerCase().trim();
+      const rows = byId("myFiltersTab")?.querySelectorAll(".fin-filter-row") || [];
+
+      rows.forEach((row) => {
+        const name = row.querySelector(".fin-filter-title")?.textContent || "";
+        const matches = name.toLowerCase().includes(query);
+        row.style.display = matches ? "flex" : "none";
+      });
+
+      const visibleRows = Array.from(rows).filter((r) => r.style.display !== "none");
+      const listEl = byId("myFiltersTab")?.querySelector(".fin-filter-list");
+      let emptyMsg = byId("myFiltersTab")?.querySelector(".fin-filters-empty");
+      if (!emptyMsg && listEl) {
+        emptyMsg = document.createElement("div");
+        emptyMsg.className = "fin-filters-empty";
+        emptyMsg.innerHTML = '<div class="fin-filters-empty-icon">🔍</div><div>Nenhum filtro encontrado</div>';
+        listEl.appendChild(emptyMsg);
+      }
+      if (emptyMsg) {
+        emptyMsg.style.display = visibleRows.length === 0 ? "block" : "none";
+      }
+    };
+
+    const debouncedSearch = _debounce(performSearch, 300);
+    searchInput.addEventListener("input", debouncedSearch);
+  }
 
   byId("btnSaveCashflowFilter")?.addEventListener("click", async () => {
     const name = String(byId("fmCashflowFilterName")?.value || "").trim();
@@ -2064,6 +2198,63 @@ async function openCashflowSavedFiltersModal() {
       await openCashflowSavedFiltersModal();
     } catch { showToast("Erro de rede"); }
   });
+
+  // Keyboard shortcuts for modal
+  if (FIN._cashflowModalKeyHandler) {
+    document.removeEventListener("keydown", FIN._cashflowModalKeyHandler);
+  }
+  const modalKeyHandler = async (e) => {
+    // Ctrl+S to save filter
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      const btnSave = byId("btnSaveCashflowFilter");
+      if (btnSave) btnSave.click();
+      return;
+    }
+
+    // Escape to close modal (already handled by modal system)
+    if (e.key === 'Escape') {
+      closeFinModal();
+      return;
+    }
+
+    // Delete to remove selected filter (if any)
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      const focusedRow = document.activeElement?.closest(".fin-filter-row");
+      if (focusedRow) {
+        const filterId = focusedRow.dataset.filterId;
+        if (filterId && confirm("Excluir este filtro salvo?")) {
+          const deleteBtn = focusedRow.querySelector("[data-action='deleteCashflowSavedFilter']");
+          if (deleteBtn) deleteBtn.click();
+        }
+      }
+      return;
+    }
+
+    // Enter to apply filter (if search input or filter row focused)
+    if (e.key === 'Enter') {
+      const activeEl = document.activeElement;
+      if (activeEl?.id === 'filterSearchInput') {
+        // Apply first visible filter if search is active
+        const rowEls = Array.from(byId("myFiltersTab")?.querySelectorAll(".fin-filter-row") || []);
+        const visibleRow = rowEls.find((row) => row.style.display !== "none");
+        if (visibleRow) {
+          const useBtn = visibleRow.querySelector("[data-action='applyCashflowSavedFilter']");
+          if (useBtn) useBtn.click();
+        }
+        return;
+      }
+      const focusedRow = activeEl?.closest(".fin-filter-row, .fin-recent-filter");
+      if (focusedRow) {
+        const useBtn = focusedRow.querySelector("[data-action], button:not(.delete)");
+        if (useBtn) useBtn.click();
+      }
+    }
+  };
+
+  FIN._cashflowModalKeyHandler = modalKeyHandler;
+  document.addEventListener("keydown", modalKeyHandler);
 
   const modal = document.querySelector("#finModalBody");
   modal?.addEventListener("click", async (e) => {
@@ -2091,6 +2282,24 @@ async function openCashflowSavedFiltersModal() {
         await finFetch(`/api/finance/cashflow/saved-filters/${id}/apply`, {
           method: "POST",
         });
+        _addToRecentFilters(item.id, item.name);
+      } catch { /* ignore usage tracking error */ }
+      _applyCashflowFilter(item.filter || {});
+      closeFinModal();
+      await refreshByDomains(["cashflow"]);
+      showToast("Filtro aplicado", "success");
+      return;
+    }
+
+    if (btn.dataset.action === "applyRecentFilter") {
+      // Find filter by id in rows
+      const item = (rows || []).find((x) => Number(x.id) === id);
+      if (!item) return;
+      try {
+        await finFetch(`/api/finance/cashflow/saved-filters/${id}/apply`, {
+          method: "POST",
+        });
+        _addToRecentFilters(item.id, item.name);
       } catch { /* ignore usage tracking error */ }
       _applyCashflowFilter(item.filter || {});
       closeFinModal();

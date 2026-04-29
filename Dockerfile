@@ -17,6 +17,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# System OCR runtime dependencies (required by pytesseract)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-por \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy only installed packages from builder
 COPY --from=builder /install /usr/local
 

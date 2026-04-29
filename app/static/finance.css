@@ -2950,6 +2950,66 @@ body.light .fin-shortcut-row kbd {
   opacity: 0.4;
 }
 
+.fin-recent-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2, rgba(99, 102, 241, 0.08));
+  border: 1px solid var(--border, rgba(99, 102, 241, 0.2));
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.fin-recent-filter:hover {
+  background: var(--surface-3, rgba(99, 102, 241, 0.12));
+  border-color: var(--accent, rgba(99, 102, 241, 0.4));
+}
+
+.fin-recent-label {
+  font-size: 0.9em;
+  color: var(--text, #e2e8f0);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fin-recent-btn {
+  padding: 4px 10px;
+  background: var(--accent, #6366f1);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+
+.fin-recent-btn:hover {
+  background: var(--accent-bright, #818cf8);
+  transform: translateY(-1px);
+}
+
+#filterSearchInput {
+  background: var(--surface, #1e293b) !important;
+  color: var(--text, #e2e8f0) !important;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.2)) !important;
+}
+
+#filterSearchInput::placeholder {
+  color: var(--text-s, #94a3b8) !important;
+  opacity: 0.6;
+}
+
+#filterSearchInput:focus {
+  outline: none;
+  border-color: var(--accent, #6366f1) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+}
+
 /* ── Light theme overrides ──────────────────────────── */
 body.light .fin-filter-tabs {
   background: rgba(0, 0, 0, 0.03);
