@@ -2772,7 +2772,6 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         base = ImageOps.exif_transpose(img).convert("L")
         enlarged = base.resize((max(1, base.width * 2), max(1, base.height * 2)))
         sharpened = ImageOps.autocontrast(enlarged).filter(ImageFilter.SHARPEN)
-        thresholded = sharpened.point(lambda px: 255 if px > 170 else 0)
 
         def _is_good_enough(text: str) -> bool:
             return (
@@ -2780,36 +2779,21 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 and (_extract_receipt_date(text) is not None or _extract_receipt_merchant(text) != "")
             )
 
-        # Fast path first: lowest latency configurations that work for most receipts.
-        fast_variants = (enlarged, sharpened)
-        fast_configs = ("--oem 3 --psm 6",)
+        # Strategy: try variants in order of effectiveness and stop as soon as one is good.
+        # Maximum 3 Tesseract calls total to keep latency low.
+        best_config = "--oem 3 --psm 6"
         candidates: list[str] = []
 
-        for variant in fast_variants:
-            for config in fast_configs:
-                try:
-                    text = pytesseract.image_to_string(variant, lang="por+eng", config=config)
-                except Exception:
-                    continue
-                normalized = _normalize_ocr_text(text)
-                if normalized:
-                    candidates.append(normalized)
-                    if _is_good_enough(normalized):
-                        return normalized
-
-        # Quality fallback only when fast path is insufficient.
-        configs = ("--oem 3 --psm 6", "--oem 3 --psm 11", "--oem 3 --psm 4")
-        variants = (base, enlarged, sharpened, thresholded)
-
-        for variant in variants:
-            for config in configs:
-                try:
-                    text = pytesseract.image_to_string(variant, lang="por+eng", config=config)
-                except Exception:
-                    continue
-                normalized = _normalize_ocr_text(text)
-                if normalized:
-                    candidates.append(normalized)
+        for variant in (sharpened, enlarged, base):
+            try:
+                text = pytesseract.image_to_string(variant, lang="por+eng", config=best_config)
+            except Exception:
+                continue
+            normalized = _normalize_ocr_text(text)
+            if normalized:
+                candidates.append(normalized)
+                if _is_good_enough(normalized):
+                    return normalized
 
         return max(candidates, key=_score_ocr_candidate) if candidates else ""
 
