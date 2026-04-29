@@ -986,8 +986,10 @@ function openReceiptOCRModal() {
     const formData = new FormData();
     if (fileEl?.files?.length) formData.append("file", fileEl.files[0]);
     if (manualText) formData.append("manual_text", manualText);
+    const _ocrAbort = new AbortController();
+    const _ocrTimer = setTimeout(() => _ocrAbort.abort(), 45_000);
     try {
-      const resp = await finFetch("/api/finance/cashflow/ocr", { method: "POST", body: formData });
+      const resp = await finFetch("/api/finance/cashflow/ocr", { method: "POST", body: formData, signal: _ocrAbort.signal });
       const data = await resp.json();
       const resultEl = byId("fmOcrResult");
       if (!resp.ok || !data.ok) {
@@ -1019,8 +1021,14 @@ function openReceiptOCRModal() {
           entry_type: data.entry_type || "expense",
         });
       });
-    } catch { showToast("Erro de rede"); }
-    finally {
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        showToast("Análise demorou demais (>45s). Tente uma imagem menor ou use o texto manual.");
+      } else {
+        showToast("Erro de rede");
+      }
+    } finally {
+      clearTimeout(_ocrTimer);
       if (btnDoOcr) { btnDoOcr.disabled = false; btnDoOcr.textContent = "🔍 Analisar"; }
     }
   });

@@ -2770,8 +2770,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         img.load()
 
         base = ImageOps.exif_transpose(img).convert("L")
-        enlarged = base.resize((max(1, base.width * 2), max(1, base.height * 2)))
-        sharpened = ImageOps.autocontrast(enlarged).filter(ImageFilter.SHARPEN)
+
+        # Cap resolution to max 1800px on the longest side to keep Tesseract fast.
+        _MAX_DIM = 1800
+        w, h = base.size
+        if max(w, h) < _MAX_DIM // 2:
+            # Small image: upscale 2x so characters are legible
+            base = base.resize((w * 2, h * 2), Image.LANCZOS)
+        elif max(w, h) > _MAX_DIM:
+            scale = _MAX_DIM / max(w, h)
+            base = base.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        sharpened = ImageOps.autocontrast(base).filter(ImageFilter.SHARPEN)
+        enlarged = base  # alias kept for the loop below
 
         def _is_good_enough(text: str) -> bool:
             return (
