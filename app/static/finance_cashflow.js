@@ -1125,6 +1125,14 @@ function openCashflowImportModal() {
       <label>Arquivo (.csv ou .ofx)</label>
       <input id="fmImportFile" type="file" accept=".csv,.ofx,.qfx" />
     </div>
+    <label class="fin-form-group" style="display:flex;gap:8px;align-items:center;">
+      <input id="fmImportMergeNotes" type="checkbox" />
+      <span>Mesclar duplicatas anexando descrição em notas</span>
+    </label>
+    <label class="fin-form-group" style="display:flex;gap:8px;align-items:center;">
+      <input id="fmImportAsync" type="checkbox" checked />
+      <span>Processar em background para arquivos grandes</span>
+    </label>
     <div id="fmImportPreview" style="margin:8px 0 10px 0;"></div>
     <button id="btnDoImport" class="fin-form-submit" type="button">📥 Importar</button>
     <div id="fmImportResult" style="margin-top:12px"></div>
@@ -1157,6 +1165,8 @@ function openCashflowImportModal() {
   byId("btnDoImport")?.addEventListener("click", async () => {
     const importMonth = String(byId("fmImportMonth")?.value || "").trim();
     const fileEl = byId("fmImportFile");
+    const mergeNotes = byId("fmImportMergeNotes")?.checked === true;
+    const asyncMode = byId("fmImportAsync")?.checked === true;
     if (!fileEl?.files?.length) {
       showToast("Selecione um arquivo");
       return;
@@ -1164,12 +1174,24 @@ function openCashflowImportModal() {
     const formData = new FormData();
     formData.append("file", fileEl.files[0]);
     try {
-      const resp = await finFetch(`/api/finance/cashflow/import?month=${encodeURIComponent(importMonth)}`, {
+      const query = new URLSearchParams({
+        month: importMonth,
+        merge_strategy: mergeNotes ? "append_notes" : "suggest",
+        async: asyncMode ? "1" : "0",
+      });
+      const resp = await finFetch(`/api/finance/cashflow/import?${query.toString()}`, {
         method: "POST",
         body: formData,
       });
       const data = await resp.json();
       const resultEl = byId("fmImportResult");
+      if (resp.status === 202 && data.async && data.job_id) {
+        if (resultEl) {
+          resultEl.innerHTML = `<span class="fin-warn">Importação em processamento...</span>`;
+        }
+        await _pollCashflowImportJob(data.job_id, resultEl);
+        return;
+      }
       if (!resp.ok) {
         if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Erro")}</span>`;
         return;
@@ -1181,23 +1203,75 @@ function openCashflowImportModal() {
         const dupHtml = data.potential_duplicates?.length
           ? `<div style="margin-top:8px;border-left:3px solid #f59e0b;padding:6px 10px;font-size:.82em;opacity:.9;">
               <strong>⚠ ${data.potential_duplicates.length} ignorado(s) como possíveis duplicatas.</strong>
-              <br>Estes lançamentos já existem com data ±3 dias e mesmo valor. Use <code>?force=1</code> na URL para forçar importação.
+              <br>Detectadas por data, valor e similaridade da descrição.
               <ul style="margin:4px 0 0 16px;">${data.potential_duplicates.map((p) =>
-                `<li>${escapeHtml(p.candidate.entry_date)} • R$ ${Number(p.candidate.amount).toFixed(2)} • ${escapeHtml(p.candidate.description || "")}</li>`
+                `<li>${escapeHtml(p.candidate.entry_date)} • R$ ${Number(p.candidate.amount).toFixed(2)} • ${escapeHtml(p.candidate.description || "")} (${escapeHtml(p.matched?.confidence || "")})</li>`
               ).join("")}</ul>
             </div>`
           : "";
         resultEl.innerHTML = `
           <span class="fin-up">✓ ${data.imported} lançamento(s) importado(s).</span>
+          ${Number(data.merged || 0) > 0 ? `<br><span class="fin-up">↺ ${Number(data.merged)} duplicata(s) mesclada(s) em notas.</span>` : ""}
           ${dupHtml}
           ${data.errors?.length ? `<span class="fin-down"> ${data.errors.length} erro(s):</span>${errHtml}` : ""}
         `;
       }
-      if (data.imported > 0) await refreshByDomains(["cashflow"]);
+      if (Number(data.imported || 0) > 0 || Number(data.merged || 0) > 0) await refreshByDomains(["cashflow"]);
     } catch {
       showToast("Erro de rede");
     }
   });
+}
+
+async function _pollCashflowImportJob(jobId, resultEl) {
+  let attempts = 0;
+  while (attempts < 120) {
+    attempts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      const resp = await finFetch(`/api/finance/cashflow/import/jobs/${encodeURIComponent(jobId)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Erro ao consultar job")}</span>`;
+        return;
+      }
+      const status = String(data.status || "");
+      if (status === "queued" || status === "running") {
+        if (resultEl) resultEl.innerHTML = `<span class="fin-warn">Processando importação... (${status})</span>`;
+        continue;
+      }
+      if (status === "failed") {
+        if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(data.error || "Falha no processamento")}</span>`;
+        return;
+      }
+      const result = data.result || {};
+      const errors = Array.isArray(result.errors) ? result.errors : [];
+      const duplicates = Array.isArray(result.potential_duplicates) ? result.potential_duplicates : [];
+      const errHtml = errors.length
+        ? `<ul>${errors.map((it) => `<li>Linha ${it.row || it.transaction || "?"}: ${escapeHtml(it.error || "erro")}</li>`).join("")}</ul>`
+        : "";
+      const dupHtml = duplicates.length
+        ? `<div style="margin-top:8px;border-left:3px solid #f59e0b;padding:6px 10px;font-size:.82em;opacity:.9;"><strong>⚠ ${duplicates.length} possível(is) duplicata(s).</strong></div>`
+        : "";
+      if (resultEl) {
+        resultEl.innerHTML = `
+          <span class="fin-up">✓ ${Number(result.imported || 0)} lançamento(s) importado(s).</span>
+          ${Number(result.merged || 0) > 0 ? `<br><span class="fin-up">↺ ${Number(result.merged)} duplicata(s) mesclada(s).</span>` : ""}
+          ${dupHtml}
+          ${errors.length ? `<span class="fin-down"> ${errors.length} erro(s):</span>${errHtml}` : ""}
+        `;
+      }
+      if (Number(result.imported || 0) > 0 || Number(result.merged || 0) > 0) {
+        await refreshByDomains(["cashflow"]);
+      }
+      return;
+    } catch {
+      // keep polling on transient errors
+    }
+  }
+  if (resultEl) {
+    resultEl.innerHTML = '<span class="fin-down">Tempo limite ao aguardar importação assíncrona.</span>';
+  }
 }
 
 function _parseCsvLine(line, sep) {
@@ -1325,17 +1399,68 @@ async function runCashflowAutoReconcile() {
     const resp = await finFetch("/api/finance/cashflow/reconcile-auto", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ month, min_score: 60, apply: true }),
+      body: JSON.stringify({ month, min_score: 60, apply: false }),
     });
     const data = await resp.json();
     if (!resp.ok) {
       showToast(data.error || "Erro ao conciliar automaticamente");
       return;
     }
-    const updated = Number(data.updated || 0);
-    const total = Number(data.candidates || 0);
-    showToast(`Conciliação automática: ${updated}/${total} lançamento(s) atualizado(s).`, "success");
-    if (updated > 0) await refreshByDomains(["cashflow"]);
+
+    const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+    if (!suggestions.length) {
+      showToast("Nenhum lançamento elegível para conciliação.", "info");
+      return;
+    }
+
+    const rows = suggestions.slice(0, 50).map((s) => `
+      <tr>
+        <td><input type="checkbox" data-reconcile-id="${Number(s.id || 0)}" checked /></td>
+        <td>${escapeHtml(String(s.entry_date || ""))}</td>
+        <td>${formatBRL(Number(s.amount || 0))}</td>
+        <td>${escapeHtml(String(s.category || ""))}</td>
+        <td>${escapeHtml(String(s.description || ""))}</td>
+        <td>${formatNumber(Number(s.score || 0), 1)}</td>
+      </tr>
+    `).join("");
+
+    openFinModal("🤖 Revisar Auto-Conciliação", `
+      <div style="margin-bottom:8px;opacity:.85;">Revise os lançamentos sugeridos antes de confirmar.</div>
+      <div class="fin-table-wrap" style="max-height:320px;overflow:auto;">
+        <table class="fin-table">
+          <thead><tr><th></th><th>Data</th><th>Valor</th><th>Categoria</th><th>Descrição</th><th>Score</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <button id="btnConfirmReconcile" class="fin-form-submit" type="button" style="margin-top:10px;">✅ Confirmar conciliação</button>
+    `);
+
+    byId("btnConfirmReconcile")?.addEventListener("click", async () => {
+      const checked = [...document.querySelectorAll("[data-reconcile-id]:checked")]
+        .map((el) => Number(el.getAttribute("data-reconcile-id") || 0))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (!checked.length) {
+        showToast("Selecione ao menos um lançamento");
+        return;
+      }
+      try {
+        const confirmResp = await finFetch("/api/finance/cashflow/reconcile-auto/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ review_id: data.review_id, ids: checked }),
+        });
+        const confirmData = await confirmResp.json();
+        if (!confirmResp.ok) {
+          showToast(confirmData.error || "Erro ao confirmar conciliação");
+          return;
+        }
+        closeFinModal();
+        showToast(`Conciliação concluída: ${Number(confirmData.updated || 0)} item(ns) atualizado(s).`, "success");
+        if (Number(confirmData.updated || 0) > 0) await refreshByDomains(["cashflow"]);
+      } catch {
+        showToast("Erro de rede");
+      }
+    });
   } catch {
     showToast("Erro de rede");
   }
@@ -1358,6 +1483,39 @@ async function loadCashflowBudgetAlerts() {
     if (resp.ok) {
       const data = await resp.json();
       renderCashflowBudgetAlerts(data.alerts || []);
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+function renderCashflowDataQuality(payload) {
+  const el = byId("finCashflowDataQuality");
+  if (!el) return;
+  const data = payload || {};
+  const issues = Array.isArray(data.issues) ? data.issues.filter((i) => Number(i.count || 0) > 0) : [];
+  if (!issues.length) {
+    el.innerHTML = '<div class="fin-cashflow-chip"><span>Qualidade dos dados</span><strong class="fin-up">Sem alertas no mês</strong></div>';
+    return;
+  }
+  const issueHtml = issues.slice(0, 4).map((issue) => {
+    const cls = issue.severity === "high" ? "fin-down" : "fin-warn";
+    return `<div class="fin-cashflow-chip"><span>${escapeHtml(String(issue.label || issue.code || "Alerta"))}</span><strong class="${cls}">${Number(issue.count || 0)}</strong></div>`;
+  }).join("");
+  el.innerHTML = `
+    <div class="fin-cashflow-kpis">
+      <div class="fin-cashflow-kpi"><span>Qualidade</span><strong>${formatNumber(Number(data.score || 0), 0)}/100</strong></div>
+      ${issueHtml}
+    </div>
+  `;
+}
+
+async function loadCashflowDataQuality() {
+  const month = getSelectedCashflowMonth();
+  try {
+    const resp = await fetch(`/api/finance/cashflow/data-quality?month=${encodeURIComponent(month)}`);
+    if (resp.ok) {
+      renderCashflowDataQuality(await resp.json());
     }
   } catch {
     // non-critical

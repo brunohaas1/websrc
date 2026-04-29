@@ -779,6 +779,7 @@ async function loadAll(options = {}) {
       syncCashflowMonthFilter(FIN.cashflowSummary);
       loadCashflowKpis();
       loadCashflowBudgetAlerts();
+      loadCashflowDataQuality();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();
@@ -1063,6 +1064,7 @@ async function refreshCashflowPanel() {
   renderCashflowBudgetStatus(FIN.cashflowAnalytics);
   loadCashflowKpis();
   loadCashflowBudgetAlerts();
+  loadCashflowDataQuality();
   syncCashflowMonthFilter(FIN.cashflowSummary);
   updateLastUpdated();
 }

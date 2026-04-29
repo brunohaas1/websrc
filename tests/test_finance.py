@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import time
 import pytest
 
 
@@ -1392,6 +1393,135 @@ class TestCashflowNewFeatures:
         data = resp.get_json()
         assert data["imported"] == 0
         assert len(data.get("potential_duplicates") or []) == 1
+
+    def test_reconcile_auto_review_and_confirm(self, client):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        pending = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 120,
+            "category": "Internet",
+            "description": "boleto internet",
+            "entry_date": today,
+            "payment_status": "pending",
+        })
+        assert pending.status_code == 201
+        entry_id = pending.get_json()["id"]
+
+        review = client.post(
+            "/api/finance/cashflow/reconcile-auto",
+            json={"month": today[:7], "apply": False, "min_score": 40},
+        )
+        assert review.status_code == 200
+        review_data = review.get_json()
+        assert review_data.get("review_mode") is True
+        assert review_data.get("review_id")
+
+        suggestion_ids = [int(s.get("id") or 0) for s in (review_data.get("suggestions") or [])]
+        assert entry_id in suggestion_ids
+
+        confirm = client.post(
+            "/api/finance/cashflow/reconcile-auto/confirm",
+            json={"review_id": review_data["review_id"], "ids": [entry_id]},
+        )
+        assert confirm.status_code == 200
+        assert int(confirm.get_json().get("updated") or 0) >= 1
+
+        paid_only = client.get(f"/api/finance/cashflow?month={today[:7]}&status=paid")
+        assert paid_only.status_code == 200
+        paid_rows = paid_only.get_json()
+        assert any(int(r.get("id") or 0) == entry_id for r in paid_rows)
+
+    def test_csv_import_merge_strategy_append_notes(self, client):
+        existing = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "Importado",
+            "description": "Supermercado Central",
+            "entry_date": "2026-04-10",
+            "notes": "original",
+        })
+        assert existing.status_code == 201
+        entry_id = existing.get_json()["id"]
+
+        csv_content = (
+            "date,amount,type,category,description\n"
+            "2026-04-11,100.00,expense,Importado,Supermercado Central\n"
+        )
+        from io import BytesIO
+
+        resp = client.post(
+            "/api/finance/cashflow/import?month=2026-04&merge_strategy=append_notes",
+            data={"file": (BytesIO(csv_content.encode()), "import.csv")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert int(data.get("imported") or 0) == 0
+        assert int(data.get("merged") or 0) >= 1
+
+        rows = client.get("/api/finance/cashflow?month=2026-04").get_json()
+        found = [r for r in rows if int(r.get("id") or 0) == entry_id]
+        assert found
+        assert "Import dedupe" in str(found[0].get("notes") or "")
+
+    def test_cashflow_import_async_job_status(self, client):
+        csv_content = (
+            "date,amount,type,category,description\n"
+            "2026-04-10,90.00,expense,Teste,Conta 1\n"
+            "2026-04-11,95.00,expense,Teste,Conta 2\n"
+        )
+        from io import BytesIO
+
+        queued = client.post(
+            "/api/finance/cashflow/import?month=2026-04&async=1",
+            data={"file": (BytesIO(csv_content.encode()), "async.csv")},
+            content_type="multipart/form-data",
+        )
+        assert queued.status_code == 202
+        qd = queued.get_json()
+        job_id = str(qd.get("job_id") or "")
+        assert job_id
+
+        final = None
+        for _ in range(30):
+            st = client.get(f"/api/finance/cashflow/import/jobs/{job_id}")
+            assert st.status_code == 200
+            payload = st.get_json()
+            if payload.get("status") in ("done", "failed"):
+                final = payload
+                break
+            time.sleep(0.1)
+
+        assert final is not None
+        assert final.get("status") == "done"
+        assert int((final.get("result") or {}).get("imported") or 0) >= 1
+
+    def test_cashflow_data_quality_endpoint(self, client):
+        month = "2026-04"
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "",
+            "description": "",
+            "entry_date": "2026-04-12",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 100,
+            "category": "",
+            "description": "",
+            "entry_date": "2026-04-12",
+        })
+
+        resp = client.get(f"/api/finance/cashflow/data-quality?month={month}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("month") == month
+        assert "score" in data
+        issues = data.get("issues") or []
+        codes = {str(i.get("code") or "") for i in issues}
+        assert "missing_category" in codes
+        assert "duplicates" in codes
 
     def test_cashflow_ocr_missing_dependency_returns_graceful_error(self, client, monkeypatch):
         import builtins
