@@ -2290,6 +2290,12 @@ body.light .fin-alloc-total {
   font-weight: 700;
 }
 
+.fin-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .fin-page-info {
   font-size: 0.8rem;
   color: var(--text-s, #94a3b8);

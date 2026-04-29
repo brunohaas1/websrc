@@ -514,8 +514,23 @@ function maybeAutoOpenQuickTour() {
 }
 
 function renderEmptyState(message, ctaLabel, ctaAction) {
-  const buttonHtml = ctaLabel && ctaAction
-    ? `<button class="btn-text fin-empty-cta" type="button" data-empty-action="${escapeHtml(ctaAction)}">${escapeHtml(ctaLabel)}</button>`
+  const actions = [];
+  if (Array.isArray(ctaAction) && ctaAction.length) {
+    ctaAction.forEach((item) => {
+      if (!item || !item.action || !item.label) return;
+      actions.push({
+        action: String(item.action),
+        label: String(item.label),
+      });
+    });
+  } else if (ctaLabel && ctaAction) {
+    actions.push({ action: String(ctaAction), label: String(ctaLabel) });
+  }
+
+  const buttonHtml = actions.length
+    ? `<div class="fin-empty-actions">${actions
+      .map((item) => `<button class="btn-text fin-empty-cta" type="button" data-empty-action="${escapeHtml(item.action)}">${escapeHtml(item.label)}</button>`)
+      .join("")}</div>`
     : "";
   return `
     <div class="fin-empty-block">
@@ -530,6 +545,8 @@ function runEmptyStateAction(action) {
     addAsset: openAddAssetModal,
     addTransaction: openAddTransactionModal,
     addCashflow: openAddCashflowModal,
+    openCashflowImport: openCashflowImportModal,
+    openCashflowBudget: openCashflowBudgetModal,
     addDividend: openAddDividendModal,
     addWatchlist: openAddWatchlistModal,
     addGoal: openAddGoalModal,

@@ -26,3 +26,6 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short --ignore=tests/e2e
+
+      - name: Finance pre-deploy smoke
+        run: python scripts/predeploy_finance_smoke.py

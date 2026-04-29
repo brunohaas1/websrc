@@ -384,8 +384,12 @@ function renderCashflow(entries) {
   if (!rows.length) {
     el.innerHTML = renderEmptyState(
       "Nenhum lançamento no Gestor Financeiro para este mês.",
-      "Adicionar lançamento",
-      "addCashflow",
+      "",
+      [
+        { label: "Adicionar lançamento", action: "addCashflow" },
+        { label: "Importar extrato", action: "openCashflowImport" },
+        { label: "Configurar orçamento", action: "openCashflowBudget" },
+      ],
     );
     return;
   }
