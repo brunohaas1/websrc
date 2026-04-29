@@ -2886,8 +2886,66 @@ class Repository:
         query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
 
+        fallback_query = (
+            "SELECT e.*, "
+            "CASE WHEN e.entry_type = 'income' THEN 'paid' ELSE 'pending' END AS payment_status, "
+            "NULL AS settled_at, "
+            "NULL AS reconciled_at "
+            "FROM fin_cashflow_entries e "
+            "WHERE 1=1"
+        )
+        fallback_params: list[Any] = []
+
+        if month:
+            fallback_query += " AND substr(e.entry_date, 1, 7) = ?"
+            fallback_params.append(month)
+
+        if entry_type:
+            fallback_query += " AND e.entry_type = ?"
+            fallback_params.append(entry_type)
+
+        if payment_status:
+            fallback_query += " AND (CASE WHEN e.entry_type = 'income' THEN 'paid' ELSE 'pending' END) = ?"
+            fallback_params.append(payment_status)
+
+        if cost_center:
+            fallback_query += " AND LOWER(COALESCE(e.cost_center, '')) = LOWER(?)"
+            fallback_params.append(cost_center)
+
+        if subcategory:
+            fallback_query += " AND LOWER(COALESCE(e.subcategory, '')) = LOWER(?)"
+            fallback_params.append(subcategory)
+
+        if tag:
+            fallback_query += " AND LOWER(COALESCE(e.tags_json, '')) LIKE ?"
+            fallback_params.append(f'%"{str(tag or '').lower()}"%')
+
+        if q:
+            fallback_query += (
+                " AND ("
+                "LOWER(COALESCE(e.category, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.subcategory, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.cost_center, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.description, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.notes, '')) LIKE ? "
+                "OR LOWER(COALESCE(e.tags_json, '')) LIKE ?"
+                ")"
+            )
+            q_like = f"%{str(q).lower()}%"
+            fallback_params.extend([q_like, q_like, q_like, q_like, q_like, q_like])
+
+        fallback_query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
+        fallback_params.append(max(1, int(limit)))
+
         with get_connection(self.database_target) as conn:
-            rows = conn.execute(self._sql(query), tuple(params)).fetchall()
+            try:
+                rows = conn.execute(self._sql(query), tuple(params)).fetchall()
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "cashflow list fallback to base query without reconcile join: %s",
+                    exc,
+                )
+                rows = conn.execute(self._sql(fallback_query), tuple(fallback_params)).fetchall()
             out: list[dict[str, Any]] = []
             for row in rows:
                 rec = dict(row)
