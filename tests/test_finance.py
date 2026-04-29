@@ -1617,6 +1617,51 @@ class TestCashflowNewFeatures:
         assert data.get("entry_type") == "income"
         assert data.get("amount") == 5432.10
 
+    def test_cashflow_ocr_reuses_cache_for_same_image(self, client, monkeypatch):
+        from io import BytesIO
+
+        try:
+            import PIL.Image as PILImage
+        except Exception:
+            pytest.skip("Pillow not available in local environment")
+
+        # Create a tiny valid image payload to exercise OCR path without external files.
+        img = PILImage.new("RGB", (80, 40), color=(255, 255, 255))
+        buff = BytesIO()
+        img.save(buff, format="PNG")
+        payload = buff.getvalue()
+
+        import pytesseract
+
+        call_count = {"n": 0}
+        original_ocr = pytesseract.image_to_string
+
+        def _counting_ocr(*args, **kwargs):
+            call_count["n"] += 1
+            return original_ocr(*args, **kwargs)
+
+        monkeypatch.setattr(pytesseract, "image_to_string", _counting_ocr)
+
+        resp1 = client.post(
+            "/api/finance/cashflow/ocr",
+            data={"file": (BytesIO(payload), "cache-test.png")},
+            content_type="multipart/form-data",
+        )
+        assert resp1.status_code == 200
+
+        first_calls = call_count["n"]
+        assert first_calls > 0
+
+        resp2 = client.post(
+            "/api/finance/cashflow/ocr",
+            data={"file": (BytesIO(payload), "cache-test.png")},
+            content_type="multipart/form-data",
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.get_json()
+        assert data2.get("from_cache") is True
+        assert call_count["n"] == first_calls
+
     def test_cashflow_month_plan_returns_weeks_and_projection(self, client):
         jpost(client, "/api/finance/cashflow", {
             "entry_type": "income",

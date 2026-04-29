@@ -153,6 +153,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     _cashflow_import_jobs: dict[str, dict] = {}
     _cashflow_import_jobs_lock = Lock()
     _cashflow_import_executor = ThreadPoolExecutor(max_workers=2)
+    _ocr_cache: dict[str, dict] = {}
+    _ocr_cache_lock = Lock()
+    OCR_CACHE_TTL_SECONDS = 10 * 60
 
     def _cleanup_cashflow_review_cache() -> None:
         now_ts = time.time()
@@ -173,6 +176,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             ]
             for key in expired:
                 _cashflow_import_jobs.pop(key, None)
+
+    def _cleanup_ocr_cache() -> None:
+        now_ts = time.time()
+        with _ocr_cache_lock:
+            expired = [
+                key for key, row in _ocr_cache.items()
+                if now_ts - float(row.get("created_ts") or 0.0) > OCR_CACHE_TTL_SECONDS
+            ]
+            for key in expired:
+                _ocr_cache.pop(key, None)
 
     def _build_reconcile_suggestions(
         month: str | None,
@@ -2761,9 +2774,32 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         sharpened = ImageOps.autocontrast(enlarged).filter(ImageFilter.SHARPEN)
         thresholded = sharpened.point(lambda px: 255 if px > 170 else 0)
 
+        def _is_good_enough(text: str) -> bool:
+            return (
+                _extract_receipt_amount(text) is not None
+                and (_extract_receipt_date(text) is not None or _extract_receipt_merchant(text) != "")
+            )
+
+        # Fast path first: lowest latency configurations that work for most receipts.
+        fast_variants = (enlarged, sharpened)
+        fast_configs = ("--oem 3 --psm 6",)
+        candidates: list[str] = []
+
+        for variant in fast_variants:
+            for config in fast_configs:
+                try:
+                    text = pytesseract.image_to_string(variant, lang="por+eng", config=config)
+                except Exception:
+                    continue
+                normalized = _normalize_ocr_text(text)
+                if normalized:
+                    candidates.append(normalized)
+                    if _is_good_enough(normalized):
+                        return normalized
+
+        # Quality fallback only when fast path is insufficient.
         configs = ("--oem 3 --psm 6", "--oem 3 --psm 11", "--oem 3 --psm 4")
         variants = (base, enlarged, sharpened, thresholded)
-        candidates: list[str] = []
 
         for variant in variants:
             for config in configs:
@@ -2788,10 +2824,23 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"ok": False, "error": "Envie arquivo no campo 'file' ou texto em 'manual_text'"}), 400
 
         raw_bytes = b""
+        cache_key = ""
         if f:
             raw_bytes = f.read(5 * 1024 * 1024)  # max 5 MB
             if len(raw_bytes) < 100 and not manual_text:
                 return jsonify({"ok": False, "error": "Arquivo muito pequeno ou vazio"}), 400
+            cache_key = hashlib.sha256(raw_bytes).hexdigest()
+
+        # Hot-path cache: repeated retries of the same receipt return immediately.
+        if cache_key:
+            _cleanup_ocr_cache()
+            with _ocr_cache_lock:
+                cached_row = _ocr_cache.get(cache_key)
+            if cached_row:
+                return jsonify({
+                    **cached_row.get("payload", {}),
+                    "from_cache": True,
+                })
 
         try:
             import pytesseract  # noqa: PLC0415
@@ -2868,7 +2917,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if category:
             confidence += 0.1
 
-        return jsonify({
+        payload = {
             "ok": True,
             "date": entry_date,
             "amount": amount,
@@ -2879,7 +2928,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "confidence": round(min(0.99, confidence), 2),
             "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
-        })
+        }
+
+        if cache_key:
+            with _ocr_cache_lock:
+                _ocr_cache[cache_key] = {
+                    "created_ts": time.time(),
+                    "payload": payload,
+                }
+
+        return jsonify(payload)
 
     @app.get("/api/finance/cashflow/<int:entry_id>/attachments")
     @limiter.limit("30/minute")
