@@ -181,6 +181,7 @@ document.addEventListener("DOMContentLoaded", () => {
     deleteCashflowEntry,
     deleteCashflowAttachment,
     toggleCashflowStatus,
+    openSplitCashflowModal,
     deleteWatchlistItem,
     deleteGoal,
     openEditGoalModal,
@@ -208,6 +209,9 @@ document.addEventListener("DOMContentLoaded", () => {
     submitEditTransaction,
     submitEditWatchlist,
     submitBatchEditTransactions,
+    submitInstallments,
+    submitAddCreditCard,
+    submitSplitCashflow,
   };
   document.addEventListener("submit", (e) => {
     const fa = e.target.dataset.formAction;
@@ -220,6 +224,10 @@ document.addEventListener("DOMContentLoaded", () => {
   initGlobalSearch();
   loadCashflowCategories();
   bind("btnCashflowExportCsv", exportCashflowCsv);
+  bind("btnInstallments", openInstallmentsModal);
+  bind("btnSavingsGoals", openSavingsGoalsModal);
+  bind("btnCreditCards", openCreditCardsModal);
+  bind("btnMonthlyComparison", openMonthlyComparisonModal);
 });
 
 function initAutoRefresh() {

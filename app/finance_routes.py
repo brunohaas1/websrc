@@ -1510,7 +1510,314 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
     # ── Cashflow (gains / expenses) ────────────────────────
 
-    def _build_simple_pdf(lines: list[str]) -> bytes:
+    # ── Goals deposit ──────────────────────────────────────
+
+    @app.post("/api/finance/goals/<int:goal_id>/deposit")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_goal_deposit(goal_id: int):
+        goal = repo.get_fin_goal(goal_id)
+        if not goal:
+            return jsonify({"error": "Meta não encontrada"}), 404
+        body = request.get_json(silent=True) or {}
+        try:
+            amount = float(body.get("amount", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "amount inválido"}), 400
+        if not _is_finite_number(amount):
+            return jsonify({"error": "amount inválido"}), 400
+        current = float(goal.get("current_amount") or 0)
+        new_current = max(0.0, current + amount)
+        repo.update_fin_goal(goal_id, {"current_amount": round(new_current, 2)})
+        _invalidate_cache_prefixes("finance:audit:")
+        return jsonify({
+            "ok": True,
+            "id": goal_id,
+            "current_amount": round(new_current, 2),
+            "target_amount": round(float(goal.get("target_amount") or 0), 2),
+        })
+
+    # ── Credit Cards ───────────────────────────────────────
+
+    @app.get("/api/finance/credit-cards")
+    @limiter.limit("30/minute")
+    def finance_list_credit_cards():
+        return jsonify(repo.list_fin_credit_cards())
+
+    @app.post("/api/finance/credit-cards")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_add_credit_card():
+        body = request.get_json(silent=True) or {}
+        name = sanitize_text(str(body.get("name", "")), 80).strip()
+        if not name:
+            return jsonify({"error": "name obrigatório"}), 400
+        try:
+            limit_amount = float(body.get("limit_amount", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "limit_amount inválido"}), 400
+        if not _is_finite_number(limit_amount) or limit_amount < 0:
+            return jsonify({"error": "limit_amount inválido"}), 400
+        try:
+            closing_day = int(body.get("closing_day", 1))
+            due_day = int(body.get("due_day", 10))
+        except (TypeError, ValueError):
+            return jsonify({"error": "closing_day/due_day inválido"}), 400
+        closing_day = max(1, min(31, closing_day))
+        due_day = max(1, min(31, due_day))
+        data = {
+            "name": name,
+            "limit_amount": round(limit_amount, 2),
+            "closing_day": closing_day,
+            "due_day": due_day,
+            "notes": sanitize_text(str(body.get("notes", "")), 300),
+        }
+        card_id = repo.add_fin_credit_card(data)
+        _audit("add", "credit_card", card_id, {"after": {**data, "id": card_id}})
+        return jsonify({"ok": True, "id": card_id}), 201
+
+    @app.put("/api/finance/credit-cards/<int:card_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_update_credit_card(card_id: int):
+        card = repo.get_fin_credit_card(card_id)
+        if not card:
+            return jsonify({"error": "Cartão não encontrado"}), 404
+        body = request.get_json(silent=True) or {}
+        data: dict = {}
+        if "name" in body:
+            n = sanitize_text(str(body["name"]), 80).strip()
+            if not n:
+                return jsonify({"error": "name não pode ser vazio"}), 400
+            data["name"] = n
+        if "limit_amount" in body:
+            try:
+                la = float(body["limit_amount"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "limit_amount inválido"}), 400
+            if not _is_finite_number(la) or la < 0:
+                return jsonify({"error": "limit_amount inválido"}), 400
+            data["limit_amount"] = round(la, 2)
+        if "closing_day" in body:
+            data["closing_day"] = max(1, min(31, int(body["closing_day"])))
+        if "due_day" in body:
+            data["due_day"] = max(1, min(31, int(body["due_day"])))
+        if "notes" in body:
+            data["notes"] = sanitize_text(str(body["notes"]), 300)
+        if not data:
+            return jsonify({"error": "Nenhum campo para atualizar"}), 400
+        repo.update_fin_credit_card(card_id, data)
+        _audit("update", "credit_card", card_id, {"fields": sorted(data.keys())})
+        return jsonify({"ok": True})
+
+    @app.delete("/api/finance/credit-cards/<int:card_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_delete_credit_card(card_id: int):
+        card = repo.get_fin_credit_card(card_id)
+        if not card:
+            return jsonify({"error": "Cartão não encontrado"}), 404
+        repo.delete_fin_credit_card(card_id)
+        _audit("delete", "credit_card", card_id, None)
+        return jsonify({"ok": True})
+
+    # ── Installments ───────────────────────────────────────
+
+    @app.post("/api/finance/cashflow/installments")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_add_installments():
+        body = request.get_json(silent=True) or {}
+        entry_type = sanitize_text(str(body.get("entry_type", "expense")).lower(), 12)
+        if entry_type not in ("income", "expense"):
+            return jsonify({"error": "entry_type deve ser income ou expense"}), 400
+        try:
+            total_amount = float(body.get("total_amount", 0))
+            installments = int(body.get("installments", 1))
+        except (TypeError, ValueError):
+            return jsonify({"error": "total_amount ou installments inválido"}), 400
+        if not _is_finite_number(total_amount) or total_amount <= 0:
+            return jsonify({"error": "total_amount deve ser > 0"}), 400
+        installments = max(1, min(120, installments))
+
+        first_date = sanitize_text(str(body.get("first_date", "")), 10).strip()
+        if not first_date:
+            first_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", first_date):
+            return jsonify({"error": "first_date inválida (use YYYY-MM-DD)"}), 400
+
+        payment_status = sanitize_text(str(body.get("payment_status", "pending")), 12).strip().lower()
+        if payment_status not in ("pending", "paid"):
+            payment_status = "pending"
+
+        group_id = str(uuid4())
+        installment_amount = round(total_amount / installments, 2)
+        # Adjust last installment for rounding
+        remainder = round(total_amount - installment_amount * (installments - 1), 2)
+
+        base_data = {
+            "entry_type": entry_type,
+            "category": sanitize_text(str(body.get("category", "")), 60),
+            "subcategory": sanitize_text(str(body.get("subcategory", "")), 60),
+            "cost_center": sanitize_text(str(body.get("cost_center", "")), 60),
+            "description": sanitize_text(str(body.get("description", "")), 160),
+            "notes": sanitize_text(str(body.get("notes", "")), 500),
+            "tags": _normalize_tags(body.get("tags")),
+            "installment_group": group_id,
+            "installment_total": installments,
+        }
+
+        created_ids: list[int] = []
+        try:
+            year = int(first_date[:4])
+            month = int(first_date[5:7])
+            day = int(first_date[8:10])
+        except (ValueError, IndexError):
+            return jsonify({"error": "first_date inválida"}), 400
+
+        import calendar as _cal
+        for i in range(installments):
+            # Calculate entry_date: advance by i months from first_date
+            mi = month + i
+            yi = year + (mi - 1) // 12
+            mi = ((mi - 1) % 12) + 1
+            last_day = _cal.monthrange(yi, mi)[1]
+            d = min(day, last_day)
+            entry_date = f"{yi:04d}-{mi:02d}-{d:02d}"
+            amount = remainder if i == installments - 1 else installment_amount
+            desc_base = base_data["description"] or ""
+            desc = sanitize_text(f"{desc_base} ({i+1}/{installments})".strip(), 160)
+            entry_id = repo.add_fin_cashflow_entry({
+                **base_data,
+                "amount": amount,
+                "entry_date": entry_date,
+                "description": desc,
+                "installment_index": i + 1,
+            })
+            if payment_status:
+                settled = entry_date if payment_status == "paid" else None
+                repo.set_fin_cashflow_status(entry_id, payment_status, settled)
+            created_ids.append(entry_id)
+
+        _audit("add", "cashflow_installments", None, {
+            "group_id": group_id,
+            "installments": installments,
+            "total_amount": total_amount,
+            "entry_type": entry_type,
+        })
+        _invalidate_cashflow_cache()
+        return jsonify({
+            "ok": True,
+            "group_id": group_id,
+            "installments": installments,
+            "installment_amount": installment_amount,
+            "total_amount": total_amount,
+            "ids": created_ids,
+        }), 201
+
+    @app.get("/api/finance/cashflow/installments/<string:group_id>")
+    @limiter.limit("30/minute")
+    def finance_list_installments(group_id: str):
+        safe_group = sanitize_text(str(group_id), 64).strip()
+        if not safe_group:
+            return jsonify({"error": "group_id inválido"}), 400
+        entries = repo.list_fin_cashflow_entries(limit=200)
+        group_entries = [
+            e for e in entries
+            if str(e.get("installment_group") or "") == safe_group
+        ]
+        group_entries.sort(key=lambda e: int(e.get("installment_index") or 0))
+        return jsonify(group_entries)
+
+    # ── Monthly Comparison ─────────────────────────────────
+
+    @app.get("/api/finance/cashflow/monthly-comparison")
+    @limiter.limit("30/minute")
+    def finance_cashflow_monthly_comparison():
+        try:
+            months = max(1, min(24, int(request.args.get("months", "12"))))
+        except (TypeError, ValueError):
+            months = 12
+        cache_key = f"finance:monthly-comparison:{months}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+        rows = repo.get_fin_cashflow_monthly_comparison(months=months)
+        payload = {"months": months, "data": rows}
+        cache.set(cache_key, payload, FINANCE_CACHE_TTLS.get("cashflow_summary", 300))
+        return jsonify(payload)
+
+    # ── Split entry ────────────────────────────────────────
+
+    @app.post("/api/finance/cashflow/<int:entry_id>/split")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_split_cashflow(entry_id: int):
+        entry = repo.get_fin_cashflow_entry(entry_id)
+        if not entry:
+            return jsonify({"error": "Lançamento não encontrado"}), 404
+        body = request.get_json(silent=True) or {}
+        parts = body.get("parts", [])
+        if not isinstance(parts, list) or len(parts) < 2:
+            return jsonify({"error": "parts deve ser lista com ao menos 2 itens"}), 400
+        if len(parts) > 20:
+            return jsonify({"error": "Máximo de 20 partes por split"}), 400
+
+        original_amount = float(entry.get("amount") or 0)
+        parsed_parts: list[dict] = []
+        for p in parts:
+            try:
+                amt = float(p.get("amount", 0))
+            except (TypeError, ValueError):
+                return jsonify({"error": "amount inválido em parte"}), 400
+            if not _is_finite_number(amt) or amt <= 0:
+                return jsonify({"error": "amount deve ser > 0 em cada parte"}), 400
+            parsed_parts.append({
+                "amount": round(amt, 2),
+                "category": sanitize_text(str(p.get("category") or entry.get("category") or ""), 60),
+                "description": sanitize_text(str(p.get("description") or entry.get("description") or ""), 160),
+                "notes": sanitize_text(str(p.get("notes") or ""), 300),
+            })
+
+        total_parts = round(sum(p["amount"] for p in parsed_parts), 2)
+        if abs(total_parts - original_amount) > 0.02:
+            return jsonify({
+                "error": f"Soma das partes ({total_parts}) deve ser igual ao valor original ({original_amount})",
+            }), 400
+
+        # Delete the original entry and create split children
+        entry_type = str(entry.get("entry_type") or "expense")
+        entry_date = str(entry.get("entry_date") or "")[:10]
+        status_row = repo.get_fin_cashflow_status(entry_id)
+        payment_status = str(status_row.get("status") or "pending")
+        settled_at = status_row.get("settled_at")
+
+        repo.delete_fin_cashflow_entry(entry_id)
+        created_ids: list[int] = []
+        for part in parsed_parts:
+            new_id = repo.add_fin_cashflow_entry({
+                "entry_type": entry_type,
+                "amount": part["amount"],
+                "category": part["category"],
+                "subcategory": str(entry.get("subcategory") or ""),
+                "cost_center": str(entry.get("cost_center") or ""),
+                "description": part["description"],
+                "entry_date": entry_date,
+                "notes": part["notes"],
+                "tags": [],
+            })
+            repo.set_fin_cashflow_status(new_id, payment_status, settled_at)
+            created_ids.append(new_id)
+
+        _audit("split", "cashflow", entry_id, {
+            "original_amount": original_amount,
+            "parts": len(parsed_parts),
+            "created_ids": created_ids,
+        })
+        _invalidate_cashflow_cache()
+        return jsonify({"ok": True, "original_id": entry_id, "created_ids": created_ids}), 201
+
+
         """Generate a small single-page PDF without external dependencies."""
 
         def _esc(text: str) -> str:

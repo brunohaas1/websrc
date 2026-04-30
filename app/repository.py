@@ -2857,6 +2857,72 @@ class Repository:
             conn.commit()
             return True
 
+    # ── Credit Cards ───────────────────────────────────────
+
+    def list_fin_credit_cards(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                "SELECT * FROM fin_credit_cards ORDER BY name ASC",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_fin_credit_card(self, data: dict[str, Any]) -> int:
+        with get_connection(self.database_target) as conn:
+            q = self._sql("""
+                INSERT INTO fin_credit_cards (name, limit_amount, closing_day, due_day, notes)
+                VALUES (?, ?, ?, ?, ?)
+            """)
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(q, (
+                data["name"],
+                data.get("limit_amount", 0),
+                data.get("closing_day", 1),
+                data.get("due_day", 10),
+                data.get("notes"),
+            ))
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def get_fin_credit_card(self, card_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_credit_cards WHERE id = ?"),
+                (card_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_fin_credit_card(self, card_id: int, data: dict[str, Any]) -> bool:
+        with get_connection(self.database_target) as conn:
+            fields = []
+            values: list[Any] = []
+            for key in ("name", "limit_amount", "closing_day", "due_day", "notes"):
+                if key in data:
+                    fields.append(f"{key} = ?")
+                    values.append(data[key])
+            if not fields:
+                return False
+            fields.append("updated_at = CURRENT_TIMESTAMP")
+            values.append(card_id)
+            conn.execute(
+                self._sql(f"UPDATE fin_credit_cards SET {', '.join(fields)} WHERE id = ?"),
+                tuple(values),
+            )
+            conn.commit()
+            return True
+
+    def delete_fin_credit_card(self, card_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            conn.execute(
+                self._sql("DELETE FROM fin_credit_cards WHERE id = ?"),
+                (card_id,),
+            )
+            conn.commit()
+            return True
+
     # ── Cashflow (income/expenses) ─────────────────────────
 
     def add_fin_cashflow_entry(self, data: dict[str, Any]) -> int:
@@ -2864,8 +2930,9 @@ class Repository:
             q = self._sql(
                 """
                 INSERT INTO fin_cashflow_entries
-                    (entry_type, amount, category, subcategory, cost_center, description, entry_date, notes, tags_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (entry_type, amount, category, subcategory, cost_center, description, entry_date, notes, tags_json,
+                     installment_group, installment_index, installment_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             )
             if self.is_postgres:
@@ -2882,6 +2949,9 @@ class Repository:
                     data["entry_date"],
                     data.get("notes"),
                     json_dumps(data.get("tags") or []),
+                    data.get("installment_group"),
+                    data.get("installment_index"),
+                    data.get("installment_total"),
                 ),
             )
             conn.commit()
@@ -3709,6 +3779,35 @@ class Repository:
             "total_balance": round(total_income - total_expense, 2),
             "monthly": monthly_rows,
         }
+
+    def get_fin_cashflow_monthly_comparison(self, months: int = 12) -> list[dict[str, Any]]:
+        """Return per-month income/expense/balance for the last N months, newest first."""
+        safe_months = max(1, min(24, int(months)))
+        rows = self.list_fin_cashflow_entries(limit=50000)
+        monthly: dict[str, dict[str, float]] = {}
+        for row in rows:
+            mk = str(row.get("entry_date") or "")[:7]
+            if len(mk) != 7:
+                continue
+            amount = float(row.get("amount") or 0)
+            entry_type = str(row.get("entry_type") or "")
+            bucket = monthly.setdefault(mk, {"income": 0.0, "expense": 0.0})
+            if entry_type == "income":
+                bucket["income"] += amount
+            elif entry_type == "expense":
+                bucket["expense"] += amount
+        sorted_months = sorted(monthly.keys())[-safe_months:]
+        result = []
+        for mk in reversed(sorted_months):
+            inc = monthly[mk]["income"]
+            exp = monthly[mk]["expense"]
+            result.append({
+                "month": mk,
+                "income": round(inc, 2),
+                "expense": round(exp, 2),
+                "balance": round(inc - exp, 2),
+            })
+        return result
 
     def get_fin_cashflow_budget(self, month: str) -> dict[str, float]:
         key = f"finance_cashflow_budget:{month}"

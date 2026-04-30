@@ -411,6 +411,17 @@ CREATE INDEX IF NOT EXISTS idx_fin_ocr_scans_created
 ON fin_ocr_scans(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fin_ocr_scans_cnpj
 ON fin_ocr_scans(cnpj, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_credit_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    limit_amount REAL NOT NULL DEFAULT 0,
+    closing_day INTEGER DEFAULT 1,
+    due_day INTEGER DEFAULT 10,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -768,6 +779,17 @@ CREATE TABLE IF NOT EXISTS fin_audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_audit_logs_created
 ON fin_audit_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_credit_cards (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    limit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    closing_day INTEGER DEFAULT 1,
+    due_day INTEGER DEFAULT 10,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -798,6 +820,13 @@ def init_db(database_target: str) -> None:
         with psycopg.connect(_postgres_dsn(database_target)) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(POSTGRES_SCHEMA)
+                # Incremental column migrations (idempotent via ADD COLUMN IF NOT EXISTS)
+                for stmt in (
+                    "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_group TEXT",
+                    "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_index INTEGER",
+                    "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_total INTEGER",
+                ):
+                    cursor.execute(stmt)
             conn.commit()
 
         global _pg_pool
@@ -816,7 +845,23 @@ def init_db(database_target: str) -> None:
     with sqlite3.connect(database_target) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SQLITE_SCHEMA)
+        _run_sqlite_migrations(conn)
         conn.commit()
+
+
+def _run_sqlite_migrations(conn: sqlite3.Connection) -> None:
+    """Apply incremental column additions to existing SQLite tables (idempotent)."""
+    _try_add_column(conn, "fin_cashflow_entries", "installment_group", "TEXT")
+    _try_add_column(conn, "fin_cashflow_entries", "installment_index", "INTEGER")
+    _try_add_column(conn, "fin_cashflow_entries", "installment_total", "INTEGER")
+
+
+def _try_add_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
 
 @contextmanager

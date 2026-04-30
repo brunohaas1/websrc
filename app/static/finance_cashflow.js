@@ -435,6 +435,7 @@ function renderCashflow(entries) {
           <button class="fin-del-btn" data-action="toggleCashflowStatus" data-id="${entry.id}" data-status="${status.nextStatus}" title="${status.actionLabel}">✓</button>
           <button class="fin-del-btn" data-action="openCashflowAttachmentModal" data-id="${entry.id}" title="Anexos">📎</button>
           <button class="fin-del-btn" data-action="openEditCashflowModal" data-id="${entry.id}" title="Editar">✎</button>
+          <button class="fin-del-btn" data-action="openSplitCashflowModal" data-id="${entry.id}" title="Dividir em partes">↕</button>
           <button class="fin-del-btn" data-action="deleteCashflowEntry" data-id="${entry.id}" title="Excluir">✕</button>
         </td>
       </tr>
@@ -2805,4 +2806,449 @@ function exportCashflowCsv() {
   const month = getSelectedCashflowMonth();
   const url = `/api/finance/cashflow/export-csv${month ? "?month=" + encodeURIComponent(month) : ""}`;
   window.open(url, "_blank", "noopener");
+}
+
+// ── Monthly Comparison ────────────────────────────────
+async function openMonthlyComparisonModal() {
+  openFinModal("📊 Comparativo Mensal", `<p style="text-align:center;padding:20px;">Carregando...</p>`);
+  let data;
+  try {
+    const resp = await finFetch("/api/finance/cashflow/monthly-comparison?months=12");
+    data = await resp.json();
+  } catch {
+    showToast("Erro ao carregar comparativo");
+    return;
+  }
+  const rows = Array.isArray(data.data) ? data.data : [];
+  if (!rows.length) {
+    openFinModal("📊 Comparativo Mensal", `<p class="fin-empty">Nenhum dado disponível.</p>`);
+    return;
+  }
+  const tableRows = rows.map((r) => {
+    const balCls = Number(r.balance) >= 0 ? "fin-up" : "fin-down";
+    return `<tr>
+      <td>${escapeHtml(r.month)}</td>
+      <td class="text-right fin-up">${formatBRL(r.income)}</td>
+      <td class="text-right fin-down">${formatBRL(r.expense)}</td>
+      <td class="text-right ${balCls}">${formatBRL(r.balance)}</td>
+    </tr>`;
+  }).join("");
+
+  const canvasId = "finMonthlyCompChart";
+  openFinModal("📊 Comparativo Mensal", `
+    <div class="fin-table-wrap" style="max-height:240px;overflow-y:auto;">
+      <table class="fin-table">
+        <thead><tr><th>Mês</th><th class="text-right">Receitas</th><th class="text-right">Despesas</th><th class="text-right">Saldo</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:16px;position:relative;height:220px;">
+      <canvas id="${canvasId}"></canvas>
+    </div>
+  `);
+
+  const canvas = byId(canvasId);
+  if (!canvas || typeof Chart === "undefined") return;
+  const labels = [...rows].reverse().map((r) => r.month);
+  const incomes = [...rows].reverse().map((r) => r.income);
+  const expenses = [...rows].reverse().map((r) => r.expense);
+  new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "Receitas", data: incomes, backgroundColor: "rgba(34,197,94,0.7)", borderRadius: 4 },
+        { label: "Despesas", data: expenses, backgroundColor: "rgba(239,68,68,0.7)", borderRadius: 4 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#94a3b8" } },
+        tooltip: { callbacks: { label: (ctx) => " " + formatBRL(ctx.parsed.y) } },
+      },
+      scales: {
+        x: { ticks: { color: "#94a3b8" }, grid: { color: "rgba(255,255,255,0.04)" } },
+        y: { ticks: { color: "#94a3b8", callback: (v) => formatBRL(v) }, grid: { color: "rgba(255,255,255,0.05)" } },
+      },
+    },
+  });
+}
+
+// ── Installments ──────────────────────────────────────
+function openInstallmentsModal() {
+  const today = new Date().toISOString().slice(0, 10);
+  openFinModal("📅 Parcelar Lançamento", `
+    <form data-form-action="submitInstallments">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmInstType">
+            <option value="expense">Gasto</option>
+            <option value="income">Receita</option>
+          </select>
+        </div>
+        <div class="fin-form-group">
+          <label>Valor total (R$)</label>
+          <input id="fmInstTotal" type="number" min="0.01" step="0.01" placeholder="0,00" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Nº de parcelas</label>
+          <input id="fmInstN" type="number" min="2" max="120" value="12" required />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Data da 1ª parcela</label>
+          <input id="fmInstFirstDate" type="date" value="${escapeHtml(today)}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <input id="fmInstCategory" type="text" list="finCfCategoriesDatalist" placeholder="Categoria" />
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Descrição</label>
+        <input id="fmInstDesc" type="text" placeholder="Descrição do parcelamento" />
+      </div>
+      <div id="fmInstPreview" style="font-size:.85em;color:#94a3b8;margin:4px 0 8px;"></div>
+      <button type="submit" class="fin-form-submit">📅 Criar parcelas</button>
+    </form>
+  `);
+
+  function updatePreview() {
+    const total = parseFloat(byId("fmInstTotal")?.value || "0");
+    const n = parseInt(byId("fmInstN")?.value || "0", 10);
+    const el = byId("fmInstPreview");
+    if (!el) return;
+    if (total > 0 && n >= 2) {
+      el.textContent = `${n}x de ${formatBRL(total / n)} (≈ ${formatBRL(total / n)} por mês)`;
+    } else {
+      el.textContent = "";
+    }
+  }
+  byId("fmInstTotal")?.addEventListener("input", updatePreview);
+  byId("fmInstN")?.addEventListener("input", updatePreview);
+}
+
+async function submitInstallments(e) {
+  e.preventDefault();
+  const entry_type = byId("fmInstType")?.value || "expense";
+  const total_amount = parseFloat(byId("fmInstTotal")?.value || "0");
+  const installments = parseInt(byId("fmInstN")?.value || "0", 10);
+  const first_date = byId("fmInstFirstDate")?.value || "";
+  const category = byId("fmInstCategory")?.value || "";
+  const description = byId("fmInstDesc")?.value || "";
+
+  if (!total_amount || total_amount <= 0) { showToast("Informe o valor total"); return; }
+  if (installments < 2) { showToast("Mínimo de 2 parcelas"); return; }
+  if (!first_date) { showToast("Informe a data da 1ª parcela"); return; }
+
+  try {
+    const resp = await finFetch("/api/finance/cashflow/installments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_type, total_amount, installments, first_date, category, description }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao criar parcelas"); return; }
+    showToast(`${data.installments} parcelas criadas com sucesso!`, "success");
+    byId("finModalOverlay").style.display = "none";
+    await refreshByDomains(["cashflow"]);
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+// ── Savings Goals ─────────────────────────────────────
+async function openSavingsGoalsModal() {
+  openFinModal("🎯 Metas de Poupança", `<p style="text-align:center;padding:20px;">Carregando...</p>`);
+  let goals;
+  try {
+    const resp = await finFetch("/api/finance/goals");
+    goals = await resp.json();
+    if (!Array.isArray(goals)) goals = goals.goals || [];
+  } catch {
+    showToast("Erro ao carregar metas");
+    return;
+  }
+
+  function renderGoalsHtml() {
+    if (!goals.length) return `<p class="fin-empty">Nenhuma meta cadastrada.</p>`;
+    return goals.map((g) => {
+      const current = Number(g.current_amount || 0);
+      const target = Number(g.target_amount || 0);
+      const pct = target > 0 ? Math.min(100, Math.round(current / target * 100)) : 0;
+      const color = pct >= 100 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#3b82f6";
+      return `
+        <div class="fin-goal-card" style="margin-bottom:14px;padding:12px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <strong>${escapeHtml(g.name || "Meta")}</strong>
+            <span style="font-size:.85em;color:#94a3b8;">${formatBRL(current)} / ${formatBRL(target)}</span>
+          </div>
+          <div style="background:rgba(255,255,255,0.08);border-radius:4px;height:8px;margin-bottom:8px;">
+            <div style="background:${color};height:8px;border-radius:4px;width:${pct}%;transition:width .3s;"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span style="font-size:.8em;color:#94a3b8;">${pct}% concluído</span>
+            <button class="btn-text" style="font-size:.8em;" data-goal-deposit="${g.id}" title="Depositar na meta">＋ Depositar</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  const overlay = byId("finModalOverlay");
+  const modalBody = overlay?.querySelector(".fin-modal-body");
+  if (modalBody) modalBody.innerHTML = renderGoalsHtml();
+
+  overlay?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-goal-deposit]");
+    if (!btn) return;
+    const goalId = Number(btn.dataset.goalDeposit);
+    const goal = goals.find((g) => Number(g.id) === goalId);
+    if (!goal) return;
+    const raw = prompt(`Depósito para "${goal.name}" (atual: ${formatBRL(goal.current_amount || 0)})\nValor a depositar (R$):`);
+    if (!raw) return;
+    const amount = parseFloat(raw.replace(",", "."));
+    if (isNaN(amount)) { showToast("Valor inválido"); return; }
+    try {
+      const resp = await finFetch(`/api/finance/goals/${goalId}/deposit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) { showToast(data.error || "Erro ao depositar"); return; }
+      showToast(`Depósito de ${formatBRL(amount)} realizado!`, "success");
+      // Update local state
+      const g = goals.find((g) => Number(g.id) === goalId);
+      if (g) g.current_amount = data.current_amount;
+      if (modalBody) modalBody.innerHTML = renderGoalsHtml();
+    } catch {
+      showToast("Erro de rede");
+    }
+  }, { once: false });
+}
+
+// ── Credit Cards ──────────────────────────────────────
+async function openCreditCardsModal() {
+  openFinModal("💳 Cartões de Crédito", `<p style="text-align:center;padding:20px;">Carregando...</p>`);
+  let cards;
+  try {
+    const resp = await finFetch("/api/finance/credit-cards");
+    cards = await resp.json();
+    if (!Array.isArray(cards)) cards = [];
+  } catch {
+    showToast("Erro ao carregar cartões");
+    return;
+  }
+
+  function renderCardHtml() {
+    const list = cards.length ? cards.map((c) => `
+      <div style="margin-bottom:12px;padding:12px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong>${escapeHtml(c.name)}</strong>
+          <span style="font-size:.85em;color:#94a3b8;">Limite: ${formatBRL(c.limit_amount || 0)}</span>
+        </div>
+        <div style="font-size:.8em;color:#94a3b8;margin:4px 0;">Fechamento dia ${escapeHtml(String(c.closing_day || "—"))} • Vencimento dia ${escapeHtml(String(c.due_day || "—"))}</div>
+        ${c.notes ? `<div style="font-size:.8em;color:#64748b;">${escapeHtml(c.notes)}</div>` : ""}
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          <button class="btn-text" style="font-size:.8em;" data-card-edit="${c.id}">✎ Editar</button>
+          <button class="btn-text" style="font-size:.8em;color:#ef4444;" data-card-delete="${c.id}">✕ Excluir</button>
+        </div>
+      </div>
+    `).join("") : `<p class="fin-empty">Nenhum cartão cadastrado.</p>`;
+    return `
+      ${list}
+      <hr style="border-color:rgba(255,255,255,0.08);margin:12px 0;" />
+      <form data-form-action="submitAddCreditCard" style="margin-top:8px;">
+        <div class="fin-form-row">
+          <div class="fin-form-group"><label>Nome</label><input id="fmCardName" type="text" placeholder="Nome do cartão" required /></div>
+          <div class="fin-form-group"><label>Limite (R$)</label><input id="fmCardLimit" type="number" min="0" step="0.01" placeholder="0,00" /></div>
+        </div>
+        <div class="fin-form-row">
+          <div class="fin-form-group"><label>Dia fechamento</label><input id="fmCardClosing" type="number" min="1" max="31" value="1" /></div>
+          <div class="fin-form-group"><label>Dia vencimento</label><input id="fmCardDue" type="number" min="1" max="31" value="10" /></div>
+        </div>
+        <div class="fin-form-group"><label>Notas</label><input id="fmCardNotes" type="text" placeholder="Opcional" /></div>
+        <button type="submit" class="fin-form-submit">＋ Adicionar cartão</button>
+      </form>
+    `;
+  }
+
+  const overlay = byId("finModalOverlay");
+  const modalBody = overlay?.querySelector(".fin-modal-body");
+  if (modalBody) modalBody.innerHTML = renderCardHtml();
+
+  overlay?.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest("[data-card-edit]");
+    const delBtn = e.target.closest("[data-card-delete]");
+    if (editBtn) {
+      const cid = Number(editBtn.dataset.cardEdit);
+      const card = cards.find((c) => Number(c.id) === cid);
+      if (!card) return;
+      const newName = prompt("Nome:", card.name);
+      if (!newName) return;
+      const newLimit = prompt("Limite (R$):", card.limit_amount);
+      const newClosing = prompt("Dia de fechamento:", card.closing_day);
+      const newDue = prompt("Dia de vencimento:", card.due_day);
+      try {
+        const resp = await finFetch(`/api/finance/credit-cards/${cid}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: newName,
+            limit_amount: parseFloat(newLimit) || 0,
+            closing_day: parseInt(newClosing) || 1,
+            due_day: parseInt(newDue) || 10,
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showToast(data.error || "Erro ao atualizar"); return; }
+        showToast("Cartão atualizado!", "success");
+        const idx = cards.findIndex((c) => Number(c.id) === cid);
+        if (idx >= 0) {
+          cards[idx] = { ...cards[idx], name: newName, limit_amount: parseFloat(newLimit) || 0, closing_day: parseInt(newClosing) || 1, due_day: parseInt(newDue) || 10 };
+        }
+        if (modalBody) modalBody.innerHTML = renderCardHtml();
+      } catch { showToast("Erro de rede"); }
+    }
+    if (delBtn) {
+      const cid = Number(delBtn.dataset.cardDelete);
+      const card = cards.find((c) => Number(c.id) === cid);
+      if (!card || !confirm(`Excluir cartão "${card.name}"?`)) return;
+      try {
+        const resp = await finFetch(`/api/finance/credit-cards/${cid}`, { method: "DELETE" });
+        const data = await resp.json();
+        if (!resp.ok) { showToast(data.error || "Erro ao excluir"); return; }
+        showToast("Cartão excluído.", "success");
+        cards = cards.filter((c) => Number(c.id) !== cid);
+        if (modalBody) modalBody.innerHTML = renderCardHtml();
+      } catch { showToast("Erro de rede"); }
+    }
+  }, { once: false });
+}
+
+async function submitAddCreditCard(e) {
+  e.preventDefault();
+  const name = byId("fmCardName")?.value || "";
+  const limit_amount = parseFloat(byId("fmCardLimit")?.value || "0");
+  const closing_day = parseInt(byId("fmCardClosing")?.value || "1", 10);
+  const due_day = parseInt(byId("fmCardDue")?.value || "10", 10);
+  const notes = byId("fmCardNotes")?.value || "";
+  if (!name.trim()) { showToast("Informe o nome do cartão"); return; }
+  try {
+    const resp = await finFetch("/api/finance/credit-cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, limit_amount, closing_day, due_day, notes }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao adicionar cartão"); return; }
+    showToast("Cartão adicionado!", "success");
+    await openCreditCardsModal();
+  } catch { showToast("Erro de rede"); }
+}
+
+// ── Split Cashflow Entry ───────────────────────────────
+async function openSplitCashflowModal(entryId) {
+  const entry = (FIN.cashflowEntries || []).find((e) => Number(e.id) === Number(entryId));
+  const amount = Number(entry?.amount || 0);
+  const label = entry ? `${entry.description || entry.category || "Lançamento"} (${formatBRL(amount)})` : `#${entryId}`;
+
+  openFinModal("↕ Dividir Lançamento", `
+    <div style="margin-bottom:12px;font-size:.9em;color:#94a3b8;">Dividindo: <strong>${escapeHtml(label)}</strong></div>
+    <form data-form-action="submitSplitCashflow" data-entry-id="${entryId}" data-total="${amount}">
+      <div id="splitPartsContainer"></div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button id="btnAddSplitPart" type="button" class="btn-text">＋ Adicionar parte</button>
+        <span id="splitRemaining" style="font-size:.85em;color:#94a3b8;align-self:center;"></span>
+      </div>
+      <button type="submit" class="fin-form-submit">↕ Dividir</button>
+    </form>
+  `);
+
+  function addPart(suggestedAmount) {
+    const container = byId("splitPartsContainer");
+    if (!container) return;
+    const idx = container.querySelectorAll(".split-part-row").length;
+    const row = document.createElement("div");
+    row.className = "split-part-row fin-form-row";
+    row.style.cssText = "align-items:flex-end;gap:8px;";
+    row.innerHTML = `
+      <div class="fin-form-group" style="flex:1.5;">
+        <label>Categoria</label>
+        <input class="split-category" type="text" list="finCfCategoriesDatalist" value="${escapeHtml(entry?.category || "")}" placeholder="Categoria" />
+      </div>
+      <div class="fin-form-group" style="flex:1;">
+        <label>Valor (R$)</label>
+        <input class="split-amount" type="number" min="0.01" step="0.01" value="${escapeHtml(String(suggestedAmount || ""))}" required />
+      </div>
+      <div class="fin-form-group" style="flex:1.5;">
+        <label>Descrição</label>
+        <input class="split-desc" type="text" value="${escapeHtml(entry?.description || "")}" placeholder="Opcional" />
+      </div>
+      <button type="button" class="fin-del-btn split-remove" title="Remover">✕</button>
+    `;
+    container.appendChild(row);
+    row.querySelector(".split-amount")?.addEventListener("input", updateRemaining);
+    row.querySelector(".split-remove")?.addEventListener("click", () => { row.remove(); updateRemaining(); });
+  }
+
+  function updateRemaining() {
+    const parts = [...document.querySelectorAll(".split-amount")];
+    const used = parts.reduce((s, el) => s + (parseFloat(el.value) || 0), 0);
+    const rem = Math.round((amount - used) * 100) / 100;
+    const el = byId("splitRemaining");
+    if (el) el.textContent = `Restante: ${formatBRL(rem)}`;
+  }
+
+  byId("btnAddSplitPart")?.addEventListener("click", () => {
+    const parts = [...document.querySelectorAll(".split-amount")];
+    const used = parts.reduce((s, el) => s + (parseFloat(el.value) || 0), 0);
+    const rem = Math.round((amount - used) * 100) / 100;
+    addPart(rem > 0 ? rem : "");
+    updateRemaining();
+  });
+
+  // Start with 2 parts
+  addPart(Math.round(amount / 2 * 100) / 100);
+  addPart(Math.round(amount / 2 * 100) / 100);
+  updateRemaining();
+}
+
+async function submitSplitCashflow(e) {
+  e.preventDefault();
+  const entryId = Number(e.target.dataset.entryId);
+  const totalAmount = parseFloat(e.target.dataset.total || "0");
+  const partRows = [...e.target.querySelectorAll(".split-part-row")];
+  const parts = partRows.map((row) => ({
+    amount: parseFloat(row.querySelector(".split-amount")?.value || "0"),
+    category: row.querySelector(".split-category")?.value || "",
+    description: row.querySelector(".split-desc")?.value || "",
+  }));
+
+  if (parts.length < 2) { showToast("Adicione pelo menos 2 partes"); return; }
+  const sumParts = parts.reduce((s, p) => s + p.amount, 0);
+  if (Math.abs(sumParts - totalAmount) > 0.02) {
+    showToast(`Soma das partes (${formatBRL(sumParts)}) deve ser igual ao valor original (${formatBRL(totalAmount)})`);
+    return;
+  }
+
+  try {
+    const resp = await finFetch(`/api/finance/cashflow/${entryId}/split`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao dividir"); return; }
+    showToast(`Lançamento dividido em ${data.created_ids.length} partes!`, "success");
+    byId("finModalOverlay").style.display = "none";
+    await refreshByDomains(["cashflow"]);
+  } catch {
+    showToast("Erro de rede");
+  }
 }
