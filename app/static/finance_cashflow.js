@@ -962,25 +962,105 @@ function openReceiptOCRModal() {
       Envie uma foto de comprovante ou nota fiscal. O sistema extrairá data, valor e descrição automaticamente.
       Se OCR não estiver disponível, você pode colar o texto manualmente.
     </div>
-    <div class="fin-form-group">
-      <label>Imagem do comprovante (JPG, PNG, PDF até 5 MB)</label>
-      <input id="fmOcrFile" type="file" accept="image/*,.pdf" />
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <button id="btnOcrTabScan"    type="button" class="fin-tab-btn fin-tab-active"  style="flex:1;">📷 Digitalizar</button>
+      <button id="btnOcrTabHistory" type="button" class="fin-tab-btn"                 style="flex:1;">📋 Histórico</button>
     </div>
-    <div id="fmOcrPreview" style="display:none;margin:6px 0 10px;text-align:center;">
-      <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:4px;">
-        <button id="btnRotLeft"  type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° esquerda">↺</button>
-        <img id="fmOcrPreviewImg" style="max-height:140px;max-width:100%;border-radius:6px;border:1px solid #ccc;" alt="preview" />
-        <button id="btnRotRight" type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° direita">↻</button>
+    <div id="ocrTabScan">
+      <div class="fin-form-group">
+        <label>Imagem do comprovante (JPG, PNG, PDF até 5 MB)</label>
+        <div id="fmOcrDropZone" style="border:2px dashed #aaa;border-radius:8px;padding:14px 10px;text-align:center;cursor:pointer;transition:background .2s;margin-bottom:6px;">
+          <span id="fmOcrDropLabel" style="font-size:.85em;opacity:.7;">Arraste a imagem aqui ou clique para selecionar</span>
+        </div>
+        <input id="fmOcrFile" type="file" accept="image/*,.pdf" capture="environment" style="display:none;" />
+        <button type="button" id="btnOcrCamera" style="font-size:.8em;padding:3px 10px;margin-top:2px;">📸 Usar Câmera</button>
       </div>
-      <span id="fmOcrPreviewLabel" style="font-size:.75em;opacity:.6;"></span>
+      <div id="fmOcrPreview" style="display:none;margin:6px 0 10px;text-align:center;">
+        <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:4px;">
+          <button id="btnRotLeft"  type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° esquerda">↺</button>
+          <img id="fmOcrPreviewImg" style="max-height:140px;max-width:100%;border-radius:6px;border:1px solid #ccc;" alt="preview" />
+          <button id="btnRotRight" type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° direita">↻</button>
+        </div>
+        <span id="fmOcrPreviewLabel" style="font-size:.75em;opacity:.6;"></span>
+      </div>
+      <div class="fin-form-group">
+        <label>Texto manual (fallback opcional)</label>
+        <textarea id="fmOcrManualText" rows="3" placeholder="Cole aqui o texto do comprovante caso o OCR não esteja disponível."></textarea>
+      </div>
+      <button id="btnDoOcr" class="fin-form-submit" type="button">🔍 Analisar</button>
+      <div id="fmOcrResult" style="margin-top:12px"></div>
     </div>
-    <div class="fin-form-group">
-      <label>Texto manual (fallback opcional)</label>
-      <textarea id="fmOcrManualText" rows="3" placeholder="Cole aqui o texto do comprovante caso o OCR não esteja disponível."></textarea>
+    <div id="ocrTabHistory" style="display:none;">
+      <div id="fmOcrHistoryContent" style="font-size:.85em;">Carregando…</div>
     </div>
-    <button id="btnDoOcr" class="fin-form-submit" type="button">🔍 Analisar</button>
-    <div id="fmOcrResult" style="margin-top:12px"></div>
   `);
+
+  // ── Tab switching ──────────────────────────────────────────────────────────
+  byId("btnOcrTabScan")?.addEventListener("click", () => {
+    byId("ocrTabScan").style.display = "";
+    byId("ocrTabHistory").style.display = "none";
+    byId("btnOcrTabScan").classList.add("fin-tab-active");
+    byId("btnOcrTabHistory").classList.remove("fin-tab-active");
+  });
+  byId("btnOcrTabHistory")?.addEventListener("click", () => {
+    byId("ocrTabScan").style.display = "none";
+    byId("ocrTabHistory").style.display = "";
+    byId("btnOcrTabScan").classList.remove("fin-tab-active");
+    byId("btnOcrTabHistory").classList.add("fin-tab-active");
+    _loadOcrHistory();
+  });
+
+  // ── History tab loader ─────────────────────────────────────────────────────
+  async function _loadOcrHistory() {
+    const container = byId("fmOcrHistoryContent");
+    if (!container) return;
+    container.textContent = "Carregando…";
+    try {
+      const resp = await finFetch("/api/finance/cashflow/ocr/history");
+      const rows = await resp.json();
+      if (!Array.isArray(rows) || rows.length === 0) {
+        container.innerHTML = "<em style='opacity:.6'>Nenhum comprovante analisado ainda.</em>";
+        return;
+      }
+      container.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="opacity:.6;font-size:.8em;">
+            <th style="text-align:left;padding:3px 4px">Data</th>
+            <th style="text-align:left;padding:3px 4px">Estabelecimento</th>
+            <th style="text-align:right;padding:3px 4px">Valor</th>
+            <th style="text-align:left;padding:3px 4px">Tipo</th>
+            <th style="text-align:right;padding:3px 4px">Conf.</th>
+          </tr></thead>
+          <tbody>${rows.map(r => `
+            <tr class="fin-history-row" style="cursor:pointer;border-top:1px solid #eee;" data-hist='${JSON.stringify({date:r.entry_date||r.date,amount:r.amount,merchant:r.merchant,category:r.category,entry_type:r.entry_type})}'>
+              <td style="padding:3px 4px;font-size:.82em;">${escapeHtml(String(r.entry_date||r.date||"—"))}</td>
+              <td style="padding:3px 4px;font-size:.82em;">${escapeHtml(String(r.merchant||"—"))}</td>
+              <td style="text-align:right;padding:3px 4px;font-size:.82em;">${r.amount!=null?formatBRL(r.amount):"—"}</td>
+              <td style="padding:3px 4px;font-size:.82em;">${escapeHtml(String(r.receipt_type||"—"))}</td>
+              <td style="text-align:right;padding:3px 4px;font-size:.82em;">${r.confidence!=null?Math.round(Number(r.confidence)*100)+"%":"—"}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+        <div style="font-size:.75em;opacity:.55;margin-top:4px;">Clique em uma linha para pré-preencher</div>`;
+      // Row click: switch to scan tab and prefill fields (if result already shown)
+      container.querySelectorAll(".fin-history-row").forEach(row => {
+        row.addEventListener("click", () => {
+          try {
+            const d = JSON.parse(row.dataset.hist || "{}");
+            byId("btnOcrTabScan").click();
+            // Pre-populate visible form fields if result section is shown
+            if (byId("fmOcrDate")) byId("fmOcrDate").value = d.date || "";
+            if (byId("fmOcrAmount")) byId("fmOcrAmount").value = d.amount != null ? d.amount : "";
+            if (byId("fmOcrMerchant")) byId("fmOcrMerchant").value = d.merchant || "";
+            if (byId("fmOcrCat")) byId("fmOcrCat").value = d.category || "";
+            if (byId("fmOcrType")) byId("fmOcrType").value = d.entry_type || "expense";
+          } catch (_) {}
+        });
+      });
+    } catch (_) {
+      if (container) container.innerHTML = "<em style='opacity:.6'>Erro ao carregar histórico.</em>";
+    }
+  }
 
   // ── Image preview + rotation ────────────────────────────────────────────────
   let _ocrRotation = 0;
@@ -1005,7 +1085,41 @@ function openReceiptOCRModal() {
 
   byId("fmOcrFile")?.addEventListener("change", (e) => {
     _ocrRotation = 0;
-    _renderPreview(e.target.files?.[0]);
+    const file = e.target.files?.[0];
+    if (file) _renderPreview(file);
+  });
+
+  // Camera button: trigger file input (capture already set in HTML)
+  byId("btnOcrCamera")?.addEventListener("click", () => byId("fmOcrFile")?.click());
+
+  // Drop zone: open file picker on click
+  byId("fmOcrDropZone")?.addEventListener("click", () => byId("fmOcrFile")?.click());
+
+  // Drag-and-drop
+  byId("fmOcrDropZone")?.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    byId("fmOcrDropZone").style.background = "var(--fin-bg2,#f0f4ff)";
+  });
+  byId("fmOcrDropZone")?.addEventListener("dragleave", () => {
+    byId("fmOcrDropZone").style.background = "";
+  });
+  byId("fmOcrDropZone")?.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    byId("fmOcrDropZone").style.background = "";
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    // Put it in the file input via DataTransfer so _runOcr can read it
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      byId("fmOcrFile").files = dt.files;
+    } catch (_) {}
+    _ocrRotation = 0;
+    _renderPreview(file);
+    const label = byId("fmOcrDropLabel");
+    if (label) label.textContent = `${file.name} (${(file.size/1024).toFixed(0)} KB) ✓`;
   });
 
   byId("btnRotLeft")?.addEventListener("click", () => {
@@ -1091,6 +1205,8 @@ function openReceiptOCRModal() {
           &nbsp;·&nbsp; Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}${fromCache}
         </div>
         ${data.suggestion ? `<div style="font-size:.8em;background:var(--fin-bg2,#f5f5f5);padding:4px 8px;border-radius:4px;margin-bottom:8px;">💡 Histórico: <strong>${escapeHtml(data.suggestion.merchant||"")}</strong> → ${escapeHtml(data.suggestion.category||"")} (sugestão aplicada)</div>` : ""}
+        ${data.duplicate_warning ? `<div style="font-size:.82em;background:#fff3cd;color:#856404;padding:5px 8px;border-radius:4px;margin-bottom:8px;border:1px solid #ffc107;">⚠️ Possível duplicata: ${data.duplicate_warning.count} lançamento(s) com mesmo valor e data já existem (IDs: ${data.duplicate_warning.ids.join(", ")}).</div>` : ""}
+        ${data.budget_alert ? `<div style="font-size:.82em;background:${data.budget_alert.over?"#f8d7da":"#fff3cd"};color:${data.budget_alert.over?"#721c24":"#856404"};padding:5px 8px;border-radius:4px;margin-bottom:8px;border:1px solid ${data.budget_alert.over?"#f5c6cb":"#ffc107"};">${data.budget_alert.over?"🔴":"🟡"} Orçamento <strong>${escapeHtml(data.budget_alert.category)}</strong>: ${data.budget_alert.pct}% utilizado (${formatBRL(data.budget_alert.would_be)} / ${formatBRL(data.budget_alert.limit)})${data.budget_alert.over?" — LIMITE ULTRAPASSADO":""}</div>` : ""}
         <div class="fin-form-row">
           <div class="fin-form-group">
             <label>Data${_confBadge(fc,"date")}</label>

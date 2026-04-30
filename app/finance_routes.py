@@ -3147,6 +3147,22 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             pass
         return None
 
+    def _pdf_bytes_to_all_images(pdf_bytes: bytes) -> list[bytes]:
+        """Convert every page of a PDF to PNG bytes (max 10 pages). Returns [] on failure."""
+        try:
+            from pdf2image import convert_from_bytes  # noqa: PLC0415
+            import io as _io  # noqa: PLC0415
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=10, dpi=200)
+            result = []
+            for img in images:
+                buf = _io.BytesIO()
+                img.save(buf, format="PNG")
+                result.append(buf.getvalue())
+            return result
+        except Exception:
+            pass
+        return []
+
     def _extract_text_from_receipt_image(raw_bytes: bytes) -> str:
         import io as _io
         import pytesseract  # noqa: PLC0415
@@ -3175,6 +3191,28 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 angle = int(rot_m.group(1))
                 if angle in (90, 180, 270):
                     base = base.rotate(angle, expand=True)
+        except Exception:
+            pass
+
+        # Deskew: correct continuous skew angle (not just 90° steps)
+        # Uses horizontal projection method — rotate by the angle that maximises row variance.
+        try:
+            import numpy as _np_deskew  # noqa: PLC0415
+            arr_d = _np_deskew.array(base)
+            best_angle = 0.0
+            best_var = -1.0
+            for deg in range(-10, 11):  # search ±10°
+                from PIL import Image as _PI  # noqa: PLC0415
+                rotated_arr = _np_deskew.array(
+                    base.rotate(deg, expand=False, fillcolor=255)
+                )
+                row_sums = rotated_arr.sum(axis=1).astype(float)
+                var = float(row_sums.var())
+                if var > best_var:
+                    best_var = var
+                    best_angle = float(deg)
+            if abs(best_angle) >= 1.0:
+                base = base.rotate(best_angle, expand=False, fillcolor=255)
         except Exception:
             pass
 
@@ -3250,6 +3288,26 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     if _is_good_enough(normalized):
                         return normalized
 
+        # Word-level confidence fallback: rebuild text from only high-confidence words
+        try:
+            df = pytesseract.image_to_data(
+                sharpened,
+                lang="por+eng",
+                config="--oem 2 --psm 11",
+                output_type=pytesseract.Output.DATAFRAME,
+            )
+            mask = (df["conf"] >= 30) & df["text"].str.strip().astype(bool)
+            if mask.any():
+                words_df = df.loc[mask, ["line_num", "text"]].copy()
+                wc_lines: list[str] = []
+                for _ln, grp in words_df.groupby("line_num"):
+                    wc_lines.append(" ".join(grp["text"].tolist()))
+                wc_text = _normalize_ocr_text("\n".join(wc_lines))
+                if wc_text:
+                    candidates.append(wc_text)
+        except Exception:
+            pass
+
         return max(candidates, key=_score_ocr_candidate) if candidates else ""
 
     @app.post("/api/finance/cashflow/ocr")
@@ -3273,10 +3331,22 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             # Detect PDF by magic bytes
             if raw_bytes[:4] == b"%PDF":
                 is_pdf = True
-                converted = _pdf_bytes_to_image_bytes(raw_bytes)
-                if converted:
-                    raw_bytes = converted
-                    is_pdf = False  # successfully converted to image
+                all_pages = _pdf_bytes_to_all_images(raw_bytes)
+                if all_pages:
+                    # OCR every page and pick the one with the best extraction score
+                    best_bytes = all_pages[0]
+                    best_score = -1
+                    for page_bytes in all_pages:
+                        try:
+                            page_text = _extract_text_from_receipt_image(page_bytes)
+                            score = _score_ocr_candidate(page_text)
+                            if score > best_score:
+                                best_score = score
+                                best_bytes = page_bytes
+                        except Exception:
+                            pass
+                    raw_bytes = best_bytes
+                    is_pdf = False
                 else:
                     return jsonify({
                         "ok": False,
@@ -3435,6 +3505,51 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if cnae_category:
             field_confidence["category"] = 1.0
 
+        # Duplicate detection
+        duplicate_warning: dict | None = None
+        if amount is not None and entry_date:
+            try:
+                dupes = repo.find_fin_cashflow_duplicates(amount=amount, entry_date=entry_date)
+                if dupes:
+                    duplicate_warning = {
+                        "count": len(dupes),
+                        "ids": [d["id"] for d in dupes[:3]],
+                        "samples": [
+                            {"id": d["id"], "date": d.get("entry_date"), "desc": d.get("description")}
+                            for d in dupes[:2]
+                        ],
+                    }
+            except Exception:
+                pass
+
+        # Budget alert: check if the inferred category is near/over budget this month
+        budget_alert: dict | None = None
+        if category and amount is not None and entry_type == "expense" and entry_date:
+            try:
+                month_str = str(entry_date)[:7]
+                budget = repo.get_fin_cashflow_budget(month_str)
+                limit_val = budget.get(category)
+                if limit_val:
+                    analytics = repo.get_fin_cashflow_analytics(month=month_str)
+                    expense_cats = analytics.get("categories", {}).get("expense", [])
+                    spent = next(
+                        (float(r["amount"]) for r in expense_cats if r["category"] == category),
+                        0.0,
+                    )
+                    would_be = spent + float(amount)
+                    pct = round(would_be / limit_val * 100 if limit_val > 0 else 0)
+                    if pct >= 80:
+                        budget_alert = {
+                            "category": category,
+                            "spent": round(spent, 2),
+                            "would_be": round(would_be, 2),
+                            "limit": round(limit_val, 2),
+                            "pct": pct,
+                            "over": would_be > limit_val,
+                        }
+            except Exception:
+                pass
+
         confidence = 0.45
         if f and raw_text:
             confidence += 0.1
@@ -3462,6 +3577,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "payment_method": payment_method,
             "items": items,
             "suggestion": suggestion,
+            "duplicate_warning": duplicate_warning,
+            "budget_alert": budget_alert,
             "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
         }

@@ -2890,6 +2890,32 @@ class Repository:
                 return int(row["id"]) if row else 0
             return int(cursor.lastrowid or 0)
 
+    def find_fin_cashflow_duplicates(
+        self,
+        amount: float,
+        entry_date: str,
+        tolerance_days: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Return existing cashflow entries that match amount and date ±tolerance_days."""
+        try:
+            from datetime import datetime, timedelta  # noqa: PLC0415
+            dt = datetime.strptime(entry_date, "%Y-%m-%d")
+            date_lo = (dt - timedelta(days=tolerance_days)).strftime("%Y-%m-%d")
+            date_hi = (dt + timedelta(days=tolerance_days)).strftime("%Y-%m-%d")
+        except Exception:
+            return []
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    "SELECT id, entry_date, amount, description, category FROM fin_cashflow_entries"
+                    " WHERE ABS(CAST(amount AS REAL) - ?) < 0.015"
+                    " AND entry_date >= ? AND entry_date <= ?"
+                    " ORDER BY entry_date DESC LIMIT 5"
+                ),
+                (float(amount), date_lo, date_hi),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def list_fin_cashflow_entries(
         self,
         month: str | None = None,
