@@ -2799,21 +2799,28 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 and (_extract_receipt_date(text) is not None or _extract_receipt_merchant(text) != "")
             )
 
-        # Strategy: try variants in order of effectiveness and stop as soon as one is good.
-        # Maximum 3 Tesseract calls total to keep latency low.
-        best_config = "--oem 3 --psm 6"
+        # Strategy: try configs in order of Portuguese language preference.
+        # OEM 2 (legacy) often works better for Portuguese than OEM 3 (neural).
+        # PSM 6 = uniform blocks, PSM 11 = sparse text (good for receipts).
+        configs = (
+            "--oem 2 --psm 11",  # Legacy engine, sparse text (best for receipts)
+            "--oem 2 --psm 6",   # Legacy engine, uniform blocks
+            "--oem 3 --psm 6",   # Neural engine, uniform blocks (fallback)
+        )
         candidates: list[str] = []
 
-        for variant in (sharpened, enlarged, base):
-            try:
-                text = pytesseract.image_to_string(variant, lang="por+eng", config=best_config)
-            except Exception:
-                continue
-            normalized = _normalize_ocr_text(text)
-            if normalized:
-                candidates.append(normalized)
-                if _is_good_enough(normalized):
-                    return normalized
+        # Try best Portuguese configs with best image variant first, return early if good.
+        for config in configs:
+            for variant in (sharpened, enlarged, base):
+                try:
+                    text = pytesseract.image_to_string(variant, lang="por+eng", config=config)
+                except Exception:
+                    continue
+                normalized = _normalize_ocr_text(text)
+                if normalized:
+                    candidates.append(normalized)
+                    if _is_good_enough(normalized):
+                        return normalized
 
         return max(candidates, key=_score_ocr_candidate) if candidates else ""
 
