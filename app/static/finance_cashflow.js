@@ -1000,25 +1000,65 @@ function openReceiptOCRModal() {
         return;
       }
       if (resultEl) resultEl.innerHTML = `
-        <div class="fin-alert fin-alert-info" style="font-size:.85em;">
-          <strong>Extraído:</strong><br>
-          Data: ${escapeHtml(data.date || "não encontrada")}<br>
-          Valor: ${data.amount != null ? formatBRL(data.amount) : "não encontrado"}<br>
-          Estabelecimento: ${escapeHtml(data.merchant || "—")}<br>
-          Categoria: ${escapeHtml(data.category || "—")}<br>
-          Descrição: ${escapeHtml(data.description || "—")}<br>
-          Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}
-          ${data.raw_text ? `<details style="margin-top:6px;"><summary>Texto bruto</summary><pre style="white-space:pre-wrap;font-size:.75em;">${escapeHtml(data.raw_text)}</pre></details>` : ""}
+        <div style="margin-bottom:10px;font-size:.82em;opacity:.7;">
+          📋 Tipo: <strong>${escapeHtml(data.receipt_type || "—")}</strong>
+          ${data.payment_method ? ` &nbsp;·&nbsp; 💳 ${escapeHtml(data.payment_method)}` : ""}
+          ${data.cnpj ? ` &nbsp;·&nbsp; CNPJ: <code>${escapeHtml(data.cnpj)}</code>` : ""}
+          &nbsp;·&nbsp; Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}
         </div>
-        <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="margin-top:10px;">✚ Criar lançamento com estes dados</button>
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Data</label>
+            <input id="fmOcrDate" type="date" value="${escapeHtml(data.date || "")}" />
+          </div>
+          <div class="fin-form-group">
+            <label>Valor (R$)</label>
+            <input id="fmOcrAmount" type="number" step="0.01" min="0" value="${data.amount != null ? data.amount : ""}" placeholder="0,00" />
+          </div>
+        </div>
+        <div class="fin-form-row">
+          <div class="fin-form-group" style="flex:2">
+            <label>Estabelecimento</label>
+            <input id="fmOcrMerchant" type="text" value="${escapeHtml(data.merchant || "")}" placeholder="Nome do estabelecimento" />
+          </div>
+        </div>
+        <div class="fin-form-row">
+          <div class="fin-form-group" style="flex:2">
+            <label>Descrição</label>
+            <input id="fmOcrDesc" type="text" value="${escapeHtml(data.description || "")}" placeholder="Descrição do lançamento" />
+          </div>
+          <div class="fin-form-group">
+            <label>Categoria</label>
+            <input id="fmOcrCat" type="text" value="${escapeHtml(data.category || "")}" placeholder="Categoria" />
+          </div>
+        </div>
+        <div class="fin-form-row">
+          <div class="fin-form-group">
+            <label>Tipo</label>
+            <select id="fmOcrType">
+              <option value="expense"${(data.entry_type||"expense")==="expense"?" selected":""}>Despesa</option>
+              <option value="income"${data.entry_type==="income"?" selected":""}>Receita</option>
+            </select>
+          </div>
+        </div>
+        ${data.items && data.items.length ? `
+        <details style="margin-top:8px;font-size:.82em;">
+          <summary>🛒 Itens (${data.items.length})</summary>
+          <table style="width:100%;border-collapse:collapse;margin-top:4px;">
+            <thead><tr style="opacity:.6"><th style="text-align:left;padding:2px 4px">Qtd</th><th style="text-align:left;padding:2px 4px">Descrição</th><th style="text-align:right;padding:2px 4px">Total</th></tr></thead>
+            <tbody>${data.items.map(it=>`<tr><td style="padding:2px 4px">${it.qty}</td><td style="padding:2px 4px">${escapeHtml(it.description)}</td><td style="text-align:right;padding:2px 4px">${formatBRL(it.total)}</td></tr>`).join("")}</tbody>
+          </table>
+        </details>` : ""}
+        ${data.raw_text ? `<details style="margin-top:6px;font-size:.78em;"><summary>Texto bruto OCR</summary><pre style="white-space:pre-wrap;max-height:120px;overflow:auto;">${escapeHtml(data.raw_text)}</pre></details>` : ""}
+        <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="margin-top:12px;">✚ Criar lançamento com estes dados</button>
       `;
       byId("btnOcrPrefill")?.addEventListener("click", () => {
         openAddCashflowModal({
-          entry_date: data.date || "",
-          amount: data.amount != null ? String(data.amount) : "",
-          description: data.description || "",
-          category: data.category || "",
-          entry_type: data.entry_type || "expense",
+          entry_date: String(byId("fmOcrDate")?.value || data.date || ""),
+          amount: String(byId("fmOcrAmount")?.value ?? (data.amount != null ? data.amount : "")),
+          description: String(byId("fmOcrDesc")?.value || data.description || ""),
+          category: String(byId("fmOcrCat")?.value || data.category || ""),
+          entry_type: String(byId("fmOcrType")?.value || data.entry_type || "expense"),
         });
       });
     } catch (err) {

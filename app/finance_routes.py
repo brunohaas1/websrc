@@ -155,7 +155,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     _cashflow_import_executor = ThreadPoolExecutor(max_workers=2)
     _ocr_cache: dict[str, dict] = {}
     _ocr_cache_lock = Lock()
-    OCR_CACHE_TTL_SECONDS = 10 * 60
+    _ocr_history: list[dict] = []   # last 20 OCR results (in-memory)
+    _ocr_history_lock = Lock()
+    OCR_CACHE_TTL_SECONDS = 60 * 60  # 1 hour (was 10 min)
 
     def _cleanup_cashflow_review_cache() -> None:
         now_ts = time.time()
@@ -2854,6 +2856,135 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             score += 30
         return score
 
+    def _detect_receipt_type(text: str) -> str:
+        """Identify the type of receipt/document from its text."""
+        normalized = (text or "").lower()
+        if re.search(r"nfc-?e|nota fiscal eletr[oô]nica de consumidor|sat fiscal", normalized):
+            return "nfc-e"
+        if re.search(r"nota fiscal eletr[oô]nica|nf-?e|danfe", normalized):
+            return "nf-e"
+        if re.search(r"boleto|linha digit[aá]vel|nosso n[uú]mero", normalized):
+            return "boleto"
+        if re.search(r"\bpix\b|chave pix|recibo pix|comprovante pix", normalized):
+            return "pix"
+        if re.search(r"extrato|saldo anterior|saldo atual|hist[oó]rico de transa", normalized):
+            return "extrato"
+        if re.search(r"cupom fiscal|ecf\b|sat\b", normalized):
+            return "cupom-fiscal"
+        return "recibo"
+
+    def _extract_cnpj(text: str) -> str | None:
+        """Extract first valid CNPJ from text."""
+        for raw in re.findall(r"\d{2}[\.\s]?\d{3}[\.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}", text or ""):
+            digits = re.sub(r"\D", "", raw)
+            if len(digits) == 14:
+                return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:14]}"
+        return None
+
+    def _lookup_cnpj_name(cnpj: str) -> str | None:
+        """Try to fetch company name from ReceitaWS (2 s timeout, fails silently)."""
+        try:
+            import requests as _req  # noqa: PLC0415
+            digits = re.sub(r"\D", "", cnpj)
+            resp = _req.get(
+                f"https://www.receitaws.com.br/v1/cnpj/{digits}",
+                timeout=2,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                name = str(data.get("fantasia") or data.get("nome") or "").strip()
+                return name[:100] if name else None
+        except Exception:
+            pass
+        return None
+
+    def _extract_payment_method(text: str) -> str | None:
+        """Identify payment method from receipt text."""
+        normalized = (text or "").lower()
+        if re.search(r"\bpix\b", normalized):
+            return "PIX"
+        if re.search(r"mastercard|visa|elo\b|hipercard|amex|american express", normalized):
+            # Check if it's credit or debit based on context
+            if re.search(r"cr[eé]dito", normalized):
+                return "Cartão de Crédito"
+            if re.search(r"d[eé]bito", normalized):
+                return "Cartão de Débito"
+            return "Cartão"
+        if re.search(r"cart[aã]o\s+cr[eé]dito|cr[eé]dito", normalized):
+            return "Cartão de Crédito"
+        if re.search(r"cart[aã]o\s+d[eé]bito|d[eé]bito", normalized):
+            return "Cartão de Débito"
+        if re.search(r"dinheiro|esp[eé]cie|troco", normalized):
+            return "Dinheiro"
+        if re.search(r"boleto", normalized):
+            return "Boleto"
+        if re.search(r"\bted\b|\bdoc\b|transfer[eê]ncia banc", normalized):
+            return "TED/DOC"
+        return None
+
+    def _extract_receipt_items(text: str) -> list[dict]:
+        """Extract product line items from receipt text (max 20)."""
+        items: list[dict] = []
+        # Matches: qty  DESCRIPTION  UNIT  TOTAL  e.g. "1 PAO DE ALHO 450G  13,90  13,90"
+        item_re = re.compile(
+            r"^(\d{1,3})\s{1,4}(.{3,40?}?)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s*$"
+        )
+        simple_re = re.compile(
+            r"^(.{4,40}?)\s+([\d.]+,\d{2})\s*$"
+        )
+        skip_prefixes = (
+            "total", "subtotal", "valor", "desconto", "troco", "pago", "taxa",
+            "cnpj", "cpf", "data", "hora", "forma", "pagamento", "obrigado",
+        )
+        for line in (text or "").splitlines():
+            stripped = line.strip()
+            if len(stripped) < 5:
+                continue
+            if stripped.lower().startswith(skip_prefixes):
+                continue
+            # Try qty + desc + unit + total
+            m = item_re.match(stripped)
+            if m:
+                try:
+                    qty = int(m.group(1))
+                    desc = m.group(2).strip()
+                    total = float(m.group(4).replace(".", "").replace(",", "."))
+                    items.append({"qty": qty, "description": desc[:60], "total": round(total, 2)})
+                    if len(items) >= 20:
+                        break
+                    continue
+                except (ValueError, ZeroDivisionError):
+                    pass
+            # Try simple: desc + price
+            m2 = simple_re.match(stripped)
+            if m2:
+                desc = m2.group(1).strip()
+                if re.search(r"[A-Za-záéíóúçã]", desc):  # must have letters
+                    try:
+                        total = float(m2.group(2).replace(".", "").replace(",", "."))
+                        if 0.01 <= total <= 10000:
+                            items.append({"qty": 1, "description": desc[:60], "total": round(total, 2)})
+                            if len(items) >= 20:
+                                break
+                    except ValueError:
+                        pass
+        return items
+
+    def _pdf_bytes_to_image_bytes(pdf_bytes: bytes) -> bytes | None:
+        """Convert first page of a PDF to PNG bytes. Requires pdf2image + poppler."""
+        try:
+            from pdf2image import convert_from_bytes  # noqa: PLC0415
+            import io as _io  # noqa: PLC0415
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1, dpi=200)
+            if images:
+                buf = _io.BytesIO()
+                images[0].save(buf, format="PNG")
+                return buf.getvalue()
+        except Exception:
+            pass
+        return None
+
     def _extract_text_from_receipt_image(raw_bytes: bytes) -> str:
         import io as _io
         import pytesseract  # noqa: PLC0415
@@ -2872,6 +3003,18 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             base = ImageOps.exif_transpose(img).convert("L")
         except Exception as e:
             raise ValueError(f"Falha ao processar imagem: {e}")
+
+        # Auto-correct rotation using Tesseract OSD (best-effort, ignore failures)
+        try:
+            import pytesseract as _pt_rot  # noqa: PLC0415
+            osd = _pt_rot.image_to_osd(base, config="--psm 0 -c min_characters_to_try=5")
+            rot_m = re.search(r"Rotate:\s*(\d+)", osd)
+            if rot_m:
+                angle = int(rot_m.group(1))
+                if angle in (90, 180, 270):
+                    base = base.rotate(angle, expand=True)
+        except Exception:
+            pass
 
         # Cap resolution to max 1800px on the longest side to keep Tesseract fast.
         _MAX_DIM = 1800
@@ -2929,10 +3072,23 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
         raw_bytes = b""
         cache_key = ""
+        is_pdf = False
         if f:
             raw_bytes = f.read(5 * 1024 * 1024)  # max 5 MB
             if len(raw_bytes) < 100 and not manual_text:
                 return jsonify({"ok": False, "error": "Arquivo muito pequeno ou vazio"}), 400
+            # Detect PDF by magic bytes
+            if raw_bytes[:4] == b"%PDF":
+                is_pdf = True
+                converted = _pdf_bytes_to_image_bytes(raw_bytes)
+                if converted:
+                    raw_bytes = converted
+                    is_pdf = False  # successfully converted to image
+                else:
+                    return jsonify({
+                        "ok": False,
+                        "error": "PDF recebido mas pdf2image/poppler não estão instalados no servidor. Use uma imagem JPG/PNG.",
+                    }), 501
             cache_key = hashlib.sha256(raw_bytes).hexdigest()
 
         # Hot-path cache: repeated retries of the same receipt return immediately.
@@ -3042,6 +3198,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         description = sanitize_text(merchant or (lines[1][:100] if len(lines) > 1 else ""), 100)
         category = _infer_cashflow_category_from_text("\n".join(lines[:8]))
         entry_type = _infer_cashflow_entry_type_from_text(raw_text, category)
+        receipt_type = _detect_receipt_type(raw_text)
+        cnpj = _extract_cnpj(raw_text)
+        payment_method = _extract_payment_method(raw_text)
+        items = _extract_receipt_items(raw_text)
+
+        # Optional: look up company name from CNPJ (fast, non-blocking, best-effort)
+        cnpj_name: str | None = None
+        if cnpj and not merchant:
+            cnpj_name = _lookup_cnpj_name(cnpj)
+            if cnpj_name:
+                merchant = cnpj_name
+                description = sanitize_text(merchant, 100)
+
         confidence = 0.45
         if f and raw_text:
             confidence += 0.1
@@ -3063,6 +3232,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "category": category,
             "entry_type": entry_type,
             "confidence": round(min(0.99, confidence), 2),
+            "receipt_type": receipt_type,
+            "cnpj": cnpj,
+            "payment_method": payment_method,
+            "items": items,
             "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
         }
@@ -3074,7 +3247,40 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "payload": payload,
                 }
 
+        # Store in history (last 20 scans, thread-safe)
+        with _ocr_history_lock:
+            _ocr_history.insert(0, {
+                "ts": time.time(),
+                "merchant": merchant,
+                "amount": amount,
+                "date": entry_date,
+                "receipt_type": receipt_type,
+                "confidence": payload["confidence"],
+                "cache_key": cache_key,
+            })
+            del _ocr_history[20:]
+
         return jsonify(payload)
+
+    @app.get("/api/finance/cashflow/ocr/history")
+    @limiter.limit("30/minute")
+    @require_finance_key
+    def finance_cashflow_ocr_history():
+        """Return the last 20 OCR scans (in-memory, resets on server restart)."""
+        with _ocr_history_lock:
+            history = list(_ocr_history)
+        result = [
+            {
+                "ts": row["ts"],
+                "merchant": row.get("merchant"),
+                "amount": row.get("amount"),
+                "date": row.get("date"),
+                "receipt_type": row.get("receipt_type"),
+                "confidence": row.get("confidence"),
+            }
+            for row in history
+        ]
+        return jsonify(result)
 
     @app.get("/api/finance/cashflow/<int:entry_id>/attachments")
     @limiter.limit("30/minute")
