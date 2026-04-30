@@ -390,6 +390,27 @@ CREATE TABLE IF NOT EXISTS fin_audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_audit_logs_created
 ON fin_audit_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS fin_ocr_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_hash TEXT,
+    merchant TEXT,
+    cnpj TEXT,
+    amount REAL,
+    entry_date TEXT,
+    category TEXT,
+    entry_type TEXT,
+    receipt_type TEXT,
+    payment_method TEXT,
+    confidence REAL,
+    raw_text TEXT,
+    payload_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_ocr_scans_created
+ON fin_ocr_scans(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ocr_scans_cnpj
+ON fin_ocr_scans(cnpj, created_at DESC);
 """
 
 POSTGRES_SCHEMA = """

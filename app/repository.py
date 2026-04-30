@@ -3211,6 +3211,77 @@ class Repository:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # ── OCR scans ─────────────────────────────────────────────────────────────
+
+    def add_fin_ocr_scan(self, data: dict[str, Any]) -> int:
+        """Persist an OCR scan result to the database."""
+        import json as _json
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_ocr_scans
+                    (image_hash, merchant, cnpj, amount, entry_date, category,
+                     entry_type, receipt_type, payment_method, confidence, raw_text, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(q, (
+                data.get("image_hash"),
+                data.get("merchant"),
+                data.get("cnpj"),
+                data.get("amount"),
+                data.get("entry_date"),
+                data.get("category"),
+                data.get("entry_type"),
+                data.get("receipt_type"),
+                data.get("payment_method"),
+                data.get("confidence"),
+                str(data.get("raw_text") or "")[:2000],
+                _json.dumps(data.get("payload") or {}),
+            ))
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def list_fin_ocr_scans(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return most recent OCR scans."""
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, image_hash, merchant, cnpj, amount, entry_date,
+                           category, entry_type, receipt_type, payment_method,
+                           confidence, created_at
+                    FROM fin_ocr_scans
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                ),
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_fin_ocr_suggestion_by_cnpj(self, cnpj: str) -> dict[str, Any] | None:
+        """Return the most recent OCR scan that matched this CNPJ (for auto-fill)."""
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql(
+                    """
+                    SELECT merchant, category, entry_type, payment_method
+                    FROM fin_ocr_scans
+                    WHERE cnpj = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                ),
+                (str(cnpj),),
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_fin_cashflow_attachment(self, attachment_id: int) -> dict[str, Any] | None:
         with get_connection(self.database_target) as conn:
             row = conn.execute(

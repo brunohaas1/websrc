@@ -2856,6 +2856,168 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             score += 30
         return score
 
+    # ── OCR PT-BR normalization ────────────────────────────────────────────────
+
+    _OCR_PTBR_FIXES: list[tuple] = [
+        # Common OCR character confusions in Portuguese words
+        (re.compile(r"\b0(?=\d{2,}[./])"), "O"),         # 0CNPJ → O (not actually a word but guards digits)
+        (re.compile(r"(?<=[A-ZÀ-Ú])0(?=[A-ZÀ-Ú])"), "O"),  # ST0RE → STORE
+        (re.compile(r"(?<=[a-zà-ú])0(?=[a-zà-ú])"), "o"),   # st0re → store
+        (re.compile(r"\brn\b"), "m"),                         # rn → m
+        (re.compile(r"(?<=[a-zA-ZÀ-Úà-ú])1(?=[a-zA-ZÀ-Úà-ú])"), "l"),  # va1or → valor
+        (re.compile(r"\bVa1or\b", re.I), "Valor"),
+        (re.compile(r"\bTota1\b", re.I), "Total"),
+        (re.compile(r"\bPague\b", re.I), "Pague"),
+        (re.compile(r"(?<=[A-ZÀ-Úa-zà-ú])II(?=[A-ZÀ-Úa-zà-ú])"), "ll"),  # bIIhete → bilhete
+        (re.compile(r"\bCNPJ\s*/?\s*CPF\b", re.I), "CNPJ/CPF"),  # normalize spacing
+    ]
+
+    def _normalize_ocr_errors_ptbr(text: str) -> str:
+        """Fix typical Tesseract character confusions in PT-BR receipts."""
+        if not text:
+            return text
+        result = text
+        for pattern, replacement in _OCR_PTBR_FIXES:
+            try:
+                result = pattern.sub(replacement, result)
+            except Exception:
+                pass
+        return result
+
+    # ── CNAE fiscal → cashflow category mapping ────────────────────────────────
+
+    _CNAE_CATEGORY_MAP: list[tuple[str, str]] = [
+        # (substring to match in cnae_fiscal_desc lowercase, category)
+        ("aliment", "Alimentação"),
+        ("mercearia", "Alimentação"),
+        ("padaria", "Alimentação"),
+        ("açougue", "Alimentação"),
+        ("restaurante", "Alimentação"),
+        ("lanchonete", "Alimentação"),
+        ("bar e", "Alimentação"),
+        ("bebida", "Alimentação"),
+        ("farmácia", "Saúde"),
+        ("farmacia", "Saúde"),
+        ("drogaria", "Saúde"),
+        ("médico", "Saúde"),
+        ("médica", "Saúde"),
+        ("saúde", "Saúde"),
+        ("hospital", "Saúde"),
+        ("clínica", "Saúde"),
+        ("odontol", "Saúde"),
+        ("laboratório", "Saúde"),
+        ("transporte", "Transporte"),
+        ("logística", "Transporte"),
+        ("frete", "Transporte"),
+        ("taxi", "Transporte"),
+        ("combustível", "Transporte"),
+        ("postos de", "Transporte"),
+        ("oficina mecânica", "Transporte"),
+        ("vestuário", "Vestuário"),
+        ("roupa", "Vestuário"),
+        ("calçado", "Vestuário"),
+        ("moda", "Vestuário"),
+        ("educ", "Educação"),
+        ("escola", "Educação"),
+        ("universidade", "Educação"),
+        ("livro", "Educação"),
+        ("livraria", "Educação"),
+        ("serviços financeiros", "Taxas Bancárias"),
+        ("banco", "Taxas Bancárias"),
+        ("seguros", "Taxas Bancárias"),
+        ("energia elétrica", "Contas"),
+        ("gás", "Contas"),
+        ("água", "Contas"),
+        ("telecomunicações", "Assinaturas"),
+        ("internet", "Assinaturas"),
+        ("telefonia", "Assinaturas"),
+        ("streaming", "Assinaturas"),
+        ("aluguel", "Moradia"),
+        ("condomínio", "Moradia"),
+        ("construção", "Moradia"),
+        ("imobiliária", "Moradia"),
+        ("entretenimento", "Lazer"),
+        ("cinema", "Lazer"),
+        ("teatro", "Lazer"),
+        ("hotel", "Lazer"),
+        ("turismo", "Lazer"),
+    ]
+
+    def _cnae_to_category(cnae_desc: str) -> str | None:
+        """Map a CNAE fiscal description to a cashflow category."""
+        lower = (cnae_desc or "").lower()
+        for keyword, cat in _CNAE_CATEGORY_MAP:
+            if keyword in lower:
+                return cat
+        return None
+
+    def _lookup_cnpj_data(cnpj: str) -> dict | None:
+        """Fetch name + CNAE from ReceitaWS. Returns {name, category} or None."""
+        try:
+            import requests as _req  # noqa: PLC0415
+            digits = re.sub(r"\D", "", cnpj)
+            resp = _req.get(
+                f"https://www.receitaws.com.br/v1/cnpj/{digits}",
+                timeout=2,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                name = str(data.get("fantasia") or data.get("nome") or "").strip()
+                cnae_desc = str(data.get("cnae_fiscal_descricao") or data.get("cnae_fiscal_desc") or "").strip()
+                return {
+                    "name": name[:100] if name else None,
+                    "category": _cnae_to_category(cnae_desc),
+                    "cnae": cnae_desc[:120] if cnae_desc else None,
+                }
+        except Exception:
+            pass
+        return None
+
+    # ── Per-field confidence ───────────────────────────────────────────────────
+
+    def _compute_field_confidence(
+        raw_text: str,
+        date: str | None,
+        amount: float | None,
+        merchant: str | None,
+        category: str | None,
+    ) -> dict[str, float]:
+        """
+        Return a confidence score (0.0–1.0) for each extracted field.
+        High = extracted cleanly, Low = guessed / missing.
+        """
+        fc: dict[str, float] = {}
+        # Date: 1.0 if explicit DD/MM/YYYY match, 0.5 if month-name match, 0.0 if absent
+        if date is None:
+            fc["date"] = 0.0
+        elif re.search(r"\d{2}/\d{2}/\d{4}", raw_text or ""):
+            fc["date"] = 1.0
+        else:
+            fc["date"] = 0.6
+        # Amount: 1.0 if VALOR PAGO / TOTAL label present, 0.7 if generic R$ match, 0.0 absent
+        if amount is None:
+            fc["amount"] = 0.0
+        elif re.search(r"(?:VALOR\s+PAGO|TOTAL\s+PAGO)", raw_text or "", re.I):
+            fc["amount"] = 1.0
+        elif re.search(r"\bTOTAL\b", raw_text or "", re.I):
+            fc["amount"] = 0.85
+        else:
+            fc["amount"] = 0.6
+        # Merchant: 1.0 if ≥2 words, no noise prefixes, 0.5 if single word, 0.0 if absent
+        if not merchant:
+            fc["merchant"] = 0.0
+        elif len(merchant.split()) >= 2:
+            fc["merchant"] = 0.9
+        else:
+            fc["merchant"] = 0.5
+        # Category: 1.0 if matched via CNAE, 0.7 keyword match, 0.0 if None
+        if not category:
+            fc["category"] = 0.0
+        else:
+            fc["category"] = 0.7  # will be overridden to 1.0 by caller if CNAE used
+        return fc
+
     def _detect_receipt_type(text: str) -> str:
         """Identify the type of receipt/document from its text."""
         normalized = (text or "").lower()
@@ -3026,7 +3188,37 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             scale = _MAX_DIM / max(w, h)
             base = base.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        sharpened = ImageOps.autocontrast(base).filter(ImageFilter.SHARPEN)
+        # Otsu binarization: improves contrast on receipts with uneven lighting
+        try:
+            import numpy as _np  # noqa: PLC0415
+            arr = _np.array(base)
+            # Otsu threshold
+            hist, bins = _np.histogram(arr.ravel(), bins=256, range=(0, 256))
+            total = arr.size
+            sum_total = float(_np.dot(_np.arange(256), hist))
+            sum_bg = 0.0
+            weight_bg = 0
+            max_var = 0.0
+            threshold = 128
+            for i in range(256):
+                weight_bg += int(hist[i])
+                if weight_bg == 0:
+                    continue
+                weight_fg = total - weight_bg
+                if weight_fg == 0:
+                    break
+                sum_bg += float(i * hist[i])
+                mean_bg = sum_bg / weight_bg
+                mean_fg = (sum_total - sum_bg) / weight_fg
+                var = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
+                if var > max_var:
+                    max_var = var
+                    threshold = i
+            binarized = base.point(lambda p: 255 if p >= threshold else 0)
+        except Exception:
+            binarized = base  # numpy unavailable or error → skip
+
+        sharpened = ImageOps.autocontrast(binarized).filter(ImageFilter.SHARPEN)
         enlarged = base  # alias kept for the loop below
 
         def _is_good_enough(text: str) -> bool:
@@ -3067,6 +3259,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         """OCR de comprovante: imagem → campos pré-preenchidos para lançamento."""
         f = request.files.get("file")
         manual_text = _sanitize_ocr_manual_text(str(request.form.get("manual_text", "")), 2000)
+        force_reanalyze = str(request.form.get("force", "")).lower() in ("1", "true", "yes")
         if not f and not manual_text:
             return jsonify({"ok": False, "error": "Envie arquivo no campo 'file' ou texto em 'manual_text'"}), 400
 
@@ -3092,7 +3285,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             cache_key = hashlib.sha256(raw_bytes).hexdigest()
 
         # Hot-path cache: repeated retries of the same receipt return immediately.
-        if cache_key:
+        if cache_key and not force_reanalyze:
             _cleanup_ocr_cache()
             with _ocr_cache_lock:
                 cached_row = _ocr_cache.get(cache_key)
@@ -3188,7 +3381,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     }), 422
                 raw_text = manual_text
 
-        raw_text = _normalize_ocr_text(raw_text)
+        raw_text = _normalize_ocr_errors_ptbr(_normalize_ocr_text(raw_text))
 
         entry_date = _extract_receipt_date(raw_text)
         amount = _extract_receipt_amount(raw_text)
@@ -3203,13 +3396,44 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         payment_method = _extract_payment_method(raw_text)
         items = _extract_receipt_items(raw_text)
 
-        # Optional: look up company name from CNPJ (fast, non-blocking, best-effort)
-        cnpj_name: str | None = None
-        if cnpj and not merchant:
-            cnpj_name = _lookup_cnpj_name(cnpj)
-            if cnpj_name:
-                merchant = cnpj_name
-                description = sanitize_text(merchant, 100)
+        # CNPJ lookup: get company name + CNAE-based category
+        cnpj_data: dict | None = None
+        cnae_category: str | None = None
+        if cnpj:
+            cnpj_data = _lookup_cnpj_data(cnpj)
+            if cnpj_data:
+                if not merchant and cnpj_data.get("name"):
+                    merchant = cnpj_data["name"]
+                    description = sanitize_text(merchant, 100)
+                if cnpj_data.get("category"):
+                    cnae_category = cnpj_data["category"]
+                    category = cnae_category  # CNAE overrides keyword inference
+
+        # Suggestion from previous scans with same CNPJ
+        suggestion: dict | None = None
+        if cnpj:
+            try:
+                prev = repo.get_fin_ocr_suggestion_by_cnpj(cnpj)
+                if prev:
+                    suggestion = {
+                        "merchant": prev.get("merchant"),
+                        "category": prev.get("category"),
+                        "entry_type": prev.get("entry_type"),
+                        "payment_method": prev.get("payment_method"),
+                    }
+                    # Only apply suggestion for fields not already extracted
+                    if not merchant and suggestion.get("merchant"):
+                        merchant = suggestion["merchant"]
+                        description = sanitize_text(merchant, 100)
+                    if not category and suggestion.get("category"):
+                        category = suggestion["category"]
+            except Exception:
+                pass
+
+        # Per-field confidence
+        field_confidence = _compute_field_confidence(raw_text, entry_date, amount, merchant, category)
+        if cnae_category:
+            field_confidence["category"] = 1.0
 
         confidence = 0.45
         if f and raw_text:
@@ -3232,10 +3456,12 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "category": category,
             "entry_type": entry_type,
             "confidence": round(min(0.99, confidence), 2),
+            "field_confidence": field_confidence,
             "receipt_type": receipt_type,
             "cnpj": cnpj,
             "payment_method": payment_method,
             "items": items,
+            "suggestion": suggestion,
             "fallback_used": "manual_text" if manual_text and not f else None,
             "raw_text": raw_text[:1000],
         }
@@ -3247,7 +3473,26 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     "payload": payload,
                 }
 
-        # Store in history (last 20 scans, thread-safe)
+        # Persist to DB (best-effort, non-blocking)
+        try:
+            repo.add_fin_ocr_scan({
+                "image_hash": cache_key or None,
+                "merchant": merchant,
+                "cnpj": cnpj,
+                "amount": amount,
+                "entry_date": entry_date,
+                "category": category,
+                "entry_type": entry_type,
+                "receipt_type": receipt_type,
+                "payment_method": payment_method,
+                "confidence": payload["confidence"],
+                "raw_text": raw_text[:2000],
+                "payload": {k: v for k, v in payload.items() if k not in ("raw_text", "items")},
+            })
+        except Exception:
+            pass
+
+        # Also update in-memory history (for quick access without DB query)
         with _ocr_history_lock:
             _ocr_history.insert(0, {
                 "ts": time.time(),
@@ -3266,21 +3511,25 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     @require_finance_key
     def finance_cashflow_ocr_history():
-        """Return the last 20 OCR scans (in-memory, resets on server restart)."""
-        with _ocr_history_lock:
-            history = list(_ocr_history)
-        result = [
-            {
-                "ts": row["ts"],
-                "merchant": row.get("merchant"),
-                "amount": row.get("amount"),
-                "date": row.get("date"),
-                "receipt_type": row.get("receipt_type"),
-                "confidence": row.get("confidence"),
-            }
-            for row in history
-        ]
-        return jsonify(result)
+        """Return the last 50 OCR scans (persisted to DB)."""
+        try:
+            rows = repo.list_fin_ocr_scans(limit=50)
+            return jsonify(rows)
+        except Exception:
+            # Fallback to in-memory if DB not yet migrated
+            with _ocr_history_lock:
+                history = list(_ocr_history)
+            return jsonify([
+                {
+                    "ts": row["ts"],
+                    "merchant": row.get("merchant"),
+                    "amount": row.get("amount"),
+                    "date": row.get("date"),
+                    "receipt_type": row.get("receipt_type"),
+                    "confidence": row.get("confidence"),
+                }
+                for row in history
+            ])
 
     @app.get("/api/finance/cashflow/<int:entry_id>/attachments")
     @limiter.limit("30/minute")

@@ -963,18 +963,96 @@ function openReceiptOCRModal() {
       Se OCR não estiver disponível, você pode colar o texto manualmente.
     </div>
     <div class="fin-form-group">
-      <label>Imagem do comprovante (JPG, PNG, até 5 MB)</label>
-      <input id="fmOcrFile" type="file" accept="image/*" />
+      <label>Imagem do comprovante (JPG, PNG, PDF até 5 MB)</label>
+      <input id="fmOcrFile" type="file" accept="image/*,.pdf" />
+    </div>
+    <div id="fmOcrPreview" style="display:none;margin:6px 0 10px;text-align:center;">
+      <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:4px;">
+        <button id="btnRotLeft"  type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° esquerda">↺</button>
+        <img id="fmOcrPreviewImg" style="max-height:140px;max-width:100%;border-radius:6px;border:1px solid #ccc;" alt="preview" />
+        <button id="btnRotRight" type="button" style="padding:2px 8px;font-size:1.1em;" title="Girar 90° direita">↻</button>
+      </div>
+      <span id="fmOcrPreviewLabel" style="font-size:.75em;opacity:.6;"></span>
     </div>
     <div class="fin-form-group">
       <label>Texto manual (fallback opcional)</label>
-      <textarea id="fmOcrManualText" rows="4" placeholder="Cole aqui o texto do comprovante caso o OCR não esteja disponível."></textarea>
+      <textarea id="fmOcrManualText" rows="3" placeholder="Cole aqui o texto do comprovante caso o OCR não esteja disponível."></textarea>
     </div>
     <button id="btnDoOcr" class="fin-form-submit" type="button">🔍 Analisar</button>
     <div id="fmOcrResult" style="margin-top:12px"></div>
   `);
 
-  byId("btnDoOcr")?.addEventListener("click", async () => {
+  // ── Image preview + rotation ────────────────────────────────────────────────
+  let _ocrRotation = 0;
+  let _ocrOrigFile = null;
+
+  function _renderPreview(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    _ocrOrigFile = file;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = byId("fmOcrPreviewImg");
+      const preview = byId("fmOcrPreview");
+      const label = byId("fmOcrPreviewLabel");
+      if (!img || !preview) return;
+      img.src = e.target.result;
+      img.style.transform = `rotate(${_ocrRotation}deg)`;
+      if (preview) preview.style.display = "";
+      if (label) label.textContent = `${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  byId("fmOcrFile")?.addEventListener("change", (e) => {
+    _ocrRotation = 0;
+    _renderPreview(e.target.files?.[0]);
+  });
+
+  byId("btnRotLeft")?.addEventListener("click", () => {
+    _ocrRotation = (_ocrRotation - 90 + 360) % 360;
+    const img = byId("fmOcrPreviewImg");
+    if (img) img.style.transform = `rotate(${_ocrRotation}deg)`;
+  });
+  byId("btnRotRight")?.addEventListener("click", () => {
+    _ocrRotation = (_ocrRotation + 90) % 360;
+    const img = byId("fmOcrPreviewImg");
+    if (img) img.style.transform = `rotate(${_ocrRotation}deg)`;
+  });
+
+  // ── Helper: apply canvas rotation to file before sending ──────────────────
+  async function _getRotatedBlob(file, degrees) {
+    if (!degrees || degrees % 360 === 0) return file;
+    return new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const swap = degrees === 90 || degrees === 270;
+        const canvas = document.createElement("canvas");
+        canvas.width  = swap ? img.height : img.width;
+        canvas.height = swap ? img.width  : img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((degrees * Math.PI) / 180);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+        canvas.toBlob((blob) => resolve(blob || file), file.type || "image/jpeg", 0.92);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
+
+  // ── Confidence badge ───────────────────────────────────────────────────────
+  function _confBadge(fc, key) {
+    const v = fc?.[key];
+    if (v == null) return "";
+    if (v >= 0.85) return " <span title='Alta confiança' style='color:var(--fin-up,green);font-size:.8em;'>✓</span>";
+    if (v >= 0.5)  return " <span title='Confiança média — verifique' style='color:orange;font-size:.8em;'>⚠️</span>";
+    return " <span title='Baixa confiança — preencha manualmente' style='color:var(--fin-down,red);font-size:.8em;'>⚠️</span>";
+  }
+
+  // ── Main analyze function (shared between first-run and force re-analyze) ──
+  async function _runOcr(force = false) {
     const fileEl = byId("fmOcrFile");
     const manualText = String(byId("fmOcrManualText")?.value || "").trim();
     if (!fileEl?.files?.length && !manualText) {
@@ -984,8 +1062,12 @@ function openReceiptOCRModal() {
     const btnDoOcr = byId("btnDoOcr");
     if (btnDoOcr) { btnDoOcr.disabled = true; btnDoOcr.textContent = "Analisando…"; }
     const formData = new FormData();
-    if (fileEl?.files?.length) formData.append("file", fileEl.files[0]);
+    if (fileEl?.files?.length) {
+      const rotated = await _getRotatedBlob(fileEl.files[0], _ocrRotation);
+      formData.append("file", rotated, fileEl.files[0].name);
+    }
     if (manualText) formData.append("manual_text", manualText);
+    if (force) formData.append("force", "true");
     const _ocrAbort = new AbortController();
     const _ocrTimer = setTimeout(() => _ocrAbort.abort(), 45_000);
     try {
@@ -999,26 +1081,29 @@ function openReceiptOCRModal() {
         if (resultEl) resultEl.innerHTML = `<span class="fin-down">${escapeHtml(msg)}</span>`;
         return;
       }
+      const fc = data.field_confidence || {};
+      const fromCache = data.from_cache ? ` <span style="opacity:.55;font-size:.75em;">(cache)</span>` : "";
       if (resultEl) resultEl.innerHTML = `
         <div style="margin-bottom:10px;font-size:.82em;opacity:.7;">
           📋 Tipo: <strong>${escapeHtml(data.receipt_type || "—")}</strong>
           ${data.payment_method ? ` &nbsp;·&nbsp; 💳 ${escapeHtml(data.payment_method)}` : ""}
           ${data.cnpj ? ` &nbsp;·&nbsp; CNPJ: <code>${escapeHtml(data.cnpj)}</code>` : ""}
-          &nbsp;·&nbsp; Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}
+          &nbsp;·&nbsp; Confiança: ${data.confidence != null ? `${Math.round(Number(data.confidence) * 100)}%` : "—"}${fromCache}
         </div>
+        ${data.suggestion ? `<div style="font-size:.8em;background:var(--fin-bg2,#f5f5f5);padding:4px 8px;border-radius:4px;margin-bottom:8px;">💡 Histórico: <strong>${escapeHtml(data.suggestion.merchant||"")}</strong> → ${escapeHtml(data.suggestion.category||"")} (sugestão aplicada)</div>` : ""}
         <div class="fin-form-row">
           <div class="fin-form-group">
-            <label>Data</label>
+            <label>Data${_confBadge(fc,"date")}</label>
             <input id="fmOcrDate" type="date" value="${escapeHtml(data.date || "")}" />
           </div>
           <div class="fin-form-group">
-            <label>Valor (R$)</label>
+            <label>Valor (R$)${_confBadge(fc,"amount")}</label>
             <input id="fmOcrAmount" type="number" step="0.01" min="0" value="${data.amount != null ? data.amount : ""}" placeholder="0,00" />
           </div>
         </div>
         <div class="fin-form-row">
           <div class="fin-form-group" style="flex:2">
-            <label>Estabelecimento</label>
+            <label>Estabelecimento${_confBadge(fc,"merchant")}</label>
             <input id="fmOcrMerchant" type="text" value="${escapeHtml(data.merchant || "")}" placeholder="Nome do estabelecimento" />
           </div>
         </div>
@@ -1028,7 +1113,7 @@ function openReceiptOCRModal() {
             <input id="fmOcrDesc" type="text" value="${escapeHtml(data.description || "")}" placeholder="Descrição do lançamento" />
           </div>
           <div class="fin-form-group">
-            <label>Categoria</label>
+            <label>Categoria${_confBadge(fc,"category")}</label>
             <input id="fmOcrCat" type="text" value="${escapeHtml(data.category || "")}" placeholder="Categoria" />
           </div>
         </div>
@@ -1050,7 +1135,10 @@ function openReceiptOCRModal() {
           </table>
         </details>` : ""}
         ${data.raw_text ? `<details style="margin-top:6px;font-size:.78em;"><summary>Texto bruto OCR</summary><pre style="white-space:pre-wrap;max-height:120px;overflow:auto;">${escapeHtml(data.raw_text)}</pre></details>` : ""}
-        <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="margin-top:12px;">✚ Criar lançamento com estes dados</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+          <button id="btnOcrPrefill" class="fin-form-submit" type="button" style="flex:1;">✚ Criar lançamento</button>
+          <button id="btnOcrForce"   class="fin-form-submit" type="button" style="flex:0;background:var(--fin-bg2,#eee);color:inherit;">🔄 Reanalisar</button>
+        </div>
       `;
       byId("btnOcrPrefill")?.addEventListener("click", () => {
         openAddCashflowModal({
@@ -1061,6 +1149,7 @@ function openReceiptOCRModal() {
           entry_type: String(byId("fmOcrType")?.value || data.entry_type || "expense"),
         });
       });
+      byId("btnOcrForce")?.addEventListener("click", () => _runOcr(true));
     } catch (err) {
       if (err && err.name === "AbortError") {
         showToast("Análise demorou demais (>45s). Tente uma imagem menor ou use o texto manual.");
@@ -1071,7 +1160,9 @@ function openReceiptOCRModal() {
       clearTimeout(_ocrTimer);
       if (btnDoOcr) { btnDoOcr.disabled = false; btnDoOcr.textContent = "🔍 Analisar"; }
     }
-  });
+  }
+
+  byId("btnDoOcr")?.addEventListener("click", () => _runOcr(false));
 }
 
 function openCashflowScenarioModal() {
