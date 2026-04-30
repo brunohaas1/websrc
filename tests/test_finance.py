@@ -2176,4 +2176,318 @@ class TestFinanceObservability:
         assert quota["remaining"] == 0
 
 
+# ══════════════════════════════════════════════════════════
+#          CREDIT CARDS
+# ══════════════════════════════════════════════════════════
+
+
+class TestCreditCards:
+    def test_list_empty(self, client):
+        resp = client.get("/api/finance/credit-cards")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+    def test_add_and_list(self, client):
+        resp = jpost(client, "/api/finance/credit-cards", {
+            "name": "Nubank",
+            "limit_amount": 5000,
+            "closing_day": 15,
+            "due_day": 22,
+        })
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["ok"] is True
+        card_id = data["id"]
+
+        cards = client.get("/api/finance/credit-cards").get_json()
+        assert any(c["id"] == card_id and c["name"] == "Nubank" for c in cards)
+
+    def test_add_validates_required_fields(self, client):
+        resp = jpost(client, "/api/finance/credit-cards", {"name": ""})
+        assert resp.status_code == 400
+
+    def test_update_card(self, client):
+        create = jpost(client, "/api/finance/credit-cards", {
+            "name": "Inter",
+            "limit_amount": 3000,
+            "closing_day": 10,
+            "due_day": 17,
+        })
+        card_id = create.get_json()["id"]
+
+        upd = jput(client, f"/api/finance/credit-cards/{card_id}", {
+            "limit_amount": 6000,
+            "due_day": 20,
+        })
+        assert upd.status_code == 200
+
+        cards = client.get("/api/finance/credit-cards").get_json()
+        row = next(c for c in cards if c["id"] == card_id)
+        assert row["limit_amount"] == pytest.approx(6000)
+        assert row["due_day"] == 20
+
+    def test_delete_card(self, client):
+        create = jpost(client, "/api/finance/credit-cards", {
+            "name": "C6 Bank",
+            "limit_amount": 2000,
+            "closing_day": 5,
+            "due_day": 12,
+        })
+        card_id = create.get_json()["id"]
+
+        dele = client.delete(f"/api/finance/credit-cards/{card_id}")
+        assert dele.status_code == 200
+
+        cards = client.get("/api/finance/credit-cards").get_json()
+        assert all(c["id"] != card_id for c in cards)
+
+    def test_update_nonexistent_returns_404(self, client):
+        resp = jput(client, "/api/finance/credit-cards/99999", {"limit": 1000})
+        assert resp.status_code == 404
+
+    def test_delete_nonexistent_returns_404(self, client):
+        resp = client.delete("/api/finance/credit-cards/99999")
+        assert resp.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════
+#          INSTALLMENTS
+# ══════════════════════════════════════════════════════════
+
+
+class TestInstallments:
+    def test_creates_n_entries(self, client):
+        resp = jpost(client, "/api/finance/cashflow/installments", {
+            "description": "Notebook parcelado",
+            "category": "Tecnologia",
+            "total_amount": 3600,
+            "installments": 12,
+            "first_date": "2026-01-10",
+            "entry_type": "expense",
+        })
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["installments"] == 12
+        group_id = data["group_id"]
+        assert group_id
+
+        entries = client.get(
+            f"/api/finance/cashflow/installments/{group_id}"
+        ).get_json()
+        assert len(entries) == 12
+
+    def test_amounts_sum_to_total(self, client):
+        resp = jpost(client, "/api/finance/cashflow/installments", {
+            "description": "Parcelado soma",
+            "category": "Geral",
+            "total_amount": 1000,
+            "installments": 3,
+            "first_date": "2026-02-01",
+            "entry_type": "expense",
+        })
+        group_id = resp.get_json()["group_id"]
+        entries = client.get(
+            f"/api/finance/cashflow/installments/{group_id}"
+        ).get_json()
+        total = sum(e["amount"] for e in entries)
+        assert total == pytest.approx(1000, abs=0.02)
+
+    def test_dates_advance_monthly(self, client):
+        resp = jpost(client, "/api/finance/cashflow/installments", {
+            "description": "Datas mensais",
+            "category": "Geral",
+            "total_amount": 600,
+            "installments": 3,
+            "first_date": "2026-03-05",
+            "entry_type": "expense",
+        })
+        group_id = resp.get_json()["group_id"]
+        entries = sorted(
+            client.get(f"/api/finance/cashflow/installments/{group_id}").get_json(),
+            key=lambda e: e["entry_date"],
+        )
+        assert entries[0]["entry_date"].startswith("2026-03")
+        assert entries[1]["entry_date"].startswith("2026-04")
+        assert entries[2]["entry_date"].startswith("2026-05")
+
+    def test_validates_missing_fields(self, client):
+        # total_amount <= 0 should be rejected
+        resp = jpost(client, "/api/finance/cashflow/installments", {
+            "total_amount": 0,
+            "installments": 3,
+            "first_date": "2026-03-01",
+            "entry_type": "expense",
+        })
+        assert resp.status_code == 400
+
+    def test_list_unknown_group_returns_empty(self, client):
+        resp = client.get("/api/finance/cashflow/installments/nonexistent-group-id")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+
+# ══════════════════════════════════════════════════════════
+#          GOAL DEPOSIT
+# ══════════════════════════════════════════════════════════
+
+
+class TestGoalDeposit:
+    def _create_goal(self, client, current=1000):
+        resp = jpost(client, "/api/finance/goals", {
+            "name": "Meta depósito",
+            "target_amount": 10000,
+            "current_amount": current,
+            "category": "savings",
+        })
+        assert resp.status_code == 201
+        return resp.get_json()["id"]
+
+    def test_deposit_increases_current_amount(self, client):
+        goal_id = self._create_goal(client, current=1000)
+        resp = jpost(client, f"/api/finance/goals/{goal_id}/deposit", {
+            "amount": 500,
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["current_amount"] == pytest.approx(1500)
+
+    def test_multiple_deposits_accumulate(self, client):
+        goal_id = self._create_goal(client, current=0)
+        for _ in range(3):
+            jpost(client, f"/api/finance/goals/{goal_id}/deposit", {"amount": 200})
+        goals = client.get("/api/finance/goals").get_json()
+        row = next(g for g in goals if g["id"] == goal_id)
+        assert row["current_amount"] == pytest.approx(600)
+
+    def test_deposit_requires_positive_amount(self, client):
+        goal_id = self._create_goal(client)
+        resp = jpost(client, f"/api/finance/goals/{goal_id}/deposit", {"amount": -100})
+        assert resp.status_code == 400
+
+    def test_deposit_requires_amount_field(self, client):
+        goal_id = self._create_goal(client)
+        resp = jpost(client, f"/api/finance/goals/{goal_id}/deposit", {})
+        assert resp.status_code == 400
+
+    def test_deposit_nonexistent_goal_returns_404(self, client):
+        resp = jpost(client, "/api/finance/goals/99999/deposit", {"amount": 100})
+        assert resp.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════
+#          SPLIT CASHFLOW
+# ══════════════════════════════════════════════════════════
+
+
+class TestSplitCashflow:
+    def _create_entry(self, client, amount=900):
+        resp = jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": amount,
+            "category": "Geral",
+            "description": "Entrada para split",
+            "entry_date": "2026-04-15",
+        })
+        assert resp.status_code == 201
+        return resp.get_json()["id"]
+
+    def test_split_creates_parts_and_removes_original(self, client):
+        entry_id = self._create_entry(client, amount=900)
+        resp = jpost(client, f"/api/finance/cashflow/{entry_id}/split", {
+            "parts": [
+                {"description": "Parte A", "amount": 400, "category": "Alimentação"},
+                {"description": "Parte B", "amount": 300, "category": "Lazer"},
+                {"description": "Parte C", "amount": 200, "category": "Transporte"},
+            ],
+        })
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert len(data["created_ids"]) == 3
+
+        # original must be gone
+        all_entries = client.get("/api/finance/cashflow?month=2026-04").get_json()
+        assert all(e["id"] != entry_id for e in all_entries)
+
+    def test_split_validates_sum_matches_original(self, client):
+        entry_id = self._create_entry(client, amount=900)
+        resp = jpost(client, f"/api/finance/cashflow/{entry_id}/split", {
+            "parts": [
+                {"description": "Parte A", "amount": 400, "category": "Alimentação"},
+                {"description": "Parte B", "amount": 200, "category": "Lazer"},
+            ],
+        })
+        # 400 + 200 = 600 ≠ 900
+        assert resp.status_code == 400
+
+    def test_split_requires_at_least_two_parts(self, client):
+        entry_id = self._create_entry(client, amount=900)
+        resp = jpost(client, f"/api/finance/cashflow/{entry_id}/split", {
+            "parts": [{"description": "Só um", "amount": 900, "category": "Geral"}],
+        })
+        assert resp.status_code == 400
+
+    def test_split_nonexistent_entry_returns_404(self, client):
+        resp = jpost(client, "/api/finance/cashflow/99999/split", {
+            "parts": [
+                {"description": "A", "amount": 50, "category": "X"},
+                {"description": "B", "amount": 50, "category": "Y"},
+            ],
+        })
+        assert resp.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════
+#          MONTHLY COMPARISON
+# ══════════════════════════════════════════════════════════
+
+
+class TestMonthlyComparison:
+    def test_returns_list_structure(self, client):
+        resp = client.get("/api/finance/cashflow/monthly-comparison")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert "data" in payload
+        assert isinstance(payload["data"], list)
+
+    def test_aggregates_income_and_expense_by_month(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "income",
+            "amount": 4000,
+            "category": "Salário",
+            "entry_date": "2026-04-01",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 1500,
+            "category": "Aluguel",
+            "entry_date": "2026-04-10",
+        })
+
+        resp = client.get("/api/finance/cashflow/monthly-comparison")
+        assert resp.status_code == 200
+        rows = resp.get_json()["data"]
+        apr = next((r for r in rows if r.get("month", "").startswith("2026-04")), None)
+        assert apr is not None
+        assert apr["income"] == pytest.approx(4000)
+        assert apr["expense"] == pytest.approx(1500)
+        assert apr["balance"] == pytest.approx(2500)
+
+    def test_each_row_has_required_keys(self, client):
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 200,
+            "category": "Teste",
+            "entry_date": "2026-03-20",
+        })
+        rows = client.get("/api/finance/cashflow/monthly-comparison").get_json()["data"]
+        for row in rows:
+            assert "month" in row
+            assert "income" in row
+            assert "expense" in row
+            assert "balance" in row
+
+
 

@@ -1520,14 +1520,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if not goal:
             return jsonify({"error": "Meta não encontrada"}), 404
         body = request.get_json(silent=True) or {}
+        if "amount" not in body:
+            return jsonify({"error": "amount obrigatório"}), 400
         try:
-            amount = float(body.get("amount", 0))
+            amount = float(body["amount"])
         except (TypeError, ValueError):
             return jsonify({"error": "amount inválido"}), 400
-        if not _is_finite_number(amount):
-            return jsonify({"error": "amount inválido"}), 400
+        if not _is_finite_number(amount) or amount <= 0:
+            return jsonify({"error": "amount deve ser > 0"}), 400
         current = float(goal.get("current_amount") or 0)
-        new_current = max(0.0, current + amount)
+        new_current = current + amount
         repo.update_fin_goal(goal_id, {"current_amount": round(new_current, 2)})
         _invalidate_cache_prefixes("finance:audit:")
         return jsonify({
