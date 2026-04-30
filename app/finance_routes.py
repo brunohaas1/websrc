@@ -2309,24 +2309,69 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 return rule["category"]
 
         keyword_map = {
-            "mercado": "Alimentação",
-            "supermercado": "Alimentação",
-            "restaurante": "Alimentação",
-            "ifood": "Alimentação",
-            "uber": "Transporte",
-            "99": "Transporte",
-            "posto": "Transporte",
-            "combust": "Transporte",
-            "farmacia": "Saúde",
-            "drogaria": "Saúde",
-            "netflix": "Assinaturas",
-            "spotify": "Assinaturas",
-            "internet": "Contas",
-            "energia": "Contas",
-            "luz": "Contas",
-            "agua": "Contas",
-            "aluguel": "Moradia",
-            "condominio": "Moradia",
+            # Alimentação
+            "mercado": "Alimentação", "supermercado": "Alimentação",
+            "minimercado": "Alimentação", "hortifruti": "Alimentação",
+            "padaria": "Alimentação", "panificadora": "Alimentação",
+            "acougue": "Alimentação", "açougue": "Alimentação",
+            "restaurante": "Alimentação", "lanchonete": "Alimentação",
+            "pizzaria": "Alimentação", "hamburger": "Alimentação",
+            "ifood": "Alimentação", "rappi": "Alimentação",
+            "cereal": "Alimentação", "cereais": "Alimentação",
+            "aliment": "Alimentação", "distribuidora": "Alimentação",
+            "bebida": "Alimentação", "sorveteria": "Alimentação",
+            # Transporte
+            "uber": "Transporte", "99app": "Transporte",
+            "posto": "Transporte", "combustivel": "Transporte",
+            "combustível": "Transporte", "gasolina": "Transporte",
+            "etanol": "Transporte", "diesel": "Transporte",
+            "estacionamento": "Transporte", "pedagio": "Transporte",
+            "pedágio": "Transporte", "onibus": "Transporte",
+            "metro": "Transporte", "metrô": "Transporte",
+            "passagem": "Transporte",
+            # Saúde
+            "farmacia": "Saúde", "farmácia": "Saúde",
+            "drogaria": "Saúde", "drogasil": "Saúde",
+            "ultrafarma": "Saúde", "panvel": "Saúde",
+            "hospital": "Saúde", "clinica": "Saúde",
+            "clínica": "Saúde", "laboratorio": "Saúde",
+            "laboratório": "Saúde", "medico": "Saúde",
+            "médico": "Saúde", "dentista": "Saúde",
+            "odonto": "Saúde", "plano saude": "Saúde",
+            # Assinaturas
+            "netflix": "Assinaturas", "spotify": "Assinaturas",
+            "amazon prime": "Assinaturas", "disney": "Assinaturas",
+            "hbo": "Assinaturas", "globoplay": "Assinaturas",
+            "youtube": "Assinaturas", "apple": "Assinaturas",
+            # Contas
+            "internet": "Contas", "telefone": "Contas",
+            "celular": "Contas", "energia": "Contas",
+            "eletricidade": "Contas", "ceee": "Contas",
+            "corsan": "Contas", "sabesp": "Contas",
+            "saneamento": "Contas", "agua": "Contas",
+            "água": "Contas", "gas": "Contas",
+            "gás": "Contas", "luz": "Contas",
+            "copel": "Contas", "cemig": "Contas",
+            # Moradia
+            "aluguel": "Moradia", "condominio": "Moradia",
+            "condomínio": "Moradia", "imobiliaria": "Moradia",
+            "iptu": "Moradia", "reforma": "Moradia",
+            # Vestuário
+            "roupa": "Vestuário", "calçado": "Vestuário",
+            "calcado": "Vestuário", "sapato": "Vestuário",
+            "moda": "Vestuário", "renner": "Vestuário",
+            "hering": "Vestuário", "zara": "Vestuário",
+            # Educação
+            "escola": "Educação", "faculdade": "Educação",
+            "universidade": "Educação", "curso": "Educação",
+            "livraria": "Educação", "livro": "Educação",
+            # Lazer
+            "cinema": "Lazer", "teatro": "Lazer",
+            "parque": "Lazer", "jogo": "Lazer",
+            "sport": "Lazer", "academia": "Lazer",
+            # Banco/Financeiro
+            "banco": "Taxas Bancárias", "tarifa": "Taxas Bancárias",
+            "taxa": "Taxas Bancárias", "anuidade": "Taxas Bancárias",
         }
         for kw, category in keyword_map.items():
             if kw in normalized:
@@ -2700,54 +2745,102 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         return "\n".join(line for line in lines if line)[:max_len]
 
     def _extract_receipt_date(raw_text: str) -> str | None:
-        matches = re.findall(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})", raw_text or "")
+        text = raw_text or ""
+
+        # Format: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
+        matches = re.findall(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})", text)
         for day, month, year in matches:
             year = year if len(year) == 4 else f"20{year}"
             try:
                 parsed = datetime(int(year), int(month), int(day))
+                # Reject obviously wrong dates (future by more than 1 day, or before 2000)
+                now = datetime.now()
+                if 2000 <= parsed.year <= now.year + 1:
+                    return parsed.strftime("%Y-%m-%d")
             except ValueError:
                 continue
-            return parsed.strftime("%Y-%m-%d")
+
+        # Format: "29 ABR 2026", "29 ABRIL 2026"
+        month_pt = {
+            "jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+            "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12,
+            "janeiro": 1, "fevereiro": 2, "março": 3, "abril": 4, "maio": 5,
+            "junho": 6, "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10,
+            "novembro": 11, "dezembro": 12,
+        }
+        for m in re.finditer(r"(\d{1,2})\s+([a-záéíóúãêç]+)\.?\s+(\d{4})", text, re.IGNORECASE):
+            day_s, mon_s, year_s = m.group(1), m.group(2).lower(), m.group(3)
+            if mon_s in month_pt:
+                try:
+                    parsed = datetime(int(year_s), month_pt[mon_s], int(day_s))
+                    return parsed.strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
         return None
 
     def _extract_receipt_amount(raw_text: str) -> float | None:
-        candidates: list[float] = []
-        patterns = [
-            r"(?:TOTAL|VALOR TOTAL|VALOR|PAGO|PAGAR|TOTAL A PAGAR|TOTAL R\$)\D{0,16}([\d.,]+)",
-            r"R\$\s*([\d.]+,\d{2})",
-            r"\b([\d.]+,\d{2})\b",
+        text = raw_text or ""
+
+        def _parse_br(raw_val: str) -> float | None:
+            raw_val = raw_val.strip().replace(" ", "")
+            normalized = raw_val.replace(".", "").replace(",", ".") if "," in raw_val else raw_val
+            try:
+                v = round(float(normalized), 2)
+                return v if 0.01 <= v <= 1_000_000 else None
+            except ValueError:
+                return None
+
+        # Priority patterns — try from most to least specific and return first good match.
+        priority_patterns = [
+            r"(?:VALOR\s+PAGO|TOTAL\s+A\s+PAGAR|TOTAL\s+PAGO|VALOR\s+TOTAL)\s*:?\s*R?\$?\s*([\d.]+,[\d]{2})",
+            r"(?:TOTAL|PAGAR|PAGO)\s*:?\s*R?\$?\s*([\d.]+,[\d]{2})",
+            r"R\$\s*([\d.]+,[\d]{2})",
         ]
-        for pattern in patterns:
-            for match in re.findall(pattern, raw_text or "", re.IGNORECASE):
-                raw_val = str(match).strip().replace(" ", "")
-                normalized = raw_val.replace(".", "").replace(",", ".") if "," in raw_val else raw_val
-                try:
-                    value = round(float(normalized), 2)
-                except ValueError:
-                    continue
-                if 0.01 <= value <= 1_000_000:
-                    candidates.append(value)
-        return max(candidates) if candidates else None
+        for pattern in priority_patterns:
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                v = _parse_br(m.group(1))
+                if v:
+                    return v
+
+        # Fallback: collect all BRL-format numbers and return the largest.
+        fallback: list[float] = []
+        for m in re.finditer(r"\b([\d]{1,6}[.,][\d]{2})\b", text):
+            v = _parse_br(m.group(1))
+            if v:
+                fallback.append(v)
+        return max(fallback) if fallback else None
 
     def _extract_receipt_merchant(raw_text: str) -> str:
         ignored_prefixes = (
             "CNPJ", "CPF", "ITEM", "QTD", "TOTAL", "SUBTOTAL", "VALOR", "CARTAO",
             "CREDITO", "DEBITO", "AUTORIZACAO", "NSU", "COD", "OPERADOR", "CAIXA",
             "VENDA", "DATA", "HORA", "PAGAMENTO", "CLIENTE", "TROCO", "BANCO",
+            "DOCUMENTO", "NOTA FISCAL", "NFC-E", "NF-E", "DANFE", "SAT", "CUPOM",
+            "RECIBO", "PROTOCOLO", "SERIE", "NUMERO", "VIA", "CONSULTE",
         )
+        ignored_exact = (
+            "CONSUMIDOR", "NAO OBRIGATORIO", "NÃO OBRIGATÓRIO", "CONSUMIDOR FINAL",
+        )
+        candidates: list[str] = []
         for line in (raw_text or "").splitlines():
             cleaned = sanitize_text(line.strip(), 120)
-            if len(cleaned) < 4:
+            if len(cleaned) < 5:
                 continue
-            upper = cleaned.upper()
-            if upper.startswith(ignored_prefixes):
+            upper = cleaned.upper().strip()
+            if upper in ignored_exact:
+                continue
+            if any(upper.startswith(p) for p in ignored_prefixes):
                 continue
             if re.search(r"\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b", cleaned):
                 continue
-            if re.fullmatch(r"[\d\s./:-]+", cleaned):
+            if re.fullmatch(r"[\d\s./,:-]+", cleaned):
                 continue
-            return cleaned
-        return ""
+            # Prefer lines with 2+ words (more likely a company name)
+            words = [w for w in cleaned.split() if len(w) > 1]
+            if len(words) >= 2:
+                return cleaned
+            candidates.append(cleaned)
+        return candidates[0] if candidates else ""
 
     def _score_ocr_candidate(raw_text: str) -> int:
         score = min(len(raw_text or ""), 200)
