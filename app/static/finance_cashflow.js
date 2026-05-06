@@ -565,6 +565,15 @@ function openAddCashflowModal(prefill = {}) {
   const _pcat = String(prefill.category || "");
   const _ptype = String(prefill.entry_type || "expense");
   const _pcard = Number(prefill.credit_card_id || 0);
+  const _paccount = Number(prefill.account_id || 0);
+  const _accountOptions = ['<option value="">Sem conta</option>']
+    .concat((Array.isArray(FIN.accounts) ? FIN.accounts : []).map((a) => {
+      const aid = Number(a.id || 0);
+      const sel = aid === _paccount ? " selected" : "";
+      const label = `${a.name || `Conta ${aid}`}${a.account_type ? ` (${a.account_type})` : ""}`;
+      return `<option value="${aid}"${sel}>${escapeHtml(label)}</option>`;
+    }))
+    .join("");
   const _cardOptions = ['<option value="">Sem cartão</option>']
     .concat((Array.isArray(FIN.creditCards) ? FIN.creditCards : []).map((c) => {
       const cid = Number(c.id || 0);
@@ -629,6 +638,10 @@ function openAddCashflowModal(prefill = {}) {
         <select id="fmCfCreditCard">${_cardOptions}</select>
       </div>
       <div class="fin-form-group">
+        <label>Conta (opcional)</label>
+        <select id="fmCfAccount">${_accountOptions}</select>
+      </div>
+      <div class="fin-form-group">
         <label>Tags</label>
         <input id="fmCfTags" placeholder="Ex.: fixo, essencial" />
       </div>
@@ -653,6 +666,26 @@ function openAddCashflowModal(prefill = {}) {
             const cid = Number(c.id || 0);
             const mark = cid === current ? " selected" : "";
             return `<option value="${cid}"${mark}>${escapeHtml(c.name || `Cartão ${cid}`)}</option>`;
+          }))
+          .join("");
+      })
+      .catch(() => { /* ignore */ });
+  }
+
+  if (!Array.isArray(FIN.accounts) || !FIN.accounts.length) {
+    finFetch("/api/finance/accounts")
+      .then((resp) => resp.ok ? resp.json() : [])
+      .then((accounts) => {
+        FIN.accounts = Array.isArray(accounts) ? accounts : [];
+        const sel = byId("fmCfAccount");
+        if (!sel) return;
+        const current = Number(prefill.account_id || 0);
+        sel.innerHTML = ['<option value="">Sem conta</option>']
+          .concat(FIN.accounts.map((a) => {
+            const aid = Number(a.id || 0);
+            const mark = aid === current ? " selected" : "";
+            const label = `${a.name || `Conta ${aid}`}${a.account_type ? ` (${a.account_type})` : ""}`;
+            return `<option value="${aid}"${mark}>${escapeHtml(label)}</option>`;
           }))
           .join("");
       })
@@ -939,6 +972,7 @@ async function submitAddCashflow(e) {
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    account_id: Number(byId("fmCfAccount")?.value) || null,
     credit_card_id: Number(byId("fmCfCreditCard")?.value) || null,
     tags: parseTagsInput(byId("fmCfTags")?.value || ""),
     payment_status: paymentStatus,
@@ -1918,6 +1952,15 @@ function openEditCashflowModal(entryId) {
     return;
   }
   const _ecard = Number(entry.credit_card_id || 0);
+  const _eaccount = Number(entry.account_id || 0);
+  const _eaccountOptions = ['<option value="">Sem conta</option>']
+    .concat((Array.isArray(FIN.accounts) ? FIN.accounts : []).map((a) => {
+      const aid = Number(a.id || 0);
+      const sel = aid === _eaccount ? " selected" : "";
+      const label = `${a.name || `Conta ${aid}`}${a.account_type ? ` (${a.account_type})` : ""}`;
+      return `<option value="${aid}"${sel}>${escapeHtml(label)}</option>`;
+    }))
+    .join("");
   const _ecardOptions = ['<option value="">Sem cartão</option>']
     .concat((Array.isArray(FIN.creditCards) ? FIN.creditCards : []).map((c) => {
       const cid = Number(c.id || 0);
@@ -1982,6 +2025,10 @@ function openEditCashflowModal(entryId) {
         <select id="fmCfCreditCard">${_ecardOptions}</select>
       </div>
       <div class="fin-form-group">
+        <label>Conta (opcional)</label>
+        <select id="fmCfAccount">${_eaccountOptions}</select>
+      </div>
+      <div class="fin-form-group">
         <label>Tags</label>
         <input id="fmCfTags" value="${escapeHtml(Array.isArray(entry.tags) ? entry.tags.join(", ") : "")}" placeholder="Ex.: fixo, essencial" />
       </div>
@@ -2011,6 +2058,26 @@ function openEditCashflowModal(entryId) {
       })
       .catch(() => { /* ignore */ });
   }
+
+  if (!Array.isArray(FIN.accounts) || !FIN.accounts.length) {
+    finFetch("/api/finance/accounts")
+      .then((resp) => resp.ok ? resp.json() : [])
+      .then((accounts) => {
+        FIN.accounts = Array.isArray(accounts) ? accounts : [];
+        const sel = byId("fmCfAccount");
+        if (!sel) return;
+        const current = Number(entry.account_id || 0);
+        sel.innerHTML = ['<option value="">Sem conta</option>']
+          .concat(FIN.accounts.map((a) => {
+            const aid = Number(a.id || 0);
+            const mark = aid === current ? " selected" : "";
+            const label = `${a.name || `Conta ${aid}`}${a.account_type ? ` (${a.account_type})` : ""}`;
+            return `<option value="${aid}"${mark}>${escapeHtml(label)}</option>`;
+          }))
+          .join("");
+      })
+      .catch(() => { /* ignore */ });
+  }
 }
 
 async function submitEditCashflow(e, entryId) {
@@ -2026,6 +2093,7 @@ async function submitEditCashflow(e, entryId) {
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    account_id: Number(byId("fmCfAccount")?.value) || null,
     credit_card_id: Number(byId("fmCfCreditCard")?.value) || null,
     tags: parseTagsInput(byId("fmCfTags")?.value || ""),
     payment_status: paymentStatus,

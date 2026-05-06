@@ -12,6 +12,8 @@ const FIN = {
   cashflowSummary: null,
   cashflowAnalytics: null,
   cashflowBudget: {},
+  accounts: [],
+  accountsBalanceSummary: null,
   watchlist: [],
   goals: [],
   assets: [],
@@ -662,7 +664,7 @@ async function loadAll(options = {}) {
     _scheduleDeferred(async () => {
       const deferredDataStart = perfEnabled ? performance.now() : 0;
       const useWidgetCache = useSecondaryCache && isFinFlagOn("secondaryPanelCache");
-      const [watchlist, goals, assets, dividends, allocTargets, passiveGoal] = await Promise.all([
+      const [watchlist, goals, assets, dividends, allocTargets, passiveGoal, accounts, accountsBalanceSummary] = await Promise.all([
         fetchWidgetJsonCached(
           "watchlist",
           "/api/finance/watchlist",
@@ -697,6 +699,18 @@ async function loadAll(options = {}) {
           "passive-income",
           "/api/finance/goals/passive-income",
           { target_monthly: 0, note: "" },
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "accounts",
+          "/api/finance/accounts",
+          [],
+          { useCache: useWidgetCache },
+        ),
+        fetchWidgetJsonCached(
+          "accounts-balances",
+          "/api/finance/accounts/balances",
+          { accounts: [], total_balance: 0, count: 0 },
           { useCache: useWidgetCache },
         ),
       ]);
@@ -763,6 +777,8 @@ async function loadAll(options = {}) {
       FIN.dividends = Array.isArray(dividends) ? dividends : [];
       FIN.passiveIncomeGoal = passiveGoal || { target_monthly: 0, note: "" };
       FIN.allocationTargets = Array.isArray(allocTargets) ? allocTargets : [];
+      FIN.accounts = Array.isArray(accounts) ? accounts : [];
+      FIN.accountsBalanceSummary = accountsBalanceSummary || { accounts: [], total_balance: 0, count: 0 };
       FIN.cashflowEntries = Array.isArray(cashflowEntries) ? cashflowEntries : [];
       FIN.cashflowSummary = cashflowSummary || { monthly: [] };
       FIN.cashflowAnalytics = cashflowAnalytics || null;
@@ -775,6 +791,7 @@ async function loadAll(options = {}) {
       renderCashflowSummary(FIN.cashflowSummary);
       renderCashflow(FIN.cashflowEntries);
       renderCashflowAnalytics(FIN.cashflowAnalytics);
+      renderAccountsBalances(FIN.accountsBalanceSummary);
       renderCashflowBudgetStatus(FIN.cashflowAnalytics);
       syncCashflowMonthFilter(FIN.cashflowSummary);
       loadCashflowKpis();
@@ -1046,7 +1063,7 @@ async function refreshCashflowPanel() {
   const q = String(byId("finCashflowQ")?.value || "").trim();
   const costCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
   const tag = String(byId("finCashflowTag")?.value || "").trim();
-  const [entries, summary, analytics, budgetPayload] = await Promise.all([
+  const [entries, summary, analytics, budgetPayload, accounts, accountsBalanceSummary] = await Promise.all([
     fetchFinanceJson(
       `/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`,
       [],
@@ -1054,14 +1071,19 @@ async function refreshCashflowPanel() {
     fetchFinanceJson("/api/finance/cashflow/summary?months=12", { monthly: [] }),
     fetchFinanceJson(`/api/finance/cashflow/analytics?month=${encodeURIComponent(effectiveMonth)}`, null),
     fetchFinanceJson(`/api/finance/cashflow/budget?month=${encodeURIComponent(effectiveMonth)}`, { budget: {} }),
+    fetchFinanceJson("/api/finance/accounts", []),
+    fetchFinanceJson("/api/finance/accounts/balances", { accounts: [], total_balance: 0, count: 0 }),
   ]);
   FIN.cashflowEntries = Array.isArray(entries) ? entries : [];
   FIN.cashflowSummary = summary || { monthly: [] };
   FIN.cashflowAnalytics = analytics || null;
   FIN.cashflowBudget = budgetPayload?.budget || {};
+  FIN.accounts = Array.isArray(accounts) ? accounts : [];
+  FIN.accountsBalanceSummary = accountsBalanceSummary || { accounts: [], total_balance: 0, count: 0 };
   renderCashflowSummary(FIN.cashflowSummary);
   renderCashflow(FIN.cashflowEntries);
   renderCashflowAnalytics(FIN.cashflowAnalytics);
+  renderAccountsBalances(FIN.accountsBalanceSummary);
   renderCashflowBudgetStatus(FIN.cashflowAnalytics);
   loadCashflowKpis();
   loadCashflowBudgetAlerts();
@@ -1521,6 +1543,53 @@ function renderHealthScoreGauge(score, color = "#22c55e") {
       rotation: 270,
     },
   });
+}
+
+function renderAccountsBalances(summary) {
+  const el = byId("finAccountsBalancesContent");
+  if (!el) return;
+
+  const payload = summary || {};
+  const rows = Array.isArray(payload.accounts) ? payload.accounts : [];
+  if (!rows.length) {
+    el.innerHTML = '<p class="fin-empty">Nenhuma conta cadastrada ainda.</p>';
+    return;
+  }
+
+  const accountRows = rows.map((row) => {
+    const balance = Number(row.balance || 0);
+    const balanceCls = balance >= 0 ? "fin-up" : "fin-down";
+    const accType = escapeHtml(String(row.account_type || "Conta"));
+    const name = escapeHtml(String(row.name || "Sem nome"));
+    return `
+      <div class="fin-account-row">
+        <div class="fin-account-main">
+          <strong>${name}</strong>
+          <span class="fin-account-type">${accType}</span>
+        </div>
+        <div class="fin-account-stats">
+          <span class="fin-account-chip fin-up">+ ${formatBRL(row.income || 0)}</span>
+          <span class="fin-account-chip fin-down">- ${formatBRL(row.expense || 0)}</span>
+          <span class="fin-account-balance ${balanceCls}">${formatBRL(balance)}</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  const totalBalance = Number(payload.total_balance || 0);
+  const totalCls = totalBalance >= 0 ? "fin-up" : "fin-down";
+  el.innerHTML = `
+    <div class="fin-accounts-summary">
+      <div>
+        <span class="fin-account-total-label">Saldo total</span>
+        <strong class="fin-account-total ${totalCls}">${formatBRL(totalBalance)}</strong>
+      </div>
+      <span class="fin-account-count">${formatNumber(payload.count || rows.length, 0)} conta(s)</span>
+    </div>
+    <div class="fin-accounts-list">
+      ${accountRows}
+    </div>
+  `;
 }
 
 async function loadHealthScore() {
