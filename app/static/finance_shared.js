@@ -57,6 +57,57 @@ function formatNumber(value, decimals = 2) {
   });
 }
 
+function finChartTheme() {
+  const styles = getComputedStyle(document.body);
+  const isLight = document.body.classList.contains("light");
+  const text = (styles.getPropertyValue("--text") || "").trim() || "#e2e8f0";
+  const muted = (styles.getPropertyValue("--text-muted") || "").trim() || "#94a3b8";
+  return {
+    text,
+    muted,
+    grid: isLight ? "rgba(15, 23, 42, 0.12)" : "rgba(148, 163, 184, 0.12)",
+    tooltipBg: isLight ? "rgba(15, 23, 42, 0.94)" : "rgba(2, 6, 23, 0.94)",
+    tooltipBorder: isLight ? "rgba(148, 163, 184, 0.45)" : "rgba(148, 163, 184, 0.28)",
+  };
+}
+
+function finChartLegendLabels(extra = {}) {
+  const theme = finChartTheme();
+  return {
+    color: theme.text,
+    font: { size: 11, weight: 600 },
+    padding: 12,
+    usePointStyle: true,
+    pointStyleWidth: 10,
+    ...extra,
+  };
+}
+
+function finChartTooltip(callbacks = {}) {
+  const theme = finChartTheme();
+  return {
+    backgroundColor: theme.tooltipBg,
+    borderColor: theme.tooltipBorder,
+    borderWidth: 1,
+    titleColor: theme.text,
+    bodyColor: theme.text,
+    footerColor: theme.muted,
+    titleFont: { weight: "700" },
+    bodyFont: { weight: "600" },
+    padding: 10,
+    cornerRadius: 10,
+    displayColors: true,
+    callbacks,
+  };
+}
+
+function finChartGrid(alpha = 0.12) {
+  const isLight = document.body.classList.contains("light");
+  return isLight
+    ? `rgba(15, 23, 42, ${alpha})`
+    : `rgba(148, 163, 184, ${alpha})`;
+}
+
 function changeClass(value) {
   if (value == null || Number.isNaN(Number(value))) return "";
   return Number(value) >= 0 ? "fin-up" : "fin-down";

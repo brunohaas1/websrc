@@ -164,11 +164,9 @@ function renderCashflowCategoryChart(analytics) {
       plugins: {
         legend: {
           position: "right",
-          labels: {
-            color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
-          },
+          labels: finChartLegendLabels(),
         },
-        tooltip: {
+        tooltip: finChartTooltip({
           callbacks: {
             label: (ctx) => {
               const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
@@ -176,7 +174,7 @@ function renderCashflowCategoryChart(analytics) {
               return ` ${ctx.label}: ${formatBRL(ctx.raw)} (${pct.toFixed(1)}%)`;
             },
           },
-        },
+        }),
       },
     },
   });
@@ -340,26 +338,24 @@ function renderCashflowChart(summary) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: {
-          labels: {
-            color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
-          },
+          labels: finChartLegendLabels(),
         },
-        tooltip: {
+        tooltip: finChartTooltip({
           callbacks: {
             label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
           },
-        },
+        }),
       },
       scales: {
         x: {
-          grid: { color: "rgba(255,255,255,0.04)" },
-          ticks: { color: "#94a3b8" },
+          grid: { color: finChartGrid(0.1) },
+          ticks: { color: finChartTheme().muted },
         },
         y: {
           beginAtZero: true,
-          grid: { color: "rgba(255,255,255,0.05)" },
+          grid: { color: finChartGrid(0.12) },
           ticks: {
-            color: "#94a3b8",
+            color: finChartTheme().muted,
             callback: (v) => formatBRL(v),
           },
         },
@@ -367,7 +363,7 @@ function renderCashflowChart(summary) {
           position: "right",
           grid: { drawOnChartArea: false },
           ticks: {
-            color: "#93c5fd",
+            color: finChartTheme().text,
             callback: (v) => formatBRL(v),
           },
         },

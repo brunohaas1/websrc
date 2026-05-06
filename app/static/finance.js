@@ -2623,15 +2623,9 @@ function renderAllocationChart(summary) {
       plugins: {
         legend: {
           position: "right",
-          labels: {
-            color: getComputedStyle(document.body).getPropertyValue("--text") || "#e2e8f0",
-            font: { size: 12, weight: 600 },
-            padding: 12,
-            usePointStyle: true,
-            pointStyleWidth: 10,
-          },
+          labels: finChartLegendLabels({ font: { size: 12, weight: 600 } }),
         },
-        tooltip: {
+        tooltip: finChartTooltip({
           callbacks: {
             label: (ctx) => {
               const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
@@ -2639,7 +2633,7 @@ function renderAllocationChart(summary) {
               return ` ${ctx.label}: ${formatBRL(ctx.raw)} (${pct}%)`;
             },
           },
-        },
+        }),
       },
     },
   });
@@ -2690,7 +2684,7 @@ function renderPnLChart(portfolio) {
       indexAxis: "y",
       plugins: {
         legend: { display: false },
-        tooltip: {
+        tooltip: finChartTooltip({
           callbacks: {
             label: (ctx) => ` P&L: ${formatBRL(ctx.raw)}`,
             footer: (items) => {
@@ -2704,13 +2698,13 @@ function renderPnLChart(portfolio) {
               return `Rentabilidade: ${formatPct(pct)}`;
             },
           },
-        },
+        }),
       },
       scales: {
         x: {
-          grid: { color: "rgba(255,255,255,0.05)" },
+          grid: { color: finChartGrid(0.11) },
           ticks: {
-            color: "#8b92a5",
+            color: finChartTheme().muted,
             font: { size: 10 },
             callback: (v) => formatBRL(v),
           },
@@ -2718,7 +2712,7 @@ function renderPnLChart(portfolio) {
         y: {
           grid: { display: false },
           ticks: {
-            color: "#e2e8f0",
+            color: finChartTheme().text,
             font: { size: 11, weight: 600 },
           },
         },
@@ -2772,12 +2766,9 @@ function renderPerformanceChart(portfolio) {
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          labels: {
-            color: "#e2e8f0",
-            font: { size: 11 },
-          },
+          labels: finChartLegendLabels(),
         },
-        tooltip: {
+        tooltip: finChartTooltip({
           callbacks: {
             label: (ctx) => ` ${ctx.dataset.label}: ${formatBRL(ctx.raw)}`,
             footer: (items) => {
@@ -2792,17 +2783,17 @@ function renderPerformanceChart(portfolio) {
               return `P&L: ${formatBRL(pnl)} (${formatPct(pct)})`;
             },
           },
-        },
+        }),
       },
       scales: {
         x: {
           grid: { display: false },
-          ticks: { color: "#e2e8f0", font: { size: 11, weight: 600 } },
+          ticks: { color: finChartTheme().text, font: { size: 11, weight: 600 } },
         },
         y: {
-          grid: { color: "rgba(255,255,255,0.05)" },
+          grid: { color: finChartGrid(0.11) },
           ticks: {
-            color: "#8b92a5",
+            color: finChartTheme().muted,
             font: { size: 10 },
             callback: (v) => formatBRL(v),
           },
