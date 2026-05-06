@@ -41,6 +41,16 @@ function renderCashflowFiltersPanel() {
           </select>
         </div>
         <div class="fin-form-group">
+          <label style="font-size:.8em;">Conta</label>
+          <select id="filterAccount">
+            <option value="">Todas</option>
+            ${(() => {
+              const accounts = FIN.accounts || [];
+              return accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name || `Conta ${a.id}`)}</option>`).join("");
+            })()}
+          </select>
+        </div>
+        <div class="fin-form-group">
           <label style="font-size:.8em;">Valor Mín (R$)</label>
           <input id="filterAmountMin" type="number" min="0" step="0.01" />
         </div>
@@ -78,6 +88,7 @@ async function applyAdvancedFilters() {
     date_to: String(byId("filterDateTo")?.value || "").trim(),
     category: String(byId("filterCategory")?.value || "").trim(),
     credit_card_id: String(byId("filterCreditCard")?.value || "").trim(),
+    account_id: String(byId("filterAccount")?.value || "").trim(),
     amount_min: String(byId("filterAmountMin")?.value || "").trim(),
     amount_max: String(byId("filterAmountMax")?.value || "").trim(),
   };
@@ -107,6 +118,7 @@ function clearAdvancedFilters() {
   byId("filterDateTo").value = "";
   byId("filterCategory").value = "";
   byId("filterCreditCard").value = "";
+  byId("filterAccount").value = "";
   byId("filterAmountMin").value = "";
   byId("filterAmountMax").value = "";
   showToast("Filtros limpos", "success");
@@ -140,6 +152,7 @@ async function submitSaveFilter(e) {
     date_to: String(byId("filterDateTo")?.value || "").trim(),
     category: String(byId("filterCategory")?.value || "").trim(),
     credit_card_id: String(byId("filterCreditCard")?.value || "").trim(),
+    account_id: String(byId("filterAccount")?.value || "").trim(),
     amount_min: String(byId("filterAmountMin")?.value || "").trim(),
     amount_max: String(byId("filterAmountMax")?.value || "").trim(),
   };

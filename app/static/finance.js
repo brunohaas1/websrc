@@ -722,10 +722,11 @@ async function loadAll(options = {}) {
       const selectedQ = String(byId("finCashflowQ")?.value || "").trim();
       const selectedCostCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
       const selectedTag = String(byId("finCashflowTag")?.value || "").trim();
+      const selectedAccount = String(byId("finCashflowAccount")?.value || "").trim();
       const [cashflowEntries, cashflowSummary, cashflowAnalytics, cashflowBudgetPayload] = await Promise.all([
         fetchWidgetJsonCached(
-          `cashflow-entries:${selectedMonth || "all"}:${selectedType || "all"}:${selectedStatus || "all"}:${selectedQ || "all"}:${selectedCostCenter || "all"}:${selectedTag || "all"}`,
-          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}${selectedType ? `&type=${encodeURIComponent(selectedType)}` : ""}${selectedStatus ? `&status=${encodeURIComponent(selectedStatus)}` : ""}${selectedQ ? `&q=${encodeURIComponent(selectedQ)}` : ""}${selectedCostCenter ? `&cost_center=${encodeURIComponent(selectedCostCenter)}` : ""}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}`,
+          `cashflow-entries:${selectedMonth || "all"}:${selectedType || "all"}:${selectedStatus || "all"}:${selectedQ || "all"}:${selectedCostCenter || "all"}:${selectedTag || "all"}:${selectedAccount || "all"}`,
+          `/api/finance/cashflow?limit=500${selectedMonth ? `&month=${encodeURIComponent(selectedMonth)}` : ""}${selectedType ? `&type=${encodeURIComponent(selectedType)}` : ""}${selectedStatus ? `&status=${encodeURIComponent(selectedStatus)}` : ""}${selectedQ ? `&q=${encodeURIComponent(selectedQ)}` : ""}${selectedCostCenter ? `&cost_center=${encodeURIComponent(selectedCostCenter)}` : ""}${selectedTag ? `&tag=${encodeURIComponent(selectedTag)}` : ""}${selectedAccount ? `&account_id=${encodeURIComponent(selectedAccount)}` : ""}`,
           [],
           { useCache: useWidgetCache },
         ),
@@ -783,6 +784,7 @@ async function loadAll(options = {}) {
       FIN.cashflowSummary = cashflowSummary || { monthly: [] };
       FIN.cashflowAnalytics = cashflowAnalytics || null;
       FIN.cashflowBudget = cashflowBudgetPayload?.budget || {};
+      syncCashflowAccountFilterOptions();
 
       renderSummary(FIN.summary);
       renderWatchlist(FIN.watchlist);
@@ -797,6 +799,7 @@ async function loadAll(options = {}) {
       loadCashflowKpis();
       loadCashflowBudgetAlerts();
       loadCashflowDataQuality();
+      loadSavingsSuggestions(effectiveMonth);
       loadHealthScore();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
@@ -1063,9 +1066,10 @@ async function refreshCashflowPanel() {
   const q = String(byId("finCashflowQ")?.value || "").trim();
   const costCenter = String(byId("finCashflowCostCenter")?.value || "").trim();
   const tag = String(byId("finCashflowTag")?.value || "").trim();
+  const accountId = String(byId("finCashflowAccount")?.value || "").trim();
   const [entries, summary, analytics, budgetPayload, accounts, accountsBalanceSummary] = await Promise.all([
     fetchFinanceJson(
-      `/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`,
+      `/api/finance/cashflow?limit=500${month ? `&month=${encodeURIComponent(month)}` : ""}${entryType ? `&type=${encodeURIComponent(entryType)}` : ""}${paymentStatus ? `&status=${encodeURIComponent(paymentStatus)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}${costCenter ? `&cost_center=${encodeURIComponent(costCenter)}` : ""}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}${accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""}`,
       [],
     ),
     fetchFinanceJson("/api/finance/cashflow/summary?months=12", { monthly: [] }),
@@ -1080,10 +1084,12 @@ async function refreshCashflowPanel() {
   FIN.cashflowBudget = budgetPayload?.budget || {};
   FIN.accounts = Array.isArray(accounts) ? accounts : [];
   FIN.accountsBalanceSummary = accountsBalanceSummary || { accounts: [], total_balance: 0, count: 0 };
+  syncCashflowAccountFilterOptions();
   renderCashflowSummary(FIN.cashflowSummary);
   renderCashflow(FIN.cashflowEntries);
   renderCashflowAnalytics(FIN.cashflowAnalytics);
   renderAccountsBalances(FIN.accountsBalanceSummary);
+  loadSavingsSuggestions(effectiveMonth);
   renderCashflowBudgetStatus(FIN.cashflowAnalytics);
   loadCashflowKpis();
   loadCashflowBudgetAlerts();
@@ -1590,6 +1596,77 @@ function renderAccountsBalances(summary) {
       ${accountRows}
     </div>
   `;
+}
+
+function syncCashflowAccountFilterOptions() {
+  const sel = byId("finCashflowAccount");
+  if (!sel) return;
+  const current = String(sel.value || "").trim();
+  const rows = Array.isArray(FIN.accounts) ? FIN.accounts : [];
+  const options = ['<option value="">Todas as contas</option>']
+    .concat(rows.map((a) => {
+      const id = String(a.id || "");
+      const mark = current && current === id ? " selected" : "";
+      const label = `${a.name || `Conta ${id}`}${a.account_type ? ` (${a.account_type})` : ""}`;
+      return `<option value="${escapeHtml(id)}"${mark}>${escapeHtml(label)}</option>`;
+    }))
+    .join("");
+  sel.innerHTML = options;
+}
+
+function renderSavingsSuggestions(payload) {
+  const el = byId("finSavingsSuggestions");
+  if (!el) return;
+  const data = payload || {};
+  const items = Array.isArray(data.suggestions) ? data.suggestions : [];
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="fin-cashflow-chip">
+        <span>💡 Sugestões de economia</span>
+        <strong>Sem sugestões para este período.</strong>
+      </div>
+    `;
+    return;
+  }
+
+  const top = items.slice(0, 3).map((s) => {
+    const p = String(s.priority || "").toLowerCase();
+    const pr = p === "high" ? "Alta" : p === "medium" ? "Média" : "Baixa";
+    return `
+      <div class="fin-cashflow-chip" style="align-items:flex-start;">
+        <span>💡 ${escapeHtml(s.category || "Categoria")}</span>
+        <strong>${escapeHtml(pr)} • ${formatBRL(s.potential_monthly_saving || 0)}/mês</strong>
+        <small style="opacity:.78;line-height:1.35;">${escapeHtml(s.message || "")}</small>
+      </div>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="fin-cashflow-analytics-grid">
+      <div class="fin-cashflow-chip">
+        <span>💸 Economia potencial mensal</span>
+        <strong class="fin-up">${formatBRL(data.total_potential_monthly_saving || 0)}</strong>
+      </div>
+      <div class="fin-cashflow-chip">
+        <span>📅 Economia potencial anual</span>
+        <strong class="fin-up">${formatBRL(data.total_potential_yearly_saving || 0)}</strong>
+      </div>
+      ${top}
+    </div>
+  `;
+}
+
+async function loadSavingsSuggestions(month) {
+  const targetMonth = String(month || currentMonthKey()).trim();
+  try {
+    const resp = await finFetch(`/api/finance/savings-suggestions?month=${encodeURIComponent(targetMonth)}`);
+    if (!resp.ok) throw new Error(`savings-suggestions ${resp.status}`);
+    const payload = await resp.json();
+    FIN.savingsSuggestions = payload;
+    renderSavingsSuggestions(payload);
+  } catch {
+    renderSavingsSuggestions({ suggestions: [] });
+  }
 }
 
 async function loadHealthScore() {
@@ -2683,21 +2760,29 @@ function openFinModal(title, bodyHtml) {
   byId("finModalOverlay").style.display = "flex";
 
   // Bind form submit via data-form-action (CSP-safe)
-  const formActionMap = {
-    submitAddAsset,
-    submitAddTransaction,
-    submitAddCashflow,
-    submitEditCashflow,
-    submitCashflowBudget,
-    submitCashflowRollover,
-    submitAddWatchlist,
-    submitAddGoal,
-    submitEditGoal,
-    submitAddDividend,
-    submitAllocationTargets,
-    submitFinanceSettings,
-    submitPassiveIncomeGoal,
-  };
+  const formActionMap = {};
+  [
+    "submitAddAsset",
+    "submitAddTransaction",
+    "submitAddCashflow",
+    "submitEditCashflow",
+    "submitCashflowBudget",
+    "submitCashflowRollover",
+    "submitAddCreditCard",
+    "submitAddAccount",
+    "submitEditAccount",
+    "submitSaveFilter",
+    "submitAddWatchlist",
+    "submitAddGoal",
+    "submitEditGoal",
+    "submitAddDividend",
+    "submitAllocationTargets",
+    "submitFinanceSettings",
+    "submitPassiveIncomeGoal",
+  ].forEach((name) => {
+    const fn = globalThis[name];
+    if (typeof fn === "function") formActionMap[name] = fn;
+  });
   const form = byId("finModalBody").querySelector("form[data-form-action]");
   if (form) {
     form.addEventListener("submit", (e) => {
