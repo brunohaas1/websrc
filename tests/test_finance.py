@@ -2819,3 +2819,72 @@ class TestAnomalies:
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "dismissed"
 
+
+class TestFinanceEnhancements:
+    def test_global_search_type_filter(self, client):
+        _add_asset(client, symbol="ABCD3", name="Ativo ABCD", asset_type="stock")
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 150,
+            "category": "Mercado",
+            "description": "Compra ABCD no mercado",
+            "entry_date": "2026-05-03",
+        })
+
+        resp = client.get("/api/finance/global-search?q=abcd&type=asset&limit=20")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("results")
+        assert all(r.get("type") == "asset" for r in data["results"])
+
+    def test_global_search_value_filter_for_goals(self, client):
+        jpost(client, "/api/finance/goals", {
+            "name": "Meta Casa XPTO",
+            "target_amount": 120000,
+            "current_amount": 1000,
+            "category": "savings",
+        })
+        jpost(client, "/api/finance/goals", {
+            "name": "Meta Carro XPTO",
+            "target_amount": 50000,
+            "current_amount": 500,
+            "category": "savings",
+        })
+
+        resp = client.get("/api/finance/global-search?q=xpto&type=goal&min_value=100000")
+        assert resp.status_code == 200
+        rows = resp.get_json().get("results") or []
+        assert rows
+        assert all(float(r.get("value") or 0) >= 100000 for r in rows)
+
+    def test_report_pdf_supports_dark_theme(self, client):
+        resp = client.get("/api/finance/report/pdf?month=2026-05&theme=dark")
+        assert resp.status_code == 200
+        assert resp.data.startswith(b"%PDF")
+        assert resp.headers.get("Content-Type", "").startswith("application/pdf")
+
+    def test_data_quality_includes_near_duplicates(self, client):
+        month = "2026-05"
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 89.90,
+            "category": "Alimentação",
+            "description": "Padaria Central",
+            "entry_date": "2026-05-11",
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_type": "expense",
+            "amount": 89.90,
+            "category": "Alimentação",
+            "description": "Padaria Cntral",
+            "entry_date": "2026-05-12",
+        })
+
+        resp = client.get(f"/api/finance/cashflow/data-quality?month={month}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        issues = data.get("issues") or []
+        near = [i for i in issues if i.get("code") == "near_duplicates"]
+        assert near
+        assert "count" in near[0]
+

@@ -3213,70 +3213,115 @@ class Repository:
             "subcategories": [r[0] for r in sub_rows],
         }
 
-    def global_finance_search(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
-        """Search across cashflow entries, assets, watchlist and goals."""
+    def global_finance_search(
+        self,
+        q: str,
+        limit: int = 20,
+        search_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        min_value: float | None = None,
+        max_value: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search across cashflow entries, assets, watchlist and goals with optional filters."""
         q_like = f"%{q.lower()}%"
+        allowed_types = {"cashflow", "asset", "goal"}
+        st = str(search_type or "").strip().lower()
+        search_type = st if st in allowed_types else None
+
+        def _matches_numeric(value: Any) -> bool:
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                return False
+            if min_value is not None and num < float(min_value):
+                return False
+            if max_value is not None and num > float(max_value):
+                return False
+            return True
+
+        def _matches_date(value: Any) -> bool:
+            date_value = str(value or "")[:10]
+            if not date_value:
+                return False if (date_from or date_to) else True
+            if date_from and date_value < str(date_from):
+                return False
+            if date_to and date_value > str(date_to):
+                return False
+            return True
+
         results: list[dict[str, Any]] = []
         with get_connection(self.database_target) as conn:
             # cashflow entries
-            rows = conn.execute(
-                self._sql(
-                    "SELECT id, description, category, amount, entry_date, entry_type "
-                    "FROM fin_cashflow_entries "
-                    "WHERE LOWER(description) LIKE ? OR LOWER(category) LIKE ? "
-                    "ORDER BY entry_date DESC LIMIT ?"
-                ),
-                (q_like, q_like, limit),
-            ).fetchall()
-            for r in rows:
-                results.append({
-                    "type": "cashflow",
-                    "id": r["id"],
-                    "label": str(r["description"] or ""),
-                    "sub": f"{r['category'] or '—'} • {('Ganho' if r['entry_type'] == 'income' else 'Gasto')}",
-                    "value": r["amount"],
-                    "date": str(r["entry_date"] or "")[:10],
-                })
-            # assets
-            try:
+            if search_type in (None, "cashflow"):
                 rows = conn.execute(
                     self._sql(
-                        "SELECT id, symbol, name, asset_type FROM fin_assets "
-                        "WHERE LOWER(symbol) LIKE ? OR LOWER(name) LIKE ? LIMIT ?"
+                        "SELECT id, description, category, amount, entry_date, entry_type "
+                        "FROM fin_cashflow_entries "
+                        "WHERE LOWER(description) LIKE ? OR LOWER(category) LIKE ? "
+                        "ORDER BY entry_date DESC LIMIT ?"
                     ),
                     (q_like, q_like, limit),
                 ).fetchall()
                 for r in rows:
-                    results.append({
-                        "type": "asset",
+                    item = {
+                        "type": "cashflow",
                         "id": r["id"],
-                        "label": str(r["symbol"] or ""),
-                        "sub": str(r["name"] or ""),
-                        "value": None,
-                        "date": None,
-                    })
-            except Exception:
-                pass
+                        "label": str(r["description"] or ""),
+                        "sub": f"{r['category'] or '—'} • {('Ganho' if r['entry_type'] == 'income' else 'Gasto')}",
+                        "value": r["amount"],
+                        "date": str(r["entry_date"] or "")[:10],
+                    }
+                    if not _matches_date(item.get("date")):
+                        continue
+                    if (min_value is not None or max_value is not None) and not _matches_numeric(item.get("value")):
+                        continue
+                    results.append(item)
+            # assets
+            if search_type in (None, "asset"):
+                try:
+                    rows = conn.execute(
+                        self._sql(
+                            "SELECT id, symbol, name, asset_type FROM fin_assets "
+                            "WHERE LOWER(symbol) LIKE ? OR LOWER(name) LIKE ? LIMIT ?"
+                        ),
+                        (q_like, q_like, limit),
+                    ).fetchall()
+                    for r in rows:
+                        results.append({
+                            "type": "asset",
+                            "id": r["id"],
+                            "label": str(r["symbol"] or ""),
+                            "sub": str(r["name"] or ""),
+                            "value": None,
+                            "date": None,
+                        })
+                except Exception:
+                    pass
             # goals
-            try:
-                rows = conn.execute(
-                    self._sql(
-                        "SELECT id, name, target_amount, current_amount FROM fin_goals "
-                        "WHERE LOWER(name) LIKE ? LIMIT ?"
-                    ),
-                    (q_like, limit),
-                ).fetchall()
-                for r in rows:
-                    results.append({
-                        "type": "goal",
-                        "id": r["id"],
-                        "label": str(r["name"] or ""),
-                        "sub": "Meta",
-                        "value": r["target_amount"],
-                        "date": None,
-                    })
-            except Exception:
-                pass
+            if search_type in (None, "goal"):
+                try:
+                    rows = conn.execute(
+                        self._sql(
+                            "SELECT id, name, target_amount, current_amount FROM fin_goals "
+                            "WHERE LOWER(name) LIKE ? LIMIT ?"
+                        ),
+                        (q_like, limit),
+                    ).fetchall()
+                    for r in rows:
+                        item = {
+                            "type": "goal",
+                            "id": r["id"],
+                            "label": str(r["name"] or ""),
+                            "sub": "Meta",
+                            "value": r["target_amount"],
+                            "date": None,
+                        }
+                        if (min_value is not None or max_value is not None) and not _matches_numeric(item.get("value")):
+                            continue
+                        results.append(item)
+                except Exception:
+                    pass
         return results[:limit]
 
     def get_fin_cashflow_entry(self, entry_id: int) -> dict[str, Any] | None:

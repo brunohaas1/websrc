@@ -5012,6 +5012,7 @@ let _gsTimer = null;
 function initGlobalSearch() {
   const input = byId("finGlobalSearch");
   const results = byId("finGlobalSearchResults");
+  const typeSel = byId("finGlobalSearchType");
   if (!input || !results) return;
 
   input.addEventListener("input", () => {
@@ -5033,15 +5034,26 @@ function initGlobalSearch() {
       results.style.display = "none";
     }
   });
+
+  if (typeSel) {
+    typeSel.addEventListener("change", () => {
+      const q = input.value.trim();
+      if (q.length >= 2) _runGlobalSearch(q);
+    });
+  }
 }
 
 async function _runGlobalSearch(q) {
   const results = byId("finGlobalSearchResults");
+  const typeSel = byId("finGlobalSearchType");
   if (!results) return;
   results.style.display = "block";
   results.innerHTML = `<div class="fin-gs-empty">Buscando...</div>`;
   try {
-    const data = await fetchFinanceJson(`/api/finance/global-search?q=${encodeURIComponent(q)}&limit=20`);
+    const searchType = String(typeSel?.value || "").trim();
+    const qs = new URLSearchParams({ q, limit: "20" });
+    if (searchType) qs.set("type", searchType);
+    const data = await fetchFinanceJson(`/api/finance/global-search?${qs.toString()}`);
     const items = Array.isArray(data.results) ? data.results : [];
     if (!items.length) {
       results.innerHTML = `<div class="fin-gs-empty">Nenhum resultado para "${escapeHtml(q)}"</div>`;

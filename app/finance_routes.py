@@ -45,14 +45,26 @@ _RETRY_EXCEPTIONS = (
 )
 
 
-def _build_simple_pdf(lines: list[str]) -> bytes:
+def _build_simple_pdf(lines: list[str], theme: str = "light") -> bytes:
     """Build a tiny text-only PDF without external dependencies."""
     safe_lines = [
         str(line or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
         for line in lines
     ]
+    dark_mode = str(theme or "light").strip().lower() == "dark"
     y = 800
-    content_lines = ["BT", "/F1 11 Tf", "1 0 0 1 40 800 Tm"]
+    content_lines = []
+    if dark_mode:
+        content_lines.extend([
+            "0 0 0 rg",
+            "0 0 595 842 re f",
+        ])
+    content_lines.extend([
+        "BT",
+        "/F1 11 Tf",
+        "1 1 1 rg" if dark_mode else "0 0 0 rg",
+        "1 0 0 1 40 800 Tm",
+    ])
     for line in safe_lines:
         content_lines.append(f"1 0 0 1 40 {y} Tm ({line}) Tj")
         y -= 14
@@ -2343,6 +2355,45 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         duplicate_groups = [items for items in duplicate_map.values() if len(items) > 1]
         duplicate_rows = sum(max(0, len(items) - 1) for items in duplicate_groups)
 
+        fuzzy_duplicate_pairs = 0
+        fuzzy_duplicate_samples: list[dict[str, Any]] = []
+        processed_pairs: set[tuple[int, int]] = set()
+        rows_by_type = {
+            "income": [r for r in rows if str(r.get("entry_type") or "").strip().lower() == "income"],
+            "expense": [r for r in rows if str(r.get("entry_type") or "").strip().lower() == "expense"],
+        }
+        for entry_type, pool in rows_by_type.items():
+            for row in pool:
+                row_id = int(row.get("id") or 0)
+                if not row_id:
+                    continue
+                candidate = find_potential_cashflow_duplicate(
+                    existing_entries=pool,
+                    entry_type=entry_type,
+                    amount=float(row.get("amount") or 0),
+                    entry_date=str(row.get("entry_date") or "")[:10],
+                    description=str(row.get("description") or ""),
+                )
+                if not candidate:
+                    continue
+                cand_id = int(candidate.get("id") or 0)
+                if not cand_id or cand_id == row_id:
+                    continue
+                pair = tuple(sorted((row_id, cand_id)))
+                if pair in processed_pairs:
+                    continue
+                processed_pairs.add(pair)
+                fuzzy_duplicate_pairs += 1
+                if len(fuzzy_duplicate_samples) < 6:
+                    fuzzy_duplicate_samples.append({
+                        "ids": [pair[0], pair[1]],
+                        "amount": round(float(row.get("amount") or 0), 2),
+                        "entry_date": str(row.get("entry_date") or "")[:10],
+                        "description": str(row.get("description") or ""),
+                        "score": float(candidate.get("score") or 0),
+                        "confidence": str(candidate.get("confidence") or "low"),
+                    })
+
         outlier_count = 0
         outlier_samples: list[dict] = []
         if len(expense_amounts) >= 6:
@@ -2368,6 +2419,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         score -= min(30, missing_category * 2)
         score -= min(20, missing_description)
         score -= min(15, duplicate_rows * 3)
+        score -= min(10, fuzzy_duplicate_pairs * 2)
         score -= min(15, future_dates * 5)
         score -= min(10, non_positive_amount * 5)
         score -= min(10, outlier_count * 2)
@@ -2403,6 +2455,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 "count": duplicate_rows,
                 "label": "Possíveis duplicatas",
                 "samples": duplicate_samples,
+            },
+            {
+                "code": "near_duplicates",
+                "severity": "medium" if fuzzy_duplicate_pairs > 0 else "ok",
+                "count": fuzzy_duplicate_pairs,
+                "label": "Possíveis duplicatas aproximadas",
+                "samples": fuzzy_duplicate_samples,
             },
             {
                 "code": "future_dates",
@@ -2682,16 +2741,42 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         month = sanitize_text(str(request.args.get("month", "")), 7).strip()
         if not month or not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month invalid"}), 400
+        theme = sanitize_text(str(request.args.get("theme", "light")), 10).strip().lower()
+        if theme not in ("light", "dark"):
+            theme = "light"
         try:
-            pdf_buffer = io.BytesIO()
-            pdf_buffer.write(b"%PDF-1.4\n")
-            pdf_buffer.write(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >> endobj\n")
-            pdf_buffer.write(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
-            pdf_buffer.write(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n")
-            pdf_buffer.write(f"4 0 obj\nBT /F1 12 Tf 50 750 Td (Relatorio Financeiro {month}) Tj ET\nendobj\n".encode())
-            pdf_buffer.write(b"xref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000085 00000 n\n0000000174 00000 n\n0000000278 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >> startxref\n400\n%%EOF")
-            pdf_buffer.seek(0)
-            return pdf_buffer.getvalue(), 200, {
+            summary = repo.get_fin_cashflow_summary(months=18)
+            analytics = repo.get_fin_cashflow_analytics(month=month)
+            totals = analytics.get("totals", {})
+            month_rows = [
+                row for row in (summary.get("monthly") or []) if str(row.get("month") or "") == month
+            ]
+            month_row = month_rows[0] if month_rows else {}
+            lines = [
+                "Relatorio Financeiro",
+                f"Mes de referencia: {month}",
+                f"Tema: {theme}",
+                f"Gerado em: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+                "",
+                "Resumo do mes:",
+                f"- Receitas: R$ {float(totals.get('income') or 0):,.2f}",
+                f"- Despesas: R$ {float(totals.get('expense') or 0):,.2f}",
+                f"- Saldo: R$ {float(totals.get('balance') or 0):,.2f}",
+                f"- Taxa de poupanca: {float(totals.get('savings_rate_pct') or 0):.2f}%",
+                "",
+                "Top despesas:",
+            ]
+            for row in (analytics.get("top_expenses") or [])[:5]:
+                lines.append(f"- {row.get('category')}: R$ {float(row.get('amount') or 0):,.2f}")
+            lines.extend([
+                "",
+                "Comparativo serie mensal:",
+                f"- Receita do mes: R$ {float(month_row.get('income') or 0):,.2f}",
+                f"- Despesa do mes: R$ {float(month_row.get('expense') or 0):,.2f}",
+                f"- Saldo do mes: R$ {float(month_row.get('balance') or 0):,.2f}",
+            ])
+            pdf_bytes = _build_simple_pdf(lines, theme=theme)
+            return pdf_bytes, 200, {
                 "Content-Type": "application/pdf",
                 "Content-Disposition": f"attachment; filename=relatorio-{month}.pdf",
             }
@@ -4450,6 +4535,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             month = datetime.now(timezone.utc).strftime("%Y-%m")
         if not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
+        theme = sanitize_text(str(request.args.get("theme", "light")), 10).strip().lower()
+        if theme not in ("light", "dark"):
+            theme = "light"
 
         summary = repo.get_fin_cashflow_summary(months=18)
         analytics = repo.get_fin_cashflow_analytics(month=month)
@@ -4490,7 +4578,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             f"- Saldo mensal: R$ {float(month_row.get('balance') or 0):,.2f}",
         ])
 
-        pdf_bytes = _build_simple_pdf(lines)
+        pdf_bytes = _build_simple_pdf(lines, theme=theme)
         return app.response_class(
             pdf_bytes,
             mimetype="application/pdf",
@@ -4555,10 +4643,41 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         """Search across cashflow entries, assets, watchlist and goals."""
         q = sanitize_text(str(request.args.get("q", "")), 120).strip()
         limit = min(int(request.args.get("limit", "20")), 50)
+        search_type = sanitize_text(str(request.args.get("type", "")), 20).strip().lower() or None
+        date_from = sanitize_text(str(request.args.get("date_from", "")), 10).strip() or None
+        date_to = sanitize_text(str(request.args.get("date_to", "")), 10).strip() or None
+        min_value_raw = sanitize_text(str(request.args.get("min_value", "")), 24).strip()
+        max_value_raw = sanitize_text(str(request.args.get("max_value", "")), 24).strip()
+        min_value = None
+        max_value = None
+        try:
+            if min_value_raw:
+                min_value = float(min_value_raw)
+        except ValueError:
+            return jsonify({"error": "min_value inválido"}), 400
+        try:
+            if max_value_raw:
+                max_value = float(max_value_raw)
+        except ValueError:
+            return jsonify({"error": "max_value inválido"}), 400
+
+        if date_from and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_from):
+            return jsonify({"error": "date_from inválido (use YYYY-MM-DD)"}), 400
+        if date_to and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_to):
+            return jsonify({"error": "date_to inválido (use YYYY-MM-DD)"}), 400
+
         if not q or len(q) < 2:
             return jsonify({"results": []})
         try:
-            results = repo.global_finance_search(q=q, limit=limit)
+            results = repo.global_finance_search(
+                q=q,
+                limit=limit,
+                search_type=search_type,
+                date_from=date_from,
+                date_to=date_to,
+                min_value=min_value,
+                max_value=max_value,
+            )
             return jsonify({"results": results})
         except Exception as exc:
             logging.getLogger(__name__).error("global search: %s", exc)

@@ -82,6 +82,12 @@
           <button id="themeToggle" class="btn-icon" title="Alternar tema" aria-label="Alternar tema"><span class="btn-glyph" aria-hidden="true">◐</span><span>Tema</span></button>
           <button id="btnDensity" class="btn-icon" title="Alternar densidade" aria-label="Alternar densidade"><span class="btn-glyph" aria-hidden="true">▥</span><span>Densidade</span></button>
           <div class="fin-global-search-wrap" style="position:relative;display:inline-flex;align-items:center;">
+            <select id="finGlobalSearchType" class="fin-inline-select" aria-label="Tipo de busca" style="width:98px;margin-right:4px;">
+              <option value="">Tudo</option>
+              <option value="cashflow">Lançamentos</option>
+              <option value="asset">Ativos</option>
+              <option value="goal">Metas</option>
+            </select>
             <input id="finGlobalSearch" class="fin-inline-select" placeholder="🔍 Buscar..." autocomplete="off" aria-label="Busca global" style="width:140px;" />
             <div id="finGlobalSearchResults" class="fin-global-search-results" style="display:none;"></div>
           </div>
