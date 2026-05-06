@@ -185,12 +185,37 @@ function initTheme() {
 function initFinanceKeyboardShortcuts() {
   if (!isFinFlagOn("keyboardShortcuts")) return;
   document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+
+    if (ctrl && !e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const input = byId("finGlobalSearch");
+      if (input) {
+        input.focus();
+        input.select?.();
+      }
+      return;
+    }
+
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const input = byId("finGlobalSearch");
+      const results = byId("finGlobalSearchResults");
+      if (input) input.value = "";
+      if (results) results.style.display = "none";
+      return;
+    }
+
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      if (typeof openCreditCardsModal === "function") openCreditCardsModal();
+      return;
+    }
+
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     const overlay = byId("finModalOverlay");
     if (overlay && overlay.style.display !== "none") return;
-
-    const ctrl = e.ctrlKey || e.metaKey;
 
     if (ctrl && e.key === "r") { e.preventDefault(); loadAll(); showToast("Atualizando dados...", "info"); return; }
     if (ctrl && e.key === "i") { e.preventDefault(); openImportModal(); return; }

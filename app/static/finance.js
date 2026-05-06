@@ -605,6 +605,9 @@ function initFinanceTabs() {
 function showKeyboardShortcutsHelp() {
   openFinModal("Atalhos de Teclado", `
     <div class="fin-shortcuts-list">
+      <div class="fin-shortcut-row"><kbd>Ctrl+K</kbd><span>Focar busca global</span></div>
+      <div class="fin-shortcut-row"><kbd>Ctrl+Shift+K</kbd><span>Limpar busca global</span></div>
+      <div class="fin-shortcut-row"><kbd>Ctrl+Shift+C</kbd><span>Abrir gestão de cartões</span></div>
       <div class="fin-shortcut-row"><kbd>Ctrl+R</kbd><span>Atualizar dados</span></div>
       <div class="fin-shortcut-row"><kbd>Ctrl+I</kbd><span>Importar Excel/CSV</span></div>
       <div class="fin-shortcut-row"><kbd>Ctrl+E</kbd><span>Exportar dados</span></div>
@@ -801,6 +804,7 @@ async function loadAll(options = {}) {
       loadCashflowDataQuality();
       loadSavingsSuggestions(effectiveMonth);
       loadHealthScore();
+      loadCreditCardsUsageWidget({ useCache: useWidgetCache });
       loadDebts();
       loadInsights();
       loadAnomalies();
@@ -1344,6 +1348,60 @@ function renderSummary(s) {
     const totalDiv = (FIN.dividends || []).reduce((sum, d) => sum + (d.total_amount || 0), 0);
     dividends.querySelector(".fin-summary-value").textContent = formatBRL(totalDiv);
   }
+}
+
+async function loadCreditCardsUsageWidget(options = {}) {
+  const card = byId("summaryCardUsage");
+  if (!card) return;
+
+  const valueEl = card.querySelector(".fin-summary-value");
+  const subEl = card.querySelector(".fin-summary-sub");
+  if (valueEl) valueEl.textContent = "—";
+  if (subEl) subEl.textContent = "Carregando...";
+
+  const cards = await fetchWidgetJsonCached(
+    "credit-cards",
+    "/api/finance/credit-cards",
+    [],
+    { useCache: options.useCache === true },
+  );
+  const list = Array.isArray(cards) ? cards : [];
+
+  if (!list.length) {
+    if (valueEl) valueEl.textContent = "0%";
+    if (subEl) subEl.textContent = "Nenhum cartão cadastrado";
+    card.classList.remove("positive", "negative");
+    return;
+  }
+
+  const usageRows = await Promise.all(
+    list.map(async (c) => {
+      const id = Number(c.id || 0);
+      if (!id) return { spent: 0, limit: Number(c.limit_amount || 0) };
+      const usage = await fetchFinanceJson(`/api/finance/credit-cards/${id}/usage`, null);
+      const spent = Number(usage && usage.spent != null ? usage.spent : 0);
+      const limit = Number(
+        usage && usage.limit_amount != null
+          ? usage.limit_amount
+          : (c.limit_amount || 0),
+      );
+      return { spent, limit };
+    }),
+  );
+
+  const totalSpent = usageRows.reduce((sum, row) => sum + Number(row.spent || 0), 0);
+  const totalLimit = usageRows.reduce((sum, row) => sum + Math.max(0, Number(row.limit || 0)), 0);
+  const pct = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0;
+
+  if (valueEl) valueEl.textContent = `${formatNumber(pct, 1)}%`;
+  if (subEl) {
+    subEl.textContent = totalLimit > 0
+      ? `${formatBRL(totalSpent)} de ${formatBRL(totalLimit)}`
+      : "Sem limite definido";
+  }
+
+  card.classList.toggle("negative", pct >= 80);
+  card.classList.toggle("positive", pct < 50);
 }
 
 function renderPerformanceMetrics(metrics) {

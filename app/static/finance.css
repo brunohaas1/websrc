@@ -105,6 +105,12 @@ body.fin-density-comfortable .fin-table td {
   color: var(--text, #e2e8f0);
 }
 
+.fin-summary-sub {
+  font-size: 0.76rem;
+  color: var(--text-muted, #8b92a5);
+  opacity: 0.95;
+}
+
 .fin-summary-card.positive .fin-summary-value {
   color: #22c55e;
 }
