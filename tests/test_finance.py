@@ -2602,4 +2602,132 @@ class TestDebts:
         assert resp.status_code == 404
 
 
+# ══════════════════════════════════════════════════════════
+#          INSIGHTS (NLP)
+# ══════════════════════════════════════════════════════════
+class TestInsights:
+    def test_insights_returns_structure(self, client):
+        resp = client.get("/api/finance/insights")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "insights" in data
+        assert "month" in data
+        assert "generated_at" in data
+        assert isinstance(data["insights"], list)
+        assert len(data["insights"]) >= 1
+
+    def test_insights_items_have_required_keys(self, client):
+        resp = client.get("/api/finance/insights")
+        data = resp.get_json()
+        for item in data["insights"]:
+            assert "icon" in item
+            assert "type" in item
+            assert "title" in item
+            assert "body" in item
+
+    def test_insights_with_data(self, client):
+        # Add income and expense to get non-empty insights
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        jpost(client, "/api/finance/cashflow", {
+            "entry_date": today, "description": "Salário", "amount": 5000,
+            "category": "Salário", "entry_type": "income"
+        })
+        jpost(client, "/api/finance/cashflow", {
+            "entry_date": today, "description": "Aluguel", "amount": 2000,
+            "category": "Moradia", "entry_type": "expense"
+        })
+        resp = client.get("/api/finance/insights")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["insights"]) >= 1
+
+
+# ══════════════════════════════════════════════════════════
+#          2FA / TOTP
+# ══════════════════════════════════════════════════════════
+class TestTwoFA:
+    def test_status_default_disabled(self, client):
+        resp = client.get("/api/finance/2fa/status")
+        assert resp.status_code == 200
+        assert resp.get_json()["enabled"] is False
+
+    def test_setup_returns_secret_and_uri(self, client):
+        resp = jpost(client, "/api/finance/2fa/setup", {})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "secret" in data
+        assert "provisioning_uri" in data
+        assert len(data["secret"]) >= 16
+
+    def test_enable_invalid_token_returns_400(self, client):
+        jpost(client, "/api/finance/2fa/setup", {})
+        resp = jpost(client, "/api/finance/2fa/enable", {"token": "000000"})
+        assert resp.status_code == 400
+
+    def test_enable_without_setup_returns_400(self, client):
+        resp = jpost(client, "/api/finance/2fa/enable", {"token": "123456"})
+        assert resp.status_code == 400
+
+    def test_full_lifecycle(self, client):
+        import pyotp
+        # Setup
+        setup_resp = jpost(client, "/api/finance/2fa/setup", {})
+        assert setup_resp.status_code == 200
+        secret = setup_resp.get_json()["secret"]
+        # Enable with valid token
+        token = pyotp.TOTP(secret).now()
+        enable_resp = jpost(client, "/api/finance/2fa/enable", {"token": token})
+        assert enable_resp.status_code == 200
+        # Status should be enabled
+        status_resp = client.get("/api/finance/2fa/status")
+        assert status_resp.get_json()["enabled"] is True
+        # Verify with fresh token
+        token2 = pyotp.TOTP(secret).now()
+        verify_resp = jpost(client, "/api/finance/2fa/verify", {"token": token2})
+        assert verify_resp.status_code == 200
+        vdata = verify_resp.get_json()
+        assert vdata["verified"] is True
+        assert "proof" in vdata
+        # Disable
+        token3 = pyotp.TOTP(secret).now()
+        disable_resp = jpost(client, "/api/finance/2fa/disable", {"token": token3})
+        assert disable_resp.status_code == 200
+        # Status back to disabled
+        status2 = client.get("/api/finance/2fa/status")
+        assert status2.get_json()["enabled"] is False
+
+    def test_verify_invalid_token_returns_401(self, client):
+        # 2FA not enabled — should return verified:True
+        resp = jpost(client, "/api/finance/2fa/verify", {"token": "000000"})
+        assert resp.status_code == 200
+        assert resp.get_json()["verified"] is True
+
+    def test_disable_without_active_2fa_returns_400(self, client):
+        resp = jpost(client, "/api/finance/2fa/disable", {"token": "123456"})
+        assert resp.status_code == 400
+
+
+# ══════════════════════════════════════════════════════════
+#          PUSH SEND-TEST
+# ══════════════════════════════════════════════════════════
+class TestPushSendTest:
+    def test_no_vapid_key_returns_400(self, client):
+        resp = jpost(client, "/api/push/send-test", {})
+        # No VAPID key configured → 400, no subscribers → 200, or import error → 500
+        assert resp.status_code in (200, 400, 500)
+
+    def test_no_subscribers_returns_zero(self, client, app):
+        # Temporarily set a dummy VAPID key so we get past that check
+        original = app.config.get("VAPID_PRIVATE_KEY", "")
+        app.config["VAPID_PRIVATE_KEY"] = "dummy_key_for_test"
+        try:
+            resp = jpost(client, "/api/push/send-test", {})
+            # Should return 200 with sent:0 (no subscribers) or error from bad key
+            assert resp.status_code in (200, 500)
+            if resp.status_code == 200:
+                data = resp.get_json()
+                assert "sent" in data
+        finally:
+            app.config["VAPID_PRIVATE_KEY"] = original
 

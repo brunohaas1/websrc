@@ -33,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   maybeAutoOpenQuickTour();
   loadAll();
+  checkAndLock2FA();
 
   const refreshBtn = byId("finRefreshBtn");
   if (refreshBtn) refreshBtn.addEventListener("click", loadAll);
@@ -80,7 +81,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnLayoutPreset", openLayoutPresetModal);
   bind("btnLayoutReset", resetFinanceLayout);
   bind("btnTour", openQuickTourModal);
-  bind("btnNotifications", setupNotifications);
+  bind("btnNotifications", openNotificationsPanelModal);
+  bind("btnRefreshInsights", loadInsights);
+  bind("btn2FASetup", open2FASetupModal);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);
   bind("btnRunRebalanceSim", renderRebalance);

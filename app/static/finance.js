@@ -802,6 +802,7 @@ async function loadAll(options = {}) {
       loadSavingsSuggestions(effectiveMonth);
       loadHealthScore();
       loadDebts();
+      loadInsights();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();

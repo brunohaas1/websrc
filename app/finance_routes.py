@@ -7861,6 +7861,307 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"error": str(exc)}), 502
 
 
+    # ── Natural Language Insights ──────────────────────────────────────────
+    @app.get("/api/finance/insights")
+    @limiter.limit("20/minute")
+    def finance_insights():
+        cache_key = "finance:insights"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            now = datetime.now(timezone.utc)
+            current_month = now.strftime("%Y-%m")
+            prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+
+            analytics_cur = repo.get_fin_cashflow_analytics(month=current_month)
+            analytics_prev = repo.get_fin_cashflow_analytics(month=prev_month)
+            debts = repo.list_fin_debts(status="open")
+            goals = [g for g in repo.list_fin_goals() if g.get("status") != "completed"]
+            budget_rows = (analytics_cur.get("budget") or {}).get("items") or []
+
+            cur_totals = analytics_cur.get("totals") or {}
+            prev_totals = analytics_prev.get("totals") or {}
+            insights: list[dict] = []
+
+            # ── Income vs expense balance ──────────────────────────────
+            income = float(cur_totals.get("income") or 0)
+            expense = float(cur_totals.get("expense") or 0)
+            balance = income - expense
+            savings_rate = (balance / income * 100) if income > 0 else 0
+
+            if income > 0:
+                if savings_rate >= 20:
+                    insights.append({
+                        "icon": "🟢", "type": "positive",
+                        "title": "Ótima taxa de poupança",
+                        "body": f"Você poupou {savings_rate:.1f}% da sua renda em {current_month} — acima do recomendado (20%). Continue assim!",
+                    })
+                elif savings_rate >= 10:
+                    insights.append({
+                        "icon": "🟡", "type": "neutral",
+                        "title": "Poupança adequada",
+                        "body": f"Sua taxa de poupança foi de {savings_rate:.1f}% em {current_month}. Tente chegar a 20% para acelerar seus objetivos.",
+                    })
+                elif savings_rate > 0:
+                    insights.append({
+                        "icon": "🔴", "type": "warning",
+                        "title": "Taxa de poupança baixa",
+                        "body": f"Você poupou apenas {savings_rate:.1f}% da sua renda em {current_month}. Analise onde reduzir gastos.",
+                    })
+                else:
+                    insights.append({
+                        "icon": "🚨", "type": "danger",
+                        "title": "Déficit no mês",
+                        "body": f"Seus gastos ({_fmt_brl(expense)}) superaram a renda ({_fmt_brl(income)}) em {current_month}. Atenção ao orçamento!",
+                    })
+
+            # ── Month-over-month expense change ────────────────────────
+            exp_prev = float(prev_totals.get("expense") or 0)
+            if exp_prev > 0 and expense > 0:
+                pct_change = (expense - exp_prev) / exp_prev * 100
+                if pct_change > 15:
+                    insights.append({
+                        "icon": "📈", "type": "warning",
+                        "title": f"Gastos +{pct_change:.1f}% vs mês anterior",
+                        "body": f"Seus gastos aumentaram {pct_change:.1f}% em relação a {prev_month} ({_fmt_brl(exp_prev)} → {_fmt_brl(expense)}). Verifique as categorias.",
+                    })
+                elif pct_change < -10:
+                    insights.append({
+                        "icon": "📉", "type": "positive",
+                        "title": f"Gastos -{abs(pct_change):.1f}% vs mês anterior",
+                        "body": f"Ótimo! Você reduziu gastos em {abs(pct_change):.1f}% em relação a {prev_month}. Economia de {_fmt_brl(abs(expense - exp_prev))}.",
+                    })
+
+            # ── Top spending category ──────────────────────────────────
+            exp_cats_list = analytics_cur.get("top_expenses") or []
+            if exp_cats_list and income > 0:
+                top = exp_cats_list[0]
+                top_cat = top.get("category", "")
+                top_val = float(top.get("amount") or 0)
+                if (top_val / income) > 0.30:
+                    insights.append({
+                        "icon": "💡", "type": "tip",
+                        "title": f"Categoria dominante: {top_cat}",
+                        "body": f"'{top_cat}' representa {top_val/income*100:.1f}% da sua renda ({_fmt_brl(top_val)}). Considere se há espaço para redução.",
+                    })            # ── Budget overruns ────────────────────────────────────────
+            overruns = [r for r in budget_rows if float(r.get("limit") or 0) > 0
+                        and float(r.get("spent") or 0) > float(r.get("limit") or 0)]
+            if overruns:
+                names = ", ".join(r["category"] for r in overruns[:3])
+                insights.append({
+                    "icon": "⚠️", "type": "warning",
+                    "title": f"{len(overruns)} categoria(s) acima do orçamento",
+                    "body": f"Categorias que ultrapassaram o limite: {names}. Revise seu orçamento ou reduza os gastos.",
+                })
+
+            # ── Debt burden ────────────────────────────────────────────
+            if debts:
+                total_debt = sum(float(d.get("current_balance") or 0) for d in debts)
+                total_payment = sum(float(d.get("monthly_payment") or 0) for d in debts)
+                debt_pct = (total_payment / income * 100) if income > 0 else 0
+                if debt_pct > 30:
+                    insights.append({
+                        "icon": "💳", "type": "danger",
+                        "title": "Comprometimento alto com dívidas",
+                        "body": f"{debt_pct:.1f}% da sua renda vai para parcelas ({_fmt_brl(total_payment)}/mês). O ideal é até 30%. Saldo devedor total: {_fmt_brl(total_debt)}.",
+                    })
+                elif debt_pct > 0:
+                    insights.append({
+                        "icon": "💳", "type": "neutral",
+                        "title": "Dívidas sob controle",
+                        "body": f"Você compromete {debt_pct:.1f}% da renda com parcelas ({_fmt_brl(total_payment)}/mês). Saldo devedor: {_fmt_brl(total_debt)}.",
+                    })
+
+            # ── Goal progress ──────────────────────────────────────────
+            near_goals = [g for g in goals if float(g.get("target_amount") or 0) > 0
+                          and (float(g.get("current_amount") or 0) / float(g["target_amount"])) >= 0.80]
+            if near_goals:
+                g = near_goals[0]
+                pct = float(g["current_amount"]) / float(g["target_amount"]) * 100
+                insights.append({
+                    "icon": "🎯", "type": "positive",
+                    "title": f"Meta '{g['name']}' quase lá!",
+                    "body": f"Você está a {pct:.0f}% da sua meta '{g['name']}' ({_fmt_brl(g['current_amount'])} / {_fmt_brl(g['target_amount'])}). Continue assim!",
+                })
+
+            # ── Emergency fund suggestion ──────────────────────────────
+            if income > 0 and balance > 0 and not near_goals:
+                monthly_expenses = expense
+                if monthly_expenses > 0 and balance < monthly_expenses * 0.5:
+                    insights.append({
+                        "icon": "🛡️", "type": "tip",
+                        "title": "Reforce sua reserva de emergência",
+                        "body": f"Com gastos de {_fmt_brl(monthly_expenses)}/mês, sua reserva ideal é {_fmt_brl(monthly_expenses * 6)}. Tente poupar pelo menos {_fmt_brl(monthly_expenses * 0.1)}/mês para isso.",
+                    })
+
+            if not insights:
+                insights.append({
+                    "icon": "📊", "type": "neutral",
+                    "title": "Sem dados suficientes",
+                    "body": "Registre mais lançamentos para receber insights personalizados sobre suas finanças.",
+                })
+
+            payload = {"month": current_month, "insights": insights, "generated_at": now.isoformat()}
+            cache.set(cache_key, payload, 300)
+            return jsonify(payload)
+        except Exception as ex:
+            logger.exception("insights error")
+            return jsonify({"error": str(ex)}), 500
+
+    # ── 2FA / TOTP ─────────────────────────────────────────────────────────
+    @app.get("/api/finance/2fa/status")
+    @limiter.limit("30/minute")
+    def finance_2fa_status():
+        enabled = repo.get_setting("fin_2fa_enabled", "0") == "1"
+        return jsonify({"enabled": enabled})
+
+    @app.post("/api/finance/2fa/setup")
+    @require_finance_key
+    @limiter.limit("10/minute")
+    def finance_2fa_setup():
+        """Generate a new TOTP secret (does NOT enable 2FA until /enable is called)."""
+        try:
+            import pyotp
+            secret = pyotp.random_base32()
+            totp = pyotp.TOTP(secret)
+            issuer = "WebSRC Finance"
+            label = "finance@websrc"
+            provisioning_uri = totp.provisioning_uri(name=label, issuer_name=issuer)
+            # Store pending secret (not yet enabled)
+            repo.set_setting("fin_2fa_pending_secret", secret)
+            return jsonify({"secret": secret, "provisioning_uri": provisioning_uri})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.post("/api/finance/2fa/enable")
+    @require_finance_key
+    @limiter.limit("10/minute")
+    def finance_2fa_enable():
+        """Verify TOTP token and activate 2FA."""
+        try:
+            import pyotp
+            data = request.get_json(silent=True) or {}
+            token = str(data.get("token") or "").strip()
+            if not token:
+                return jsonify({"error": "token obrigatório"}), 400
+            secret = repo.get_setting("fin_2fa_pending_secret", "")
+            if not secret:
+                return jsonify({"error": "Chame /setup primeiro"}), 400
+            totp = pyotp.TOTP(secret)
+            if not totp.verify(token, valid_window=1):
+                return jsonify({"error": "Código inválido ou expirado"}), 400
+            repo.set_setting("fin_2fa_secret", secret)
+            repo.set_setting("fin_2fa_enabled", "1")
+            repo.set_setting("fin_2fa_pending_secret", "")
+            return jsonify({"status": "enabled"})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.post("/api/finance/2fa/verify")
+    @limiter.limit("10/minute")
+    def finance_2fa_verify():
+        """Verify a TOTP token. Returns a short-lived session proof."""
+        try:
+            import pyotp
+            data = request.get_json(silent=True) or {}
+            token = str(data.get("token") or "").strip()
+            if not token:
+                return jsonify({"error": "token obrigatório"}), 400
+            enabled = repo.get_setting("fin_2fa_enabled", "0") == "1"
+            if not enabled:
+                return jsonify({"verified": True, "note": "2FA not enabled"})
+            secret = repo.get_setting("fin_2fa_secret", "")
+            if not secret:
+                return jsonify({"error": "2FA não configurado"}), 500
+            totp = pyotp.TOTP(secret)
+            if not totp.verify(token, valid_window=1):
+                return jsonify({"verified": False, "error": "Código inválido"}), 401
+            # Return a time-bound proof the UI stores in sessionStorage
+            proof = hashlib.sha256(f"{secret}:{totp.now()}:{int(time.time()//300)}".encode()).hexdigest()[:16]
+            return jsonify({"verified": True, "proof": proof})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.post("/api/finance/2fa/disable")
+    @require_finance_key
+    @limiter.limit("10/minute")
+    def finance_2fa_disable():
+        """Disable 2FA after verifying current token."""
+        try:
+            import pyotp
+            data = request.get_json(silent=True) or {}
+            token = str(data.get("token") or "").strip()
+            if not token:
+                return jsonify({"error": "token obrigatório"}), 400
+            secret = repo.get_setting("fin_2fa_secret", "")
+            if not secret:
+                return jsonify({"error": "2FA não está ativo"}), 400
+            totp = pyotp.TOTP(secret)
+            if not totp.verify(token, valid_window=1):
+                return jsonify({"error": "Código inválido"}), 400
+            repo.set_setting("fin_2fa_enabled", "0")
+            repo.set_setting("fin_2fa_secret", "")
+            repo.set_setting("fin_2fa_pending_secret", "")
+            return jsonify({"status": "disabled"})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    # ── Web Push send-test + finance alerts ────────────────────────────────
+    @app.post("/api/push/send-test")
+    @require_finance_key
+    @limiter.limit("5/minute")
+    def push_send_test():
+        """Send a test push notification to all subscribed browsers."""
+        try:
+            from pywebpush import webpush, WebPushException
+            private_key = app.config.get("VAPID_PRIVATE_KEY", "")
+            claims_email = app.config.get("VAPID_CLAIMS_EMAIL", "mailto:admin@localhost")
+            if not private_key:
+                return jsonify({"error": "VAPID_PRIVATE_KEY not configured"}), 400
+            subs = repo.list_push_subscriptions()
+            if not subs:
+                return jsonify({"sent": 0, "note": "no subscribers"})
+            payload = json.dumps({
+                "title": "🔔 WebSRC Finance",
+                "body": "Notificações push estão funcionando!",
+                "tag": "test",
+                "url": "/finance",
+            })
+            sent = 0
+            failed = 0
+            for sub in subs:
+                try:
+                    keys = json.loads(sub["keys_json"])
+                    webpush(
+                        subscription_info={"endpoint": sub["endpoint"], "keys": keys},
+                        data=payload,
+                        vapid_private_key=private_key,
+                        vapid_claims={"sub": claims_email},
+                    )
+                    sent += 1
+                except WebPushException as ex:
+                    if ex.response and ex.response.status_code == 410:
+                        repo.remove_push_subscription(sub["endpoint"])
+                    failed += 1
+                except Exception:
+                    failed += 1
+            return jsonify({"sent": sent, "failed": failed})
+        except ImportError:
+            return jsonify({"error": "pywebpush not installed"}), 500
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+
+def _fmt_brl(value: float) -> str:
+    """Format a float value as BRL currency string (server-side)."""
+    try:
+        v = float(value or 0)
+        return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
 def _recalc_portfolio(repo: Repository, asset_id: int) -> None:
     """Recalculate portfolio position from all transactions."""
     txns = repo.list_fin_transactions(asset_id=asset_id, limit=9999)

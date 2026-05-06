@@ -166,6 +166,18 @@
         </div>
       </section>
 
+      <!-- ── Insights ──────────────────────────────────── -->
+      <section class="fin-card" id="finInsightsCard">
+        <h2>
+          💡 Insights Financeiros
+          <button id="btnRefreshInsights" class="btn-text" title="Atualizar insights">↻ Atualizar</button>
+          <button id="btn2FASetup" class="btn-text" title="Autenticação em dois fatores">🔐 2FA</button>
+        </h2>
+        <div id="finInsightsContent" class="fin-card-body">
+          {{ fin_skeleton('mini_rows') }}
+        </div>
+      </section>
+
       <!-- ── Currency ─────────────────────────────────── -->
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>

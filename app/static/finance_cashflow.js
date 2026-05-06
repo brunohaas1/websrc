@@ -4119,3 +4119,280 @@ async function openDebtSimulateModal(debtId) {
     }
   });
 }
+
+// ── NLP Financial Insights ─────────────────────────────────────────────────
+async function loadInsights() {
+  const el = document.getElementById("finInsightsContent");
+  if (!el) return;
+  el.innerHTML = '<p class="fin-loading">Carregando insights…</p>';
+  try {
+    const data = await finFetch("/api/finance/insights");
+    renderInsights(data);
+  } catch (e) {
+    el.innerHTML = `<p style="color:#ef4444;">Erro: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function renderInsights(data) {
+  const el = document.getElementById("finInsightsContent");
+  if (!el) return;
+  const insights = data?.insights || [];
+  if (!insights.length) {
+    el.innerHTML = '<p style="color:#888;">Sem insights disponíveis.</p>';
+    return;
+  }
+  const typeColor = { positive: "#22c55e", warning: "#f59e0b", danger: "#ef4444", neutral: "#94a3b8", tip: "#3b82f6" };
+  el.innerHTML = insights.map(i => `
+    <div class="fin-insight-item" style="border-left:3px solid ${typeColor[i.type] || "#94a3b8"};padding:.6rem .8rem;margin:.4rem 0;background:rgba(255,255,255,.04);border-radius:0 6px 6px 0;">
+      <div style="font-weight:600;font-size:.95rem;">${escapeHtml(i.icon)} ${escapeHtml(i.title)}</div>
+      <div style="font-size:.85rem;color:#cbd5e1;margin-top:.2rem;">${escapeHtml(i.body)}</div>
+    </div>
+  `).join("") + `<p style="font-size:.75rem;color:#64748b;margin-top:.6rem;">Gerado em: ${data.month}</p>`;
+}
+
+// ── Web Push Notifications ─────────────────────────────────────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function openNotificationsPanelModal() {
+  let subStatus = "desconhecido";
+  let subExists = false;
+  try {
+    if ("serviceWorker" in navigator && "PushManager" in window) {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      subExists = !!existing;
+      subStatus = existing ? "✅ Inscrito" : "❌ Não inscrito";
+    } else {
+      subStatus = "⚠️ Push não suportado neste navegador";
+    }
+  } catch {
+    subStatus = "⚠️ Erro ao verificar";
+  }
+  const body = `
+    <p style="margin-bottom:.8rem;">Status atual: <strong>${subStatus}</strong></p>
+    ${subExists
+      ? `<button class="fin-form-submit" onclick="unsubscribeWebPush(this)" style="background:#ef4444;">🔕 Cancelar inscrição</button>`
+      : `<button class="fin-form-submit" onclick="subscribeWebPush(this)">🔔 Ativar notificações push</button>`}
+    <button class="fin-form-submit" style="background:#3b82f6;margin-top:.5rem;" onclick="sendTestPush(this)">🧪 Enviar notificação de teste</button>
+    <p style="font-size:.75rem;color:#64748b;margin-top:.8rem;">As notificações são enviadas para todos os dispositivos inscritos quando há alertas financeiros.</p>
+  `;
+  openFinModal("🔔 Notificações Push", body);
+}
+
+async function subscribeWebPush(btn) {
+  try {
+    if (btn) btn.disabled = true;
+    const { public_key } = await finFetch("/api/push/vapid-public-key");
+    if (!public_key) throw new Error("Servidor sem VAPID configurado");
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(public_key),
+    });
+    const j = sub.toJSON();
+    await finFetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }),
+    });
+    alert("✅ Inscrição realizada! Você receberá notificações push.");
+    openNotificationsPanelModal();
+  } catch (e) {
+    alert("Erro ao ativar push: " + String(e));
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function unsubscribeWebPush(btn) {
+  try {
+    if (btn) btn.disabled = true;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await finFetch("/api/push/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      });
+      await sub.unsubscribe();
+    }
+    alert("Inscrição cancelada.");
+    openNotificationsPanelModal();
+  } catch (e) {
+    alert("Erro: " + String(e));
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function sendTestPush(btn) {
+  try {
+    if (btn) btn.disabled = true;
+    const r = await finFetch("/api/push/send-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    alert(`Enviado para ${r.sent || 0} dispositivo(s).${r.error ? " Erro: " + r.error : ""}`);
+  } catch (e) {
+    alert("Erro: " + String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ── 2FA / TOTP ─────────────────────────────────────────────────────────────
+async function open2FASetupModal() {
+  try {
+    const status = await finFetch("/api/finance/2fa/status");
+    if (status.enabled) {
+      _show2FAManageModal();
+    } else {
+      _show2FASetupModal();
+    }
+  } catch (e) {
+    alert("Erro: " + String(e));
+  }
+}
+
+function _show2FASetupModal() {
+  const body = `
+    <p style="margin-bottom:.8rem;">Proteja o acesso à seção financeira com um código TOTP (Google Authenticator, Authy, etc.).</p>
+    <form id="form2FASetup">
+      <button type="submit" class="fin-form-submit">⚙️ Gerar QR Code / Chave</button>
+    </form>
+    <div id="twofa-setup-result"></div>
+  `;
+  openFinModal("🔐 Configurar 2FA", body);
+  document.getElementById("form2FASetup")?.addEventListener("submit", submitSetup2FA);
+}
+
+function _show2FAManageModal() {
+  const body = `
+    <p style="color:#22c55e;margin-bottom:.8rem;">✅ 2FA está <strong>ativo</strong>. Insira o código atual para desativar:</p>
+    <form id="form2FADisable">
+      <div class="fin-form-group">
+        <label>Código TOTP</label>
+        <input id="inp2FADisableToken" type="text" inputmode="numeric" maxlength="6" placeholder="000000" required />
+      </div>
+      <button type="submit" class="fin-form-submit" style="background:#ef4444;">🔓 Desativar 2FA</button>
+    </form>
+  `;
+  openFinModal("🔐 Gerenciar 2FA", body);
+  document.getElementById("form2FADisable")?.addEventListener("submit", submitDisable2FA);
+}
+
+async function submitSetup2FA(e) {
+  e.preventDefault();
+  try {
+    const data = await finFetch("/api/finance/2fa/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const resultEl = document.getElementById("twofa-setup-result");
+    if (!resultEl) return;
+    resultEl.innerHTML = `
+      <p style="margin:.8rem 0 .4rem;font-weight:600;">1. Escaneie o QR Code no seu app autenticador:</p>
+      <p style="font-size:.8rem;word-break:break-all;background:rgba(0,0,0,.3);padding:.5rem;border-radius:6px;">${escapeHtml(data.provisioning_uri)}</p>
+      <p style="margin:.6rem 0 .4rem;font-weight:600;">Ou insira a chave manual: <code style="font-size:.85rem;">${escapeHtml(data.secret)}</code></p>
+      <p style="margin:.8rem 0 .4rem;font-weight:600;">2. Confirme com o código gerado:</p>
+      <form id="form2FAEnable">
+        <div class="fin-form-group">
+          <input id="inp2FAToken" type="text" inputmode="numeric" maxlength="6" placeholder="000000" required />
+        </div>
+        <button type="submit" class="fin-form-submit">✅ Ativar 2FA</button>
+      </form>
+      <div id="twofa-enable-result"></div>
+    `;
+    document.getElementById("form2FAEnable")?.addEventListener("submit", submitEnable2FA);
+  } catch (e) {
+    alert("Erro: " + String(e));
+  }
+}
+
+async function submitEnable2FA(e) {
+  e.preventDefault();
+  const token = document.getElementById("inp2FAToken")?.value?.trim();
+  if (!token) return;
+  try {
+    await finFetch("/api/finance/2fa/enable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    // Mark session as verified so page doesn't re-lock immediately
+    sessionStorage.setItem("fin_2fa_verified", "1");
+    const r2 = document.getElementById("twofa-enable-result");
+    if (r2) r2.innerHTML = '<p style="color:#22c55e;margin-top:.6rem;">✅ 2FA ativado com sucesso!</p>';
+  } catch (e) {
+    const r2 = document.getElementById("twofa-enable-result");
+    if (r2) r2.innerHTML = `<p style="color:#ef4444;">Erro: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function submitDisable2FA(e) {
+  e.preventDefault();
+  const token = document.getElementById("inp2FADisableToken")?.value?.trim();
+  if (!token) return;
+  try {
+    await finFetch("/api/finance/2fa/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    sessionStorage.removeItem("fin_2fa_verified");
+    sessionStorage.removeItem("fin_2fa_proof");
+    alert("2FA desativado.");
+    document.querySelector(".fin-modal-close")?.click();
+  } catch (e) {
+    alert("Erro: " + String(e));
+  }
+}
+
+async function checkAndLock2FA() {
+  try {
+    const status = await finFetch("/api/finance/2fa/status");
+    if (!status.enabled) return;
+    // If session already verified, skip lock
+    if (sessionStorage.getItem("fin_2fa_verified") === "1") return;
+    // Show blocking lock modal
+    const body = `
+      <p style="margin-bottom:.8rem;">Esta seção está protegida por 2FA. Insira seu código para continuar.</p>
+      <form id="form2FAVerify">
+        <div class="fin-form-group">
+          <label>Código TOTP</label>
+          <input id="inp2FAVerifyToken" type="text" inputmode="numeric" maxlength="6" placeholder="000000" required autofocus />
+        </div>
+        <button type="submit" class="fin-form-submit">🔓 Verificar</button>
+      </form>
+      <div id="twofa-verify-result"></div>
+    `;
+    openFinModal("🔐 Verificação 2FA", body);
+    // Prevent modal close button from working (lock)
+    const closeBtn = document.querySelector(".fin-modal-close");
+    if (closeBtn) closeBtn.style.display = "none";
+    document.getElementById("form2FAVerify")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const token = document.getElementById("inp2FAVerifyToken")?.value?.trim();
+      if (!token) return;
+      try {
+        const r = await finFetch("/api/finance/2fa/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (r.verified) {
+          sessionStorage.setItem("fin_2fa_verified", "1");
+          if (r.proof) sessionStorage.setItem("fin_2fa_proof", r.proof);
+          if (closeBtn) closeBtn.style.display = "";
+          document.querySelector(".fin-modal-close")?.click();
+        } else {
+          const res = document.getElementById("twofa-verify-result");
+          if (res) res.innerHTML = '<p style="color:#ef4444;">Código inválido. Tente novamente.</p>';
+        }
+      } catch (e) {
+        const res = document.getElementById("twofa-verify-result");
+        if (res) res.innerHTML = `<p style="color:#ef4444;">Erro: ${escapeHtml(String(e))}</p>`;
+      }
+    });
+  } catch {
+    // If 2FA check fails, don't block access
+  }
+}
