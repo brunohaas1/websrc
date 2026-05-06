@@ -4575,6 +4575,242 @@ class Repository:
             "count": len(rows),
         }
 
+    # ── Financial Debts ──────────────────────────────
+
+    def list_fin_debts(self, status: str | None = None) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            if status:
+                rows = conn.execute(
+                    self._sql(
+                        "SELECT * FROM fin_debts WHERE status = ? ORDER BY created_at DESC"
+                    ),
+                    (str(status),),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    self._sql("SELECT * FROM fin_debts ORDER BY created_at DESC")
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_fin_debt(self, data: dict[str, Any]) -> int:
+        creditor = str(data.get("creditor") or "").strip()
+        if not creditor:
+            raise ValueError("creditor é obrigatório")
+        principal = float(data.get("principal") or 0)
+        current_balance = float(data.get("current_balance") if data.get("current_balance") is not None else principal)
+        interest_rate = float(data.get("interest_rate") or 0)
+        monthly_payment = float(data.get("monthly_payment") or 0)
+        due_date = str(data.get("due_date") or "").strip() or None
+        status = str(data.get("status") or "open").strip() or "open"
+        category = str(data.get("category") or "personal").strip() or "personal"
+        description = str(data.get("description") or "").strip() or None
+        notes = str(data.get("notes") or "").strip() or None
+
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_debts
+                    (creditor, description, principal, current_balance, interest_rate,
+                     monthly_payment, due_date, status, category, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(
+                q,
+                (creditor, description, principal, current_balance, interest_rate,
+                 monthly_payment, due_date, status, category, notes),
+            )
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def update_fin_debt(self, debt_id: int, data: dict[str, Any]) -> bool:
+        fields: list[str] = []
+        values: list[Any] = []
+        for key, col in (
+            ("creditor", "creditor"),
+            ("description", "description"),
+            ("principal", "principal"),
+            ("current_balance", "current_balance"),
+            ("interest_rate", "interest_rate"),
+            ("monthly_payment", "monthly_payment"),
+            ("due_date", "due_date"),
+            ("status", "status"),
+            ("category", "category"),
+            ("notes", "notes"),
+        ):
+            if key in data:
+                val = data[key]
+                if key == "creditor":
+                    val = str(val or "").strip()
+                    if not val:
+                        raise ValueError("creditor é obrigatório")
+                elif key in ("principal", "current_balance", "interest_rate", "monthly_payment"):
+                    val = float(val or 0)
+                fields.append(f"{col} = ?")
+                values.append(val)
+
+        if not fields:
+            return False
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(int(debt_id))
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(f"UPDATE fin_debts SET {', '.join(fields)} WHERE id = ?"),
+                tuple(values),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def delete_fin_debt(self, debt_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql("DELETE FROM fin_debts WHERE id = ?"),
+                (int(debt_id),),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def get_fin_debts_summary(self) -> dict[str, Any]:
+        """Return totals and payoff strategy info for all open debts."""
+        debts = [d for d in self.list_fin_debts() if d.get("status") != "paid"]
+        if not debts:
+            return {
+                "total_balance": 0.0,
+                "total_monthly_payment": 0.0,
+                "total_interest_paid_projection": 0.0,
+                "debts_count": 0,
+                "snowball": [],
+                "avalanche": [],
+            }
+
+        total_balance = sum(float(d.get("current_balance") or 0) for d in debts)
+        total_monthly = sum(float(d.get("monthly_payment") or 0) for d in debts)
+
+        def months_to_payoff(balance: float, rate_monthly: float, payment: float) -> int:
+            """Estimate months to payoff given balance, monthly rate and monthly payment."""
+            if balance <= 0:
+                return 0
+            if rate_monthly <= 0:
+                if payment <= 0:
+                    return 9999
+                return max(1, int(balance / payment) + 1)
+            if payment <= balance * rate_monthly:
+                return 9999  # payment doesn't cover interest
+            import math
+            try:
+                n = -math.log(1 - (balance * rate_monthly / payment)) / math.log(1 + rate_monthly)
+                return max(1, int(n) + 1)
+            except (ValueError, ZeroDivisionError):
+                return 9999
+
+        def total_interest(balance: float, rate_monthly: float, payment: float, months: int) -> float:
+            if months >= 9999:
+                return 0.0
+            return max(0.0, round(payment * months - balance, 2))
+
+        enriched = []
+        for d in debts:
+            bal = float(d.get("current_balance") or 0)
+            rate_yr = float(d.get("interest_rate") or 0)
+            rate_mo = rate_yr / 12 / 100 if rate_yr > 0 else 0.0
+            payment = float(d.get("monthly_payment") or 0)
+            months = months_to_payoff(bal, rate_mo, payment)
+            enriched.append({
+                **d,
+                "_rate_monthly": rate_mo,
+                "_months": months,
+                "_interest": total_interest(bal, rate_mo, payment, months),
+            })
+
+        total_interest_proj = round(sum(e["_interest"] for e in enriched), 2)
+
+        # Snowball: lowest balance first
+        snowball = sorted(enriched, key=lambda x: float(x.get("current_balance") or 0))
+        # Avalanche: highest interest rate first
+        avalanche = sorted(enriched, key=lambda x: float(x.get("interest_rate") or 0), reverse=True)
+
+        def fmt_list(lst: list) -> list[dict]:
+            return [
+                {
+                    "id": d.get("id"),
+                    "creditor": d.get("creditor"),
+                    "current_balance": round(float(d.get("current_balance") or 0), 2),
+                    "interest_rate": round(float(d.get("interest_rate") or 0), 2),
+                    "monthly_payment": round(float(d.get("monthly_payment") or 0), 2),
+                    "months_to_payoff": d["_months"],
+                    "total_interest": d["_interest"],
+                }
+                for d in lst
+            ]
+
+        return {
+            "total_balance": round(total_balance, 2),
+            "total_monthly_payment": round(total_monthly, 2),
+            "total_interest_paid_projection": total_interest_proj,
+            "debts_count": len(debts),
+            "snowball": fmt_list(snowball),
+            "avalanche": fmt_list(avalanche),
+        }
+
+    def simulate_fin_debt_anticipation(
+        self, debt_id: int, extra_payment: float
+    ) -> dict[str, Any]:
+        """Simulate effect of an extra lump-sum or monthly payment on a debt."""
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql("SELECT * FROM fin_debts WHERE id = ?"),
+                (int(debt_id),),
+            ).fetchone()
+        if not row:
+            raise ValueError(f"Debt {debt_id} not found")
+        d = dict(row)
+        bal = float(d.get("current_balance") or 0)
+        rate_yr = float(d.get("interest_rate") or 0)
+        rate_mo = rate_yr / 12 / 100 if rate_yr > 0 else 0.0
+        payment = float(d.get("monthly_payment") or 0)
+
+        import math
+
+        def months_to_payoff(b: float, r: float, p: float) -> int:
+            if b <= 0:
+                return 0
+            if r <= 0:
+                return max(1, int(b / p) + 1) if p > 0 else 9999
+            if p <= b * r:
+                return 9999
+            try:
+                n = -math.log(1 - (b * r / p)) / math.log(1 + r)
+                return max(1, int(n) + 1)
+            except (ValueError, ZeroDivisionError):
+                return 9999
+
+        months_base = months_to_payoff(bal, rate_mo, payment)
+        total_paid_base = payment * months_base if months_base < 9999 else 0.0
+
+        # Apply extra as lump-sum reduction
+        new_bal = max(0.0, bal - float(extra_payment))
+        months_new = months_to_payoff(new_bal, rate_mo, payment)
+        total_paid_new = payment * months_new if months_new < 9999 else 0.0
+
+        return {
+            "debt_id": debt_id,
+            "creditor": d.get("creditor"),
+            "current_balance": round(bal, 2),
+            "extra_payment": round(float(extra_payment), 2),
+            "new_balance_after_extra": round(new_bal, 2),
+            "months_base": months_base,
+            "months_after_extra": months_new,
+            "months_saved": max(0, months_base - months_new),
+            "total_paid_base": round(total_paid_base, 2),
+            "total_paid_after_extra": round(total_paid_new, 2),
+            "total_saved": round(max(0.0, total_paid_base - total_paid_new - float(extra_payment)), 2),
+        }
+
     def list_fin_dividends(
         self, asset_id: int | None = None, limit: int = 200,
     ) -> list[dict[str, Any]]:

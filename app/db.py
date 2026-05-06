@@ -306,6 +306,24 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
 CREATE INDEX IF NOT EXISTS idx_fin_accounts_type
 ON fin_accounts(account_type);
 
+CREATE TABLE IF NOT EXISTS fin_debts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creditor TEXT NOT NULL,
+    description TEXT,
+    principal REAL NOT NULL DEFAULT 0,
+    current_balance REAL NOT NULL DEFAULT 0,
+    interest_rate REAL NOT NULL DEFAULT 0,
+    monthly_payment REAL NOT NULL DEFAULT 0,
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    category TEXT DEFAULT 'personal',
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_debts_status
+ON fin_debts(status);
+
 CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_type TEXT NOT NULL,
@@ -713,6 +731,24 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_accounts_type
 ON fin_accounts(account_type);
+
+CREATE TABLE IF NOT EXISTS fin_debts (
+    id BIGSERIAL PRIMARY KEY,
+    creditor TEXT NOT NULL,
+    description TEXT,
+    principal DOUBLE PRECISION NOT NULL DEFAULT 0,
+    current_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+    interest_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    monthly_payment DOUBLE PRECISION NOT NULL DEFAULT 0,
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    category TEXT DEFAULT 'personal',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_debts_status
+ON fin_debts(status);
 
 CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     id BIGSERIAL PRIMARY KEY,

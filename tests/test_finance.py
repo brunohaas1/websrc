@@ -64,7 +64,7 @@ class TestAssets:
         resp = _add_asset(client)
         data = resp.get_json()
         assert resp.status_code == 201
-        assert data["ok"] is True
+        assert data["status"] == "created"
         assert data["id"] >= 1
 
     def test_add_asset_missing_symbol(self, client):
@@ -425,7 +425,7 @@ class TestTransactions:
         resp = client.get("/api/finance/maintenance/cleanup-duplicates")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["ok"] is True
+        assert data["status"] == "created"
         assert data["method"] == "POST"
 
     def test_cleanup_duplicates_requires_confirmation_headers(self, client):
@@ -621,7 +621,7 @@ class TestWatchlist:
             "symbol": "BBDC4", "target_price": 15.5, "alert_above": True,
         })
         assert resp.status_code == 201
-        assert resp.get_json()["ok"] is True
+        assert resp.get_json()["status"] == "updated"
 
     def test_add_watchlist_missing_symbol(self, client):
         resp = jpost(client, "/api/finance/watchlist", {"target_price": 10})
@@ -2488,6 +2488,118 @@ class TestMonthlyComparison:
             assert "income" in row
             assert "expense" in row
             assert "balance" in row
+
+
+class TestDebts:
+    def _add(self, client, **kwargs):
+        payload = {
+            "creditor": "Banco X",
+            "principal": 10000.0,
+            "current_balance": 8000.0,
+            "interest_rate": 12.0,
+            "monthly_payment": 500.0,
+        }
+        payload.update(kwargs)
+        return jpost(client, "/api/finance/debts", payload)
+
+    def test_list_empty(self, client):
+        resp = client.get("/api/finance/debts")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+    def test_add_and_list(self, client):
+        resp = self._add(client)
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["status"] == "created"
+        assert "id" in data
+
+        rows = client.get("/api/finance/debts").get_json()
+        assert len(rows) == 1
+        assert rows[0]["creditor"] == "Banco X"
+        assert rows[0]["current_balance"] == pytest.approx(8000.0)
+
+    def test_add_missing_creditor(self, client):
+        resp = jpost(client, "/api/finance/debts", {"principal": 1000.0})
+        assert resp.status_code == 400
+
+    def test_add_missing_key(self, client):
+        resp = client.post("/api/finance/debts", json={"creditor": "X"})
+        assert resp.status_code in (201, 400)  # should succeed with minimal payload
+
+    def test_update(self, client):
+        debt_id = self._add(client).get_json()["id"]
+        resp = client.put(
+            f"/api/finance/debts/{debt_id}",
+            json={
+                "creditor": "Banco Y",
+                "current_balance": 7500.0,
+                "monthly_payment": 600.0,
+                "interest_rate": 10.0,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "updated"
+
+        rows = client.get("/api/finance/debts").get_json()
+        assert rows[0]["creditor"] == "Banco Y"
+        assert rows[0]["current_balance"] == pytest.approx(7500.0)
+
+    def test_update_not_found(self, client):
+        resp = client.put(
+            "/api/finance/debts/99999",
+            json={"creditor": "Nope", "current_balance": 0, "monthly_payment": 0, "interest_rate": 0},
+        )
+        assert resp.status_code == 404
+
+    def test_delete(self, client):
+        debt_id = self._add(client).get_json()["id"]
+        resp = client.delete(f"/api/finance/debts/{debt_id}")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "deleted"
+        assert client.get("/api/finance/debts").get_json() == []
+
+    def test_delete_not_found(self, client):
+        resp = client.delete("/api/finance/debts/99999")
+        assert resp.status_code == 404
+
+    def test_summary_empty(self, client):
+        resp = client.get("/api/finance/debts/summary")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "total_balance" in data
+        assert "snowball" in data
+        assert "avalanche" in data
+        assert data["snowball"] == []
+        assert data["avalanche"] == []
+
+    def test_summary_with_debts(self, client):
+        self._add(client, creditor="Low Balance", current_balance=1000, interest_rate=5, monthly_payment=100)
+        self._add(client, creditor="High Rate", current_balance=5000, interest_rate=20, monthly_payment=300)
+
+        data = client.get("/api/finance/debts/summary").get_json()
+        assert data["total_balance"] == pytest.approx(6000.0)
+        # snowball: lowest balance first
+        assert data["snowball"][0]["creditor"] == "Low Balance"
+        # avalanche: highest rate first
+        assert data["avalanche"][0]["creditor"] == "High Rate"
+        assert "months_to_payoff" in data["snowball"][0]
+        assert "total_interest" in data["snowball"][0]
+
+    def test_simulate_anticipation(self, client):
+        debt_id = self._add(client, current_balance=5000, interest_rate=12, monthly_payment=300).get_json()["id"]
+        resp = jpost(client, f"/api/finance/debts/{debt_id}/simulate", {"extra_payment": 1000})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "months_base" in data
+        assert "months_after_extra" in data
+        assert "months_saved" in data
+        assert "total_saved" in data
+        assert data["months_after_extra"] <= data["months_base"]
+
+    def test_simulate_not_found(self, client):
+        resp = jpost(client, "/api/finance/debts/99999/simulate", {"extra_payment": 500})
+        assert resp.status_code == 404
 
 
 

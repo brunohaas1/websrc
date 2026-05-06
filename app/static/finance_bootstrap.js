@@ -232,6 +232,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnInstallments", openInstallmentsModal);
   bind("btnSavingsGoals", openSavingsGoalsModal);
   bind("btnCreditCards", openCreditCardsModal);
+  bind("btnAddDebt", openAddDebtModal);
+  bind("btnDebtsStrategy", openDebtsStrategyModal);
   bind("btnMonthlyComparison", openMonthlyComparisonModal);
 });
 

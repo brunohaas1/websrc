@@ -3699,3 +3699,423 @@ document.addEventListener("blur", (e) => {
     hint.textContent = formatBRL(val);
   }
 }, true);
+
+// ── Debt Management ───────────────────────────────────
+
+function renderDebts(debts) {
+  const el = byId("finDebtsContent");
+  if (!el) return;
+  const rows = Array.isArray(debts) ? debts : [];
+  if (!rows.length) {
+    el.innerHTML = '<p class="fin-empty">Nenhuma dívida cadastrada.</p>';
+    return;
+  }
+  const open = rows.filter((d) => d.status !== "paid");
+  const totalBalance = open.reduce((s, d) => s + Number(d.current_balance || 0), 0);
+  const totalPayment = open.reduce((s, d) => s + Number(d.monthly_payment || 0), 0);
+
+  const statusLabel = (s) =>
+    s === "paid" ? '<span class="fin-badge" style="background:#22c55e22;color:#22c55e;">quitada</span>'
+      : s === "partial" ? '<span class="fin-badge" style="background:#f59e0b22;color:#f59e0b;">parcial</span>'
+      : '<span class="fin-badge" style="background:#ef444422;color:#ef4444;">aberta</span>';
+
+  const trs = rows.map((d) => `
+    <tr>
+      <td><strong>${escapeHtml(d.creditor || "—")}</strong></td>
+      <td>${escapeHtml(d.description || "—")}</td>
+      <td class="text-right mono fin-down">${formatBRL(d.current_balance || 0)}</td>
+      <td class="text-right mono">${Number(d.interest_rate || 0).toFixed(2)}% a.a.</td>
+      <td class="text-right mono">${formatBRL(d.monthly_payment || 0)}/mês</td>
+      <td>${escapeHtml(d.due_date || "—")}</td>
+      <td>${statusLabel(d.status || "open")}</td>
+      <td class="text-center">
+        <button class="fin-del-btn" data-debt-simulate="${d.id}" title="Simular antecipação">📐</button>
+        <button class="fin-del-btn" data-debt-edit="${d.id}" title="Editar">✎</button>
+        <button class="fin-del-btn" data-debt-delete="${d.id}" title="Excluir">✕</button>
+      </td>
+    </tr>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="fin-cashflow-analytics-grid" style="margin-bottom:10px;">
+      <div class="fin-cashflow-chip">
+        <span>💰 Saldo devedor total</span>
+        <strong class="fin-down">${formatBRL(totalBalance)}</strong>
+      </div>
+      <div class="fin-cashflow-chip">
+        <span>📅 Parcela mensal total</span>
+        <strong>${formatBRL(totalPayment)}</strong>
+      </div>
+      <div class="fin-cashflow-chip">
+        <span>🔢 Dívidas abertas</span>
+        <strong>${open.length}</strong>
+      </div>
+    </div>
+    <div class="fin-table-wrap">
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th>Credor</th><th>Descrição</th>
+            <th class="text-right">Saldo</th>
+            <th class="text-right">Juros</th>
+            <th class="text-right">Parcela</th>
+            <th>Vencimento</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${trs}</tbody>
+      </table>
+    </div>
+  `;
+
+  el.addEventListener("click", async (e) => {
+    const simBtn = e.target.closest("[data-debt-simulate]");
+    const editBtn = e.target.closest("[data-debt-edit]");
+    const delBtn = e.target.closest("[data-debt-delete]");
+    if (simBtn) openDebtSimulateModal(Number(simBtn.dataset.debtSimulate));
+    if (editBtn) {
+      const debt = (FIN.debts || []).find((d) => Number(d.id) === Number(editBtn.dataset.debtEdit));
+      if (debt) openEditDebtModal(debt);
+    }
+    if (delBtn) {
+      const id = Number(delBtn.dataset.debtDelete);
+      const debt = (FIN.debts || []).find((d) => Number(d.id) === id);
+      withUndoDelete(`Dívida "${debt?.creditor || id}" será excluída.`, async () => {
+        try {
+          const resp = await finFetch(`/api/finance/debts/${id}`, { method: "DELETE" });
+          const data = await resp.json();
+          if (!resp.ok) { showToast(data.error || "Erro ao excluir"); return; }
+          showToast("Dívida excluída.", "success");
+          await loadDebts();
+        } catch { showToast("Erro de rede"); }
+      });
+    }
+  }, { once: false });
+}
+
+async function loadDebts() {
+  try {
+    const resp = await finFetch("/api/finance/debts");
+    const rows = resp.ok ? await resp.json() : [];
+    FIN.debts = Array.isArray(rows) ? rows : [];
+  } catch {
+    FIN.debts = [];
+  }
+  renderDebts(FIN.debts || []);
+}
+
+function openAddDebtModal() {
+  openFinModal("💳 Nova Dívida", `
+    <form data-form-action="submitAddDebt">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Credor</label>
+          <input id="fmDebtCreditor" type="text" placeholder="Ex.: Banco Itaú, Cartão" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <select id="fmDebtCategory">
+            <option value="personal">Pessoal</option>
+            <option value="credit_card">Cartão de Crédito</option>
+            <option value="vehicle">Veículo</option>
+            <option value="real_estate">Imóvel</option>
+            <option value="student">Estudantil</option>
+            <option value="medical">Médico</option>
+            <option value="other">Outro</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Descrição</label>
+        <input id="fmDebtDescription" type="text" placeholder="Descrição opcional" />
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Principal (R$)</label>
+          <input id="fmDebtPrincipal" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="fin-form-group">
+          <label>Saldo atual (R$)</label>
+          <input id="fmDebtBalance" type="number" min="0" step="0.01" value="0" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Juros (% a.a.)</label>
+          <input id="fmDebtRate" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="fin-form-group">
+          <label>Parcela mensal (R$)</label>
+          <input id="fmDebtPayment" type="number" min="0" step="0.01" value="0" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Vencimento</label>
+          <input id="fmDebtDueDate" type="date" />
+        </div>
+        <div class="fin-form-group">
+          <label>Status</label>
+          <select id="fmDebtStatus">
+            <option value="open">Aberta</option>
+            <option value="partial">Parcialmente paga</option>
+            <option value="paid">Quitada</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Observações</label>
+        <input id="fmDebtNotes" type="text" placeholder="Opcional" />
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar dívida</button>
+    </form>
+  `);
+}
+
+function openEditDebtModal(debt) {
+  const d = debt || {};
+  openFinModal("💳 Editar Dívida", `
+    <form data-form-action="submitEditDebt" data-form-arg="${Number(d.id || 0)}">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Credor</label>
+          <input id="fmDebtCreditor" type="text" value="${escapeHtml(String(d.creditor || ""))}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Categoria</label>
+          <select id="fmDebtCategory">
+            ${["personal","credit_card","vehicle","real_estate","student","medical","other"].map((v) =>
+              `<option value="${v}" ${String(d.category||"") === v ? "selected" : ""}>${escapeHtml(v)}</option>`
+            ).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Descrição</label>
+        <input id="fmDebtDescription" type="text" value="${escapeHtml(String(d.description || ""))}" />
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Principal (R$)</label>
+          <input id="fmDebtPrincipal" type="number" min="0" step="0.01" value="${Number(d.principal||0)}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Saldo atual (R$)</label>
+          <input id="fmDebtBalance" type="number" min="0" step="0.01" value="${Number(d.current_balance||0)}" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Juros (% a.a.)</label>
+          <input id="fmDebtRate" type="number" min="0" step="0.01" value="${Number(d.interest_rate||0)}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Parcela mensal (R$)</label>
+          <input id="fmDebtPayment" type="number" min="0" step="0.01" value="${Number(d.monthly_payment||0)}" />
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Vencimento</label>
+          <input id="fmDebtDueDate" type="date" value="${escapeHtml(String(d.due_date || ""))}" />
+        </div>
+        <div class="fin-form-group">
+          <label>Status</label>
+          <select id="fmDebtStatus">
+            <option value="open" ${String(d.status||"")==="open"?"selected":""}>Aberta</option>
+            <option value="partial" ${String(d.status||"")==="partial"?"selected":""}>Parcialmente paga</option>
+            <option value="paid" ${String(d.status||"")==="paid"?"selected":""}>Quitada</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-group">
+        <label>Observações</label>
+        <input id="fmDebtNotes" type="text" value="${escapeHtml(String(d.notes || ""))}" />
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar alterações</button>
+    </form>
+  `);
+}
+
+async function submitAddDebt(e) {
+  e.preventDefault();
+  const creditor = String(byId("fmDebtCreditor")?.value || "").trim();
+  if (!creditor) { showToast("Informe o credor"); return; }
+  const body = {
+    creditor,
+    description: String(byId("fmDebtDescription")?.value || "").trim() || null,
+    principal: Number(byId("fmDebtPrincipal")?.value || 0),
+    current_balance: Number(byId("fmDebtBalance")?.value || 0),
+    interest_rate: Number(byId("fmDebtRate")?.value || 0),
+    monthly_payment: Number(byId("fmDebtPayment")?.value || 0),
+    due_date: String(byId("fmDebtDueDate")?.value || "").trim() || null,
+    status: String(byId("fmDebtStatus")?.value || "open"),
+    category: String(byId("fmDebtCategory")?.value || "personal"),
+    notes: String(byId("fmDebtNotes")?.value || "").trim() || null,
+  };
+  try {
+    const resp = await finFetch("/api/finance/debts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao criar dívida"); return; }
+    showToast("Dívida criada!", "success");
+    byId("finModalOverlay").style.display = "none";
+    await loadDebts();
+  } catch { showToast("Erro de rede"); }
+}
+
+async function submitEditDebt(e, debtId) {
+  e.preventDefault();
+  const id = Number(debtId || 0);
+  if (!id) { showToast("Dívida inválida"); return; }
+  const creditor = String(byId("fmDebtCreditor")?.value || "").trim();
+  if (!creditor) { showToast("Informe o credor"); return; }
+  const body = {
+    creditor,
+    description: String(byId("fmDebtDescription")?.value || "").trim() || null,
+    principal: Number(byId("fmDebtPrincipal")?.value || 0),
+    current_balance: Number(byId("fmDebtBalance")?.value || 0),
+    interest_rate: Number(byId("fmDebtRate")?.value || 0),
+    monthly_payment: Number(byId("fmDebtPayment")?.value || 0),
+    due_date: String(byId("fmDebtDueDate")?.value || "").trim() || null,
+    status: String(byId("fmDebtStatus")?.value || "open"),
+    category: String(byId("fmDebtCategory")?.value || "personal"),
+    notes: String(byId("fmDebtNotes")?.value || "").trim() || null,
+  };
+  try {
+    const resp = await finFetch(`/api/finance/debts/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao atualizar dívida"); return; }
+    showToast("Dívida atualizada!", "success");
+    byId("finModalOverlay").style.display = "none";
+    await loadDebts();
+  } catch { showToast("Erro de rede"); }
+}
+
+async function openDebtsStrategyModal() {
+  openFinModal("🎯 Estratégia de Quitação", '<p style="text-align:center;padding:20px;">Calculando...</p>');
+  try {
+    const resp = await finFetch("/api/finance/debts/summary");
+    if (!resp.ok) throw new Error("summary error");
+    const s = await resp.json();
+
+    const renderStrategy = (list, title, desc) => {
+      if (!list || !list.length) return `<div class="fin-cashflow-chip"><span>${title}</span><strong>Sem dívidas abertas</strong></div>`;
+      const rows = list.map((d, i) => `
+        <div class="fin-cashflow-chip" style="align-items:flex-start;">
+          <span>${i + 1}. ${escapeHtml(d.creditor)}</span>
+          <strong class="fin-down">${formatBRL(d.current_balance)}</strong>
+          <small style="opacity:.75;">
+            Juros: ${Number(d.interest_rate).toFixed(2)}% a.a. &nbsp;|&nbsp;
+            Parcela: ${formatBRL(d.monthly_payment)}/mês &nbsp;|&nbsp;
+            ${d.months_to_payoff < 9999 ? `Quitação: ${d.months_to_payoff} meses` : "Pagamento não cobre juros"}
+            ${d.total_interest > 0 ? ` &nbsp;|&nbsp; Total juros: ${formatBRL(d.total_interest)}` : ""}
+          </small>
+        </div>
+      `).join("");
+      return `
+        <div style="margin-bottom:16px;">
+          <div style="font-weight:600;margin-bottom:6px;font-size:.95em;">${title}</div>
+          <div style="font-size:.8em;color:#94a3b8;margin-bottom:8px;">${desc}</div>
+          <div class="fin-cashflow-analytics-grid">${rows}</div>
+        </div>
+      `;
+    };
+
+    const modalBody = byId("finModalOverlay")?.querySelector(".fin-modal-body");
+    if (modalBody) {
+      modalBody.innerHTML = `
+        <div class="fin-cashflow-analytics-grid" style="margin-bottom:20px;">
+          <div class="fin-cashflow-chip">
+            <span>💰 Saldo devedor total</span>
+            <strong class="fin-down">${formatBRL(s.total_balance)}</strong>
+          </div>
+          <div class="fin-cashflow-chip">
+            <span>📅 Parcelas mensais</span>
+            <strong>${formatBRL(s.total_monthly_payment)}</strong>
+          </div>
+          <div class="fin-cashflow-chip">
+            <span>💸 Juros projetados</span>
+            <strong class="fin-down">${formatBRL(s.total_interest_paid_projection)}</strong>
+          </div>
+        </div>
+        ${renderStrategy(s.snowball, "❄️ Método Bola de Neve", "Quite primeiro as menores dívidas para ganhar motivação.")}
+        ${renderStrategy(s.avalanche, "🏔️ Método Avalanche", "Quite primeiro as dívidas com maior taxa de juros para economizar mais.")}
+        <div style="margin-top:12px;font-size:.8em;color:#64748b;">
+          💡 Bola de Neve dá motivação psicológica; Avalanche economiza mais dinheiro em juros.
+        </div>
+      `;
+    }
+  } catch {
+    showToast("Erro ao carregar estratégias");
+  }
+}
+
+async function openDebtSimulateModal(debtId) {
+  const debt = (FIN.debts || []).find((d) => Number(d.id) === debtId);
+  const label = debt ? escapeHtml(debt.creditor) : `#${debtId}`;
+  openFinModal(`📐 Simular Antecipação — ${label}`, `
+    <div style="margin-bottom:12px;font-size:.9em;color:#94a3b8;">
+      Saldo atual: <strong>${formatBRL(debt?.current_balance || 0)}</strong>
+      &nbsp;|&nbsp; Parcela: <strong>${formatBRL(debt?.monthly_payment || 0)}/mês</strong>
+    </div>
+    <div class="fin-form-row">
+      <div class="fin-form-group" style="flex:1;">
+        <label>Pagamento extra (R$)</label>
+        <input id="fmDebtSimExtra" type="number" min="0" step="0.01" value="0" />
+      </div>
+      <div class="fin-form-group" style="flex:1;align-self:flex-end;">
+        <button id="btnRunDebtSim" class="fin-form-submit" type="button">📐 Calcular</button>
+      </div>
+    </div>
+    <div id="debtSimResult" style="margin-top:14px;"></div>
+  `);
+
+  byId("btnRunDebtSim")?.addEventListener("click", async () => {
+    const extra = Number(byId("fmDebtSimExtra")?.value || 0);
+    const resultEl = byId("debtSimResult");
+    if (!resultEl) return;
+    resultEl.innerHTML = '<p style="text-align:center;">Calculando...</p>';
+    try {
+      const resp = await finFetch(`/api/finance/debts/${debtId}/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extra_payment: extra }),
+      });
+      const r = await resp.json();
+      if (!resp.ok) { resultEl.innerHTML = `<p style="color:#ef4444;">${escapeHtml(r.error || "Erro")}</p>`; return; }
+      const savedMonths = r.months_saved || 0;
+      const savedMoney = r.total_saved || 0;
+      resultEl.innerHTML = `
+        <div class="fin-cashflow-analytics-grid">
+          <div class="fin-cashflow-chip">
+            <span>📅 Meses sem extra</span>
+            <strong>${r.months_base < 9999 ? r.months_base : "∞"}</strong>
+          </div>
+          <div class="fin-cashflow-chip">
+            <span>📅 Meses com extra</span>
+            <strong class="fin-up">${r.months_after_extra < 9999 ? r.months_after_extra : "∞"}</strong>
+          </div>
+          <div class="fin-cashflow-chip">
+            <span>⏳ Meses economizados</span>
+            <strong class="fin-up">${savedMonths}</strong>
+          </div>
+          <div class="fin-cashflow-chip">
+            <span>💰 Dinheiro economizado</span>
+            <strong class="${savedMoney > 0 ? "fin-up" : ""}">${formatBRL(savedMoney)}</strong>
+          </div>
+        </div>
+      `;
+    } catch {
+      resultEl.innerHTML = '<p style="color:#ef4444;">Erro de rede</p>';
+    }
+  });
+}

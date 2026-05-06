@@ -801,6 +801,7 @@ async function loadAll(options = {}) {
       loadCashflowDataQuality();
       loadSavingsSuggestions(effectiveMonth);
       loadHealthScore();
+      loadDebts();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();
@@ -1090,6 +1091,7 @@ async function refreshCashflowPanel() {
   renderCashflowAnalytics(FIN.cashflowAnalytics);
   renderAccountsBalances(FIN.accountsBalanceSummary);
   loadSavingsSuggestions(effectiveMonth);
+  loadDebts();
   renderCashflowBudgetStatus(FIN.cashflowAnalytics);
   loadCashflowKpis();
   loadCashflowBudgetAlerts();
@@ -2779,6 +2781,8 @@ function openFinModal(title, bodyHtml) {
     "submitAllocationTargets",
     "submitFinanceSettings",
     "submitPassiveIncomeGoal",
+    "submitAddDebt",
+    "submitEditDebt",
   ].forEach((name) => {
     const fn = globalThis[name];
     if (typeof fn === "function") formActionMap[name] = fn;

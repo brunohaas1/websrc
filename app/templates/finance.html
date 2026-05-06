@@ -154,6 +154,18 @@
         </div>
       </section>
 
+      <!-- ── Debts ─────────────────────────────────────── -->
+      <section class="fin-card" id="finDebtsCard">
+        <h2>
+          💳 Gestão de Dívidas
+          <button id="btnAddDebt" class="btn-text" title="Adicionar dívida">＋ Nova dívida</button>
+          <button id="btnDebtsStrategy" class="btn-text" title="Ver estratégias de quitação">🎯 Estratégia</button>
+        </h2>
+        <div id="finDebtsContent" class="fin-card-body">
+          {{ fin_skeleton('mini_rows') }}
+        </div>
+      </section>
+
       <!-- ── Currency ─────────────────────────────────── -->
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>
