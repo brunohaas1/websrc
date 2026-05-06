@@ -4396,3 +4396,88 @@ async function checkAndLock2FA() {
     // If 2FA check fails, don't block access
   }
 }
+
+// ── Anomaly Detection ──────────────────────────────────────────────────────
+async function loadAnomalies() {
+  const el = document.getElementById("finAnomaliesContent");
+  if (!el) return;
+  el.innerHTML = '<p class="fin-loading">Analisando transações…</p>';
+  try {
+    const data = await finFetch("/api/finance/anomalies");
+    renderAnomalies(data);
+  } catch (e) {
+    el.innerHTML = `<p style="color:#ef4444;">Erro: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function renderAnomalies(data) {
+  const el = document.getElementById("finAnomaliesContent");
+  if (!el) return;
+  const anomalies = data?.anomalies || [];
+  const total = data?.total || 0;
+
+  if (!anomalies.length) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:1.5rem 0;color:#22c55e;">
+        <div style="font-size:2rem;">✅</div>
+        <p style="margin-top:.5rem;font-weight:600;">Nenhuma anomalia detectada em ${data?.month || ""}!</p>
+        <p style="font-size:.82rem;color:#94a3b8;">Seus gastos estão dentro dos padrões históricos.</p>
+      </div>`;
+    return;
+  }
+
+  const sevColor = { high: "#ef4444", medium: "#f59e0b", low: "#3b82f6" };
+  const sevLabel = { high: "Alta", medium: "Média", low: "Baixa" };
+  const typeLabel = {
+    category_spike: "Pico de categoria",
+    large_transaction: "Transação grande",
+    duplicate_suspect: "Possível duplicata",
+  };
+
+  const summary = `
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.8rem;">
+      <span style="background:rgba(239,68,68,.15);color:#ef4444;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;">${anomalies.filter(a=>a.severity==="high").length} alta(s)</span>
+      <span style="background:rgba(245,158,11,.15);color:#f59e0b;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;">${anomalies.filter(a=>a.severity==="medium").length} média(s)</span>
+      <span style="background:rgba(59,130,246,.15);color:#3b82f6;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;">${anomalies.filter(a=>a.severity==="low").length} baixa(s)</span>
+      <span style="margin-left:auto;font-size:.78rem;color:#64748b;">${data?.month}</span>
+    </div>`;
+
+  const cards = anomalies.map(a => {
+    const color = sevColor[a.severity] || "#94a3b8";
+    const ids = (a.entry_ids || []).filter(Boolean);
+    const dismissBtn = ids.length
+      ? `<button onclick="dismissAnomaly(${ids[0]}, this)" style="font-size:.72rem;padding:.15rem .5rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#94a3b8;border-radius:4px;cursor:pointer;" title="Marcar como revisada">✓ Revisado</button>`
+      : "";
+    return `
+      <div class="fin-anomaly-item" style="border-left:3px solid ${color};padding:.6rem .8rem;margin:.4rem 0;background:rgba(255,255,255,.04);border-radius:0 6px 6px 0;display:flex;gap:.6rem;align-items:flex-start;">
+        <span style="font-size:1.3rem;line-height:1.2;">${escapeHtml(a.icon || "⚠️")}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;">
+            <span style="font-weight:600;font-size:.9rem;">${escapeHtml(a.title)}</span>
+            <span style="font-size:.7rem;background:${color}22;color:${color};padding:.1rem .4rem;border-radius:99px;">${sevLabel[a.severity] || a.severity}</span>
+            <span style="font-size:.7rem;color:#64748b;">${typeLabel[a.type] || a.type}</span>
+          </div>
+          <div style="font-size:.82rem;color:#cbd5e1;margin-top:.15rem;">${escapeHtml(a.body)}</div>
+        </div>
+        ${dismissBtn}
+      </div>`;
+  }).join("");
+
+  el.innerHTML = summary + cards + `<p style="font-size:.73rem;color:#475569;margin-top:.5rem;">Algoritmo Z-score por categoria (últimos 6 meses). Clique em ✓ para marcar como revisada.</p>`;
+}
+
+async function dismissAnomaly(entryId, btn) {
+  try {
+    if (btn) btn.disabled = true;
+    await finFetch(`/api/finance/anomalies/${entryId}/dismiss`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    // Refresh anomaly panel
+    loadAnomalies();
+  } catch (e) {
+    alert("Erro: " + String(e));
+    if (btn) btn.disabled = false;
+  }
+}

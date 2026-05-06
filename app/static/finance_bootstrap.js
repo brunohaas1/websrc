@@ -84,6 +84,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnNotifications", openNotificationsPanelModal);
   bind("btnRefreshInsights", loadInsights);
   bind("btn2FASetup", open2FASetupModal);
+  bind("btnRefreshAnomalies", loadAnomalies);
   bind("finAIChatSend", sendFinAIChat);
   bind("finModalClose", closeFinModal);
   bind("btnRunRebalanceSim", renderRebalance);

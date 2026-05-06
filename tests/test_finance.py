@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import time
 import pytest
@@ -2730,4 +2730,92 @@ class TestPushSendTest:
                 assert "sent" in data
         finally:
             app.config["VAPID_PRIVATE_KEY"] = original
+
+
+# ══════════════════════════════════════════════════════════
+#          ANOMALY DETECTION
+# ══════════════════════════════════════════════════════════
+class TestAnomalies:
+    def test_anomalies_returns_structure(self, client):
+        resp = client.get("/api/finance/anomalies")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "anomalies" in data
+        assert "total" in data
+        assert "month" in data
+        assert "generated_at" in data
+        assert isinstance(data["anomalies"], list)
+
+    def test_anomalies_empty_when_no_data(self, client):
+        resp = client.get("/api/finance/anomalies")
+        data = resp.get_json()
+        # With no entries there's nothing to flag
+        assert data["total"] == 0
+        assert data["anomalies"] == []
+
+    def test_anomalies_detects_category_spike(self, client):
+        """Inject 6 months of low spend + 1 spike month → should detect anomaly."""
+        today = datetime.now(timezone.utc)
+        # Add 6 months of small expenses in category "Delivery"
+        for i in range(1, 7):
+            month_date = today.replace(day=1) - timedelta(days=i * 30)
+            d = month_date.strftime("%Y-%m-15")
+            jpost(client, "/api/finance/cashflow", {
+                "entry_date": d, "description": "Pedido delivery",
+                "amount": 50, "category": "Delivery", "entry_type": "expense",
+            })
+        # Add spike in current month (10× normal)
+        cur = today.strftime("%Y-%m-%d")
+        for _ in range(10):
+            jpost(client, "/api/finance/cashflow", {
+                "entry_date": cur, "description": "Delivery spike",
+                "amount": 50, "category": "Delivery", "entry_type": "expense",
+            })
+        resp = client.get("/api/finance/anomalies")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["total"] > 0
+        types = [a["type"] for a in data["anomalies"]]
+        assert "category_spike" in types or "large_transaction" in types
+
+    def test_anomaly_item_has_required_keys(self, client):
+        today = datetime.now(timezone.utc)
+        # Add enough data to generate at least one anomaly
+        for i in range(1, 7):
+            d = (today.replace(day=1) - timedelta(days=i * 30)).strftime("%Y-%m-10")
+            jpost(client, "/api/finance/cashflow", {
+                "entry_date": d, "description": "Base",
+                "amount": 30, "category": "Teste", "entry_type": "expense",
+            })
+        cur = today.strftime("%Y-%m-%d")
+        for _ in range(8):
+            jpost(client, "/api/finance/cashflow", {
+                "entry_date": cur, "description": "Spike",
+                "amount": 30, "category": "Teste", "entry_type": "expense",
+            })
+        resp = client.get("/api/finance/anomalies")
+        data = resp.get_json()
+        for a in data["anomalies"]:
+            assert "type" in a
+            assert "severity" in a
+            assert "title" in a
+            assert "body" in a
+            assert "icon" in a
+            assert a["severity"] in ("high", "medium", "low")
+
+    def test_dismiss_nonexistent_returns_404(self, client):
+        resp = jpost(client, "/api/finance/anomalies/99999/dismiss", {})
+        assert resp.status_code == 404
+
+    def test_dismiss_entry_adds_tag(self, client):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        r = jpost(client, "/api/finance/cashflow", {
+            "entry_date": today, "description": "Test dismiss",
+            "amount": 99, "category": "Test", "entry_type": "expense",
+        })
+        assert r.status_code == 201
+        entry_id = r.get_json()["id"]
+        resp = jpost(client, f"/api/finance/anomalies/{entry_id}/dismiss", {})
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "dismissed"
 

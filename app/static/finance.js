@@ -803,6 +803,7 @@ async function loadAll(options = {}) {
       loadHealthScore();
       loadDebts();
       loadInsights();
+      loadAnomalies();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();

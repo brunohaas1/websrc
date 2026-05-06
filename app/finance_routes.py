@@ -8152,6 +8152,211 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         except Exception as ex:
             return jsonify({"error": str(ex)}), 500
 
+    # ── Anomaly Detection ──────────────────────────────────────────────────
+    @app.get("/api/finance/anomalies")
+    @limiter.limit("20/minute")
+    def finance_anomalies():
+        """
+        Detect anomalous transactions using Z-score per category over last 6 months.
+        Also flags: duplicate-like amounts within 3 days, single entries > 3× category mean.
+        Returns a ranked list of anomalies with severity and explanation.
+        """
+        cache_key = "finance:anomalies"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            now = datetime.now(timezone.utc)
+            current_month = now.strftime("%Y-%m")
+
+            # Fetch last 7 months of expense entries (6 historical + current)
+            months: list[str] = []
+            for i in range(7):
+                d = now.replace(day=1) - timedelta(days=1) * (i * 30)
+                months.append(d.strftime("%Y-%m"))
+            date_from = (now.replace(day=1) - timedelta(days=185)).strftime("%Y-%m-01")
+
+            all_entries = repo.list_fin_cashflow_entries(
+                entry_type="expense",
+                date_from=date_from,
+                limit=10000,
+            )
+
+            # ── Build per-category per-month totals (historical = not current month) ──
+            hist: dict[str, list[float]] = {}   # cat → list of monthly totals
+            current_cat: dict[str, list[dict]] = {}  # cat → entries this month
+
+            monthly_totals: dict[str, dict[str, float]] = {}  # month → cat → total
+            for e in all_entries:
+                m = str(e.get("entry_date") or "")[:7]
+                if len(m) != 7:
+                    continue
+                cat = str(e.get("category") or "Sem categoria")
+                amt = float(e.get("amount") or 0)
+                monthly_totals.setdefault(m, {}).setdefault(cat, 0.0)
+                monthly_totals[m][cat] += amt
+                if m == current_month:
+                    current_cat.setdefault(cat, []).append(e)
+
+            # Build histograms: for each category, collect past monthly totals (exclude current)
+            for m, cats in monthly_totals.items():
+                if m == current_month:
+                    continue
+                for cat, total in cats.items():
+                    hist.setdefault(cat, []).append(total)
+
+            anomalies: list[dict] = []
+
+            # ── 1. Z-score anomaly: monthly category total vs historical ──────────
+            for cat, entries in current_cat.items():
+                cur_total = sum(float(e.get("amount") or 0) for e in entries)
+                history = hist.get(cat, [])
+                if len(history) < 2:
+                    continue
+                mean = sum(history) / len(history)
+                variance = sum((x - mean) ** 2 for x in history) / len(history)
+                std = variance ** 0.5
+                if std < 0.01:
+                    continue
+                z = (cur_total - mean) / std
+                if z > 2.0:
+                    severity = "high" if z > 3.0 else "medium"
+                    pct = ((cur_total - mean) / mean * 100) if mean > 0 else 0
+                    anomalies.append({
+                        "type": "category_spike",
+                        "severity": severity,
+                        "category": cat,
+                        "current_total": round(cur_total, 2),
+                        "historical_mean": round(mean, 2),
+                        "z_score": round(z, 2),
+                        "pct_above_mean": round(pct, 1),
+                        "title": f"Gastos em '{cat}' muito acima do normal",
+                        "body": f"Este mês: {_fmt_brl(cur_total)} vs média histórica {_fmt_brl(mean)} (+{pct:.0f}%). Z-score: {z:.1f}",
+                        "icon": "📊",
+                        "entry_ids": [e["id"] for e in entries if e.get("id")],
+                    })
+
+            # ── 2. Individual large transactions (> 3× category mean) ─────────────
+            for e in all_entries:
+                m = str(e.get("entry_date") or "")[:7]
+                if m != current_month:
+                    continue
+                cat = str(e.get("category") or "Sem categoria")
+                amt = float(e.get("amount") or 0)
+                history = hist.get(cat, [])
+                if not history:
+                    continue
+                cat_mean = sum(history) / len(history)
+                if cat_mean < 10:
+                    continue
+                # For individual entry: compare against mean monthly / avg entries per month
+                n_months = max(len(history), 1)
+                avg_entries_per_month = max(len([x for x in all_entries
+                    if str(x.get("entry_date") or "")[:7] != current_month
+                    and str(x.get("category") or "") == cat]) / n_months, 1)
+                per_entry_mean = cat_mean / avg_entries_per_month
+                if per_entry_mean < 10:
+                    continue
+                if amt > per_entry_mean * 3:
+                    severity = "high" if amt > per_entry_mean * 5 else "medium"
+                    anomalies.append({
+                        "type": "large_transaction",
+                        "severity": severity,
+                        "category": cat,
+                        "amount": round(amt, 2),
+                        "per_entry_mean": round(per_entry_mean, 2),
+                        "description": str(e.get("description") or ""),
+                        "entry_date": str(e.get("entry_date") or ""),
+                        "title": f"Transação grande em '{cat}'",
+                        "body": f"{e.get('description') or 'Sem descrição'} — {_fmt_brl(amt)} em {str(e.get('entry_date') or '')[:10]} (média por lançamento: {_fmt_brl(per_entry_mean)})",
+                        "icon": "💸",
+                        "entry_ids": [e["id"]] if e.get("id") else [],
+                    })
+
+            # ── 3. Near-duplicate detection: same amount + same category within 3 days ─
+            current_entries = [e for e in all_entries
+                               if str(e.get("entry_date") or "")[:7] == current_month]
+            seen: list[dict] = []
+            for e in current_entries:
+                amt = round(float(e.get("amount") or 0), 2)
+                cat = str(e.get("category") or "")
+                try:
+                    from datetime import date as _date
+                    d1 = _date.fromisoformat(str(e.get("entry_date") or "")[:10])
+                except Exception:
+                    continue
+                for prev in seen:
+                    if round(float(prev.get("amount") or 0), 2) != amt:
+                        continue
+                    if str(prev.get("category") or "") != cat:
+                        continue
+                    try:
+                        d2 = _date.fromisoformat(str(prev.get("entry_date") or "")[:10])
+                    except Exception:
+                        continue
+                    if abs((d1 - d2).days) <= 3:
+                        anomalies.append({
+                            "type": "duplicate_suspect",
+                            "severity": "low",
+                            "category": cat,
+                            "amount": amt,
+                            "entry_date": str(e.get("entry_date") or "")[:10],
+                            "description": str(e.get("description") or ""),
+                            "title": f"Possível duplicata em '{cat}'",
+                            "body": f"Lançamento de {_fmt_brl(amt)} em {str(e.get('entry_date') or '')[:10]} parece duplicado (mesmo valor/categoria em {str(prev.get('entry_date') or '')[:10]}).",
+                            "icon": "🔁",
+                            "entry_ids": [e.get("id"), prev.get("id")],
+                        })
+                        break
+                seen.append(e)
+
+            # ── Sort: severity high→medium→low, then z_score desc ─────────────────
+            sev_order = {"high": 0, "medium": 1, "low": 2}
+            anomalies.sort(key=lambda a: (sev_order.get(a["severity"], 9), -float(a.get("z_score") or a.get("amount") or 0)))
+
+            # Deduplicate by entry_ids to avoid showing same entry twice
+            seen_ids: set[int] = set()
+            unique: list[dict] = []
+            for a in anomalies:
+                ids = [i for i in (a.get("entry_ids") or []) if i]
+                if ids:
+                    key = frozenset(ids)
+                    if key in seen_ids:
+                        continue
+                    seen_ids.update(ids)
+                unique.append(a)
+
+            payload = {
+                "month": current_month,
+                "total": len(unique),
+                "anomalies": unique[:20],  # cap at 20
+                "generated_at": now.isoformat(),
+            }
+            cache.set(cache_key, payload, 180)
+            return jsonify(payload)
+        except Exception as ex:
+            logger.exception("anomalies error")
+            return jsonify({"error": str(ex)}), 500
+
+    @app.post("/api/finance/anomalies/<int:entry_id>/dismiss")
+    @require_finance_key
+    @limiter.limit("30/minute")
+    def finance_anomaly_dismiss(entry_id: int):
+        """Mark an anomaly as reviewed (adds a tag to the cashflow entry)."""
+        try:
+            entry = repo.get_fin_cashflow_entry(entry_id)
+            if not entry:
+                return jsonify({"error": "Lançamento não encontrado"}), 404
+            existing_tags = str(entry.get("tags") or "")
+            tags_list = [t.strip() for t in existing_tags.split(",") if t.strip()]
+            if "anomalia-revisada" not in tags_list:
+                tags_list.append("anomalia-revisada")
+            repo.update_fin_cashflow_entry(entry_id, {"tags": ", ".join(tags_list)})
+            cache.delete("finance:anomalies")
+            return jsonify({"status": "dismissed"})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
 
 def _fmt_brl(value: float) -> str:
     """Format a float value as BRL currency string (server-side)."""

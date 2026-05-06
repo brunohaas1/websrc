@@ -178,6 +178,17 @@
         </div>
       </section>
 
+      <!-- ── Anomaly Detection ──────────────────────────── -->
+      <section class="fin-card" id="finAnomaliesCard">
+        <h2>
+          🔍 Detecção de Anomalias
+          <button id="btnRefreshAnomalies" class="btn-text" title="Atualizar análise">↻ Analisar</button>
+        </h2>
+        <div id="finAnomaliesContent" class="fin-card-body">
+          {{ fin_skeleton('mini_rows') }}
+        </div>
+      </section>
+
       <!-- ── Currency ─────────────────────────────────── -->
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>
