@@ -294,6 +294,18 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS fin_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    account_type TEXT NOT NULL DEFAULT 'bank',
+    currency TEXT DEFAULT 'BRL',
+    initial_balance REAL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_accounts_type
+ON fin_accounts(account_type);
+
 CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_type TEXT NOT NULL,
@@ -301,6 +313,7 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     category TEXT,
     subcategory TEXT,
     cost_center TEXT,
+    account_id INTEGER REFERENCES fin_accounts(id) ON DELETE SET NULL,
     description TEXT,
     entry_date TEXT NOT NULL,
     notes TEXT,
@@ -311,6 +324,8 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account
+ON fin_cashflow_entries(account_id);
 
 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -687,6 +702,18 @@ CREATE TABLE IF NOT EXISTS fin_goals (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS fin_accounts (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    account_type TEXT NOT NULL DEFAULT 'bank',
+    currency TEXT DEFAULT 'BRL',
+    initial_balance DOUBLE PRECISION DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fin_accounts_type
+ON fin_accounts(account_type);
+
 CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     id BIGSERIAL PRIMARY KEY,
     entry_type TEXT NOT NULL,
@@ -694,6 +721,7 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     category TEXT,
     subcategory TEXT,
     cost_center TEXT,
+    account_id BIGINT REFERENCES fin_accounts(id) ON DELETE SET NULL,
     description TEXT,
     entry_date DATE NOT NULL,
     notes TEXT,
@@ -704,6 +732,8 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account
+ON fin_cashflow_entries(account_id);
 
 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
     id BIGSERIAL PRIMARY KEY,
@@ -828,6 +858,7 @@ def init_db(database_target: str) -> None:
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_index INTEGER",
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_total INTEGER",
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS credit_card_id BIGINT REFERENCES fin_credit_cards(id) ON DELETE SET NULL",
+                    "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS account_id BIGINT REFERENCES fin_accounts(id) ON DELETE SET NULL",
                 ):
                     cursor.execute(stmt)
             conn.commit()
@@ -858,6 +889,7 @@ def _run_sqlite_migrations(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "fin_cashflow_entries", "installment_index", "INTEGER")
     _try_add_column(conn, "fin_cashflow_entries", "installment_total", "INTEGER")
     _try_add_column(conn, "fin_cashflow_entries", "credit_card_id", "INTEGER")
+    _try_add_column(conn, "fin_cashflow_entries", "account_id", "INTEGER")
 
 
 def _try_add_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:

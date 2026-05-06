@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import calendar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -2930,9 +2930,9 @@ class Repository:
             q = self._sql(
                 """
                 INSERT INTO fin_cashflow_entries
-                    (entry_type, amount, category, subcategory, cost_center, description, entry_date, notes, tags_json,
+                    (entry_type, amount, category, subcategory, cost_center, account_id, description, entry_date, notes, tags_json,
                      installment_group, installment_index, installment_total, credit_card_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             )
             if self.is_postgres:
@@ -2945,6 +2945,7 @@ class Repository:
                     data.get("category"),
                     data.get("subcategory"),
                     data.get("cost_center"),
+                    data.get("account_id"),
                     data.get("description"),
                     data["entry_date"],
                     data.get("notes"),
@@ -2999,6 +3000,7 @@ class Repository:
         date_from: str | None = None,
         date_to: str | None = None,
         category: str | None = None,
+        account_id: int | None = None,
         credit_card_id: int | None = None,
         amount_min: float | None = None,
         amount_max: float | None = None,
@@ -3070,6 +3072,10 @@ class Repository:
         if category:
             query += " AND LOWER(COALESCE(e.category, '')) = LOWER(?)"
             params.append(category)
+
+        if account_id:
+            query += " AND e.account_id = ?"
+            params.append(int(account_id))
 
         if credit_card_id:
             query += " AND e.credit_card_id = ?"
@@ -3148,6 +3154,10 @@ class Repository:
         if category:
             fallback_query += " AND LOWER(COALESCE(e.category, '')) = LOWER(?)"
             fallback_params.append(category)
+
+        if account_id:
+            fallback_query += " AND e.account_id = ?"
+            fallback_params.append(int(account_id))
 
         if credit_card_id:
             fallback_query += " AND e.credit_card_id = ?"
@@ -3286,6 +3296,7 @@ class Repository:
             "category",
             "subcategory",
             "cost_center",
+            "account_id",
             "description",
             "entry_date",
             "notes",
@@ -4180,6 +4191,130 @@ class Repository:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+    def get_fin_savings_suggestions(self, month: str | None = None) -> dict[str, Any]:
+        """Generate automatic savings suggestions from spending patterns."""
+        target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        current = self.get_fin_cashflow_analytics(month=target_month)
+
+        try:
+            dt = datetime.strptime(f"{target_month}-01", "%Y-%m-%d")
+            prev = (dt - timedelta(days=1)).strftime("%Y-%m")
+        except Exception:
+            prev = target_month
+
+        previous = self.get_fin_cashflow_analytics(month=prev)
+
+        cur_expense = {
+            str(r.get("category") or "Sem categoria"): float(r.get("amount") or 0)
+            for r in (current.get("categories", {}).get("expense") or [])
+        }
+        prev_expense = {
+            str(r.get("category") or "Sem categoria"): float(r.get("amount") or 0)
+            for r in (previous.get("categories", {}).get("expense") or [])
+        }
+
+        suggestions: list[dict[str, Any]] = []
+
+        for category, amount in sorted(cur_expense.items(), key=lambda item: item[1], reverse=True):
+            if amount <= 0:
+                continue
+            prev_amount = float(prev_expense.get(category) or 0)
+            growth_pct = ((amount - prev_amount) / prev_amount * 100.0) if prev_amount > 0 else 0.0
+
+            if amount >= 500:
+                potential_10 = round(amount * 0.10, 2)
+                suggestions.append(
+                    {
+                        "type": "high_spend",
+                        "priority": "high" if amount >= 1000 else "medium",
+                        "category": category,
+                        "message": f"{category}: gasto alto de R$ {amount:.2f}. Cortar 10% economiza R$ {potential_10:.2f}/mês.",
+                        "current_amount": round(amount, 2),
+                        "potential_monthly_saving": potential_10,
+                        "potential_yearly_saving": round(potential_10 * 12, 2),
+                    }
+                )
+
+            if prev_amount > 0 and growth_pct >= 30:
+                cut_back = round(max(0.0, amount - prev_amount), 2)
+                suggestions.append(
+                    {
+                        "type": "growth_alert",
+                        "priority": "high" if growth_pct >= 50 else "medium",
+                        "category": category,
+                        "message": f"{category}: aumento de {growth_pct:.1f}% vs mês anterior. Voltar ao nível anterior economiza R$ {cut_back:.2f}/mês.",
+                        "current_amount": round(amount, 2),
+                        "previous_amount": round(prev_amount, 2),
+                        "growth_pct": round(growth_pct, 1),
+                        "potential_monthly_saving": cut_back,
+                        "potential_yearly_saving": round(cut_back * 12, 2),
+                    }
+                )
+
+        with get_connection(self.database_target) as conn:
+            recurring = conn.execute(
+                self._sql(
+                    """
+                    SELECT category, description, amount
+                    FROM fin_cashflow_recurring
+                    WHERE active = 1 AND LOWER(entry_type) = 'expense'
+                    ORDER BY amount DESC
+                    LIMIT 50
+                    """
+                )
+            ).fetchall()
+
+        subscription_keywords = (
+            "stream", "spotify", "netflix", "prime", "disney", "youtube",
+            "assinatura", "subscription", "plano", "icloud",
+        )
+        for row in recurring:
+            cat = str(row.get("category") or "")
+            desc = str(row.get("description") or "")
+            amount = float(row.get("amount") or 0)
+            text = f"{cat} {desc}".lower()
+            if amount <= 0:
+                continue
+            if any(k in text for k in subscription_keywords):
+                suggestions.append(
+                    {
+                        "type": "subscription_review",
+                        "priority": "medium",
+                        "category": cat or "Assinaturas",
+                        "message": f"Revisar assinatura '{desc or cat}': custo recorrente de R$ {amount:.2f}/mês.",
+                        "current_amount": round(amount, 2),
+                        "potential_monthly_saving": round(amount, 2),
+                        "potential_yearly_saving": round(amount * 12, 2),
+                    }
+                )
+
+        unique: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for s in sorted(
+            suggestions,
+            key=lambda x: (
+                0 if x.get("priority") == "high" else 1,
+                -float(x.get("potential_monthly_saving") or 0),
+            ),
+        ):
+            key = (str(s.get("type") or ""), str(s.get("category") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(s)
+            if len(unique) >= 10:
+                break
+
+        total_monthly = sum(float(s.get("potential_monthly_saving") or 0) for s in unique)
+        return {
+            "month": target_month,
+            "count": len(unique),
+            "total_potential_monthly_saving": round(total_monthly, 2),
+            "total_potential_yearly_saving": round(total_monthly * 12, 2),
+            "suggestions": unique,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     # ── Dividends ───────────────────────────────────────────
 
     def is_duplicate_fin_dividend(self, data: dict[str, Any]) -> bool:
@@ -4298,6 +4433,147 @@ class Repository:
                 row = cursor.fetchone()
                 return int(row["id"]) if row else 0
             return int(cursor.lastrowid or 0)
+
+    # ── Financial Accounts ──────────────────────────
+
+    def list_fin_accounts(self) -> list[dict[str, Any]]:
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT id, name, account_type, currency, initial_balance, created_at, updated_at
+                    FROM fin_accounts
+                    ORDER BY created_at DESC
+                    """
+                )
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_fin_account(self, data: dict[str, Any]) -> int:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ValueError("name é obrigatório")
+        account_type = str(data.get("account_type") or "bank").strip() or "bank"
+        currency = str(data.get("currency") or "BRL").strip() or "BRL"
+        initial_balance = float(data.get("initial_balance") or 0)
+
+        with get_connection(self.database_target) as conn:
+            q = self._sql(
+                """
+                INSERT INTO fin_accounts (name, account_type, currency, initial_balance)
+                VALUES (?, ?, ?, ?)
+                """
+            )
+            if self.is_postgres:
+                q += " RETURNING id"
+            cursor = conn.execute(q, (name, account_type, currency, initial_balance))
+            conn.commit()
+            if self.is_postgres:
+                row = cursor.fetchone()
+                return int(row["id"]) if row else 0
+            return int(cursor.lastrowid or 0)
+
+    def update_fin_account(self, account_id: int, data: dict[str, Any]) -> bool:
+        fields: list[str] = []
+        values: list[Any] = []
+
+        if "name" in data:
+            name = str(data.get("name") or "").strip()
+            if not name:
+                raise ValueError("name é obrigatório")
+            fields.append("name = ?")
+            values.append(name)
+        if "account_type" in data:
+            fields.append("account_type = ?")
+            values.append(str(data.get("account_type") or "bank").strip() or "bank")
+        if "currency" in data:
+            fields.append("currency = ?")
+            values.append(str(data.get("currency") or "BRL").strip() or "BRL")
+        if "initial_balance" in data:
+            fields.append("initial_balance = ?")
+            values.append(float(data.get("initial_balance") or 0))
+
+        if not fields:
+            return False
+
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(int(account_id))
+
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql(f"UPDATE fin_accounts SET {', '.join(fields)} WHERE id = ?"),
+                tuple(values),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def delete_fin_account(self, account_id: int) -> bool:
+        with get_connection(self.database_target) as conn:
+            cur = conn.execute(
+                self._sql("DELETE FROM fin_accounts WHERE id = ?"),
+                (int(account_id),),
+            )
+            conn.commit()
+            return bool(cur.rowcount)
+
+    def get_fin_account_balance(self, account_id: int) -> dict[str, Any] | None:
+        with get_connection(self.database_target) as conn:
+            acc = conn.execute(
+                self._sql("SELECT * FROM fin_accounts WHERE id = ?"),
+                (int(account_id),),
+            ).fetchone()
+            if not acc:
+                return None
+
+            rows = conn.execute(
+                self._sql(
+                    """
+                    SELECT entry_type, SUM(amount) AS total
+                    FROM fin_cashflow_entries
+                    WHERE account_id = ?
+                    GROUP BY entry_type
+                    """
+                ),
+                (int(account_id),),
+            ).fetchall()
+
+        income = 0.0
+        expense = 0.0
+        for row in rows:
+            entry_type = str(row.get("entry_type") or "").lower()
+            total = float(row.get("total") or 0)
+            if entry_type == "income":
+                income += total
+            elif entry_type == "expense":
+                expense += total
+
+        initial = float(acc.get("initial_balance") or 0)
+        return {
+            "id": int(acc.get("id") or 0),
+            "name": acc.get("name"),
+            "account_type": acc.get("account_type"),
+            "currency": acc.get("currency") or "BRL",
+            "initial_balance": round(initial, 2),
+            "income": round(income, 2),
+            "expense": round(expense, 2),
+            "balance": round(initial + income - expense, 2),
+        }
+
+    def get_fin_accounts_balance_summary(self) -> dict[str, Any]:
+        accounts = self.list_fin_accounts()
+        rows: list[dict[str, Any]] = []
+        total_balance = 0.0
+        for acc in accounts:
+            bal = self.get_fin_account_balance(int(acc.get("id") or 0))
+            if not bal:
+                continue
+            rows.append(bal)
+            total_balance += float(bal.get("balance") or 0)
+        return {
+            "accounts": rows,
+            "total_balance": round(total_balance, 2),
+            "count": len(rows),
+        }
 
     def list_fin_dividends(
         self, asset_id: int | None = None, limit: int = 200,

@@ -12,6 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from typing import Any
 from uuid import uuid4
 
 import requests as http_requests
@@ -42,6 +43,54 @@ _RETRY_EXCEPTIONS = (
     http_requests.exceptions.Timeout,
     http_requests.exceptions.ChunkedEncodingError,
 )
+
+
+def _build_simple_pdf(lines: list[str]) -> bytes:
+    """Build a tiny text-only PDF without external dependencies."""
+    safe_lines = [
+        str(line or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        for line in lines
+    ]
+    y = 800
+    content_lines = ["BT", "/F1 11 Tf", "1 0 0 1 40 800 Tm"]
+    for line in safe_lines:
+        content_lines.append(f"1 0 0 1 40 {y} Tm ({line}) Tj")
+        y -= 14
+        if y < 40:
+            break
+    content_lines.append("ET")
+    stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+    objs: list[bytes] = []
+    objs.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objs.append(b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>")
+    objs.append(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+    )
+    objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    objs.append(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream")
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out.extend(f"{i} 0 obj\n".encode("ascii"))
+        out.extend(obj)
+        out.extend(b"\nendobj\n")
+
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(objs) + 1}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        (
+            f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_pos}\n%%EOF"
+        ).encode("ascii")
+    )
+    return bytes(out)
 
 
 def _http_get_with_retry(
@@ -1649,6 +1698,94 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _audit("delete", "credit_card", card_id, None)
         return jsonify({"ok": True})
 
+    # ── Accounts ───────────────────────────────────────────
+
+    @app.get("/api/finance/accounts")
+    @limiter.limit("30/minute")
+    def finance_list_accounts():
+        return jsonify(repo.list_fin_accounts())
+
+    @app.post("/api/finance/accounts")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_add_account():
+        body = request.get_json(silent=True) or {}
+        name = sanitize_text(str(body.get("name", "")), 100).strip()
+        if not name:
+            return jsonify({"error": "name obrigatório"}), 400
+
+        account_type = sanitize_text(str(body.get("account_type", "bank")), 40).strip() or "bank"
+        currency = sanitize_text(str(body.get("currency", "BRL")), 10).strip() or "BRL"
+
+        try:
+            initial_balance = float(body.get("initial_balance", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "initial_balance inválido"}), 400
+        if not _is_finite_number(initial_balance):
+            return jsonify({"error": "initial_balance inválido"}), 400
+
+        acc_id = repo.add_fin_account(
+            {
+                "name": name,
+                "account_type": account_type,
+                "currency": currency,
+                "initial_balance": round(initial_balance, 2),
+            }
+        )
+        _audit("add", "account", acc_id, {"after": {"id": acc_id, "name": name}})
+        return jsonify({"ok": True, "id": acc_id}), 201
+
+    @app.put("/api/finance/accounts/<int:account_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_update_account(account_id: int):
+        body = request.get_json(silent=True) or {}
+        if not body:
+            return jsonify({"error": "JSON inválido"}), 400
+
+        data: dict[str, Any] = {}
+        if "name" in body:
+            name = sanitize_text(str(body.get("name", "")), 100).strip()
+            if not name:
+                return jsonify({"error": "name obrigatório"}), 400
+            data["name"] = name
+        if "account_type" in body:
+            data["account_type"] = sanitize_text(str(body.get("account_type", "bank")), 40).strip() or "bank"
+        if "currency" in body:
+            data["currency"] = sanitize_text(str(body.get("currency", "BRL")), 10).strip() or "BRL"
+        if "initial_balance" in body:
+            try:
+                initial_balance = float(body.get("initial_balance", 0))
+            except (TypeError, ValueError):
+                return jsonify({"error": "initial_balance inválido"}), 400
+            if not _is_finite_number(initial_balance):
+                return jsonify({"error": "initial_balance inválido"}), 400
+            data["initial_balance"] = round(initial_balance, 2)
+
+        if not data:
+            return jsonify({"error": "Nenhum campo para atualizar"}), 400
+
+        ok = repo.update_fin_account(account_id, data)
+        if not ok:
+            return jsonify({"error": "Conta não encontrada"}), 404
+        _audit("update", "account", account_id, {"fields": sorted(list(data.keys()))})
+        return jsonify({"ok": True})
+
+    @app.delete("/api/finance/accounts/<int:account_id>")
+    @limiter.limit("15/minute")
+    @require_finance_key
+    def finance_delete_account(account_id: int):
+        ok = repo.delete_fin_account(account_id)
+        if not ok:
+            return jsonify({"error": "Conta não encontrada"}), 404
+        _audit("delete", "account", account_id, None)
+        return jsonify({"ok": True})
+
+    @app.get("/api/finance/accounts/balances")
+    @limiter.limit("30/minute")
+    def finance_accounts_balances():
+        return jsonify(repo.get_fin_accounts_balance_summary())
+
     # ── Installments ───────────────────────────────────────
 
     @app.post("/api/finance/cashflow/installments")
@@ -1909,6 +2046,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         date_from = sanitize_text(str(request.args.get("date_from", "")), 10).strip()
         date_to = sanitize_text(str(request.args.get("date_to", "")), 10).strip()
         credit_card_id = request.args.get("credit_card_id", "")
+        account_id = request.args.get("account_id", "")
         amount_min = request.args.get("amount_min", "")
         amount_max = request.args.get("amount_max", "")
         limit = int(request.args.get("limit", "500"))
@@ -1928,6 +2066,11 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             cid = int(credit_card_id) if credit_card_id else None
         except (ValueError, TypeError):
             cid = None
+
+        try:
+            aid = int(account_id) if account_id else None
+        except (ValueError, TypeError):
+            aid = None
 
         try:
             amin = float(amount_min) if amount_min else None
@@ -1951,6 +2094,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             date_from=date_from or None,
             date_to=date_to or None,
             credit_card_id=cid,
+            account_id=aid,
             amount_min=amin,
             amount_max=amax,
             limit=max(1, min(2000, limit)),
@@ -2356,6 +2500,103 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         payload = repo.get_fin_cashflow_analytics(month=target_month)
         cache.set(cache_key, payload, FINANCE_CACHE_TTLS["cashflow_analytics"])
         return jsonify(payload)
+
+    @app.get("/api/finance/analytics")
+    @limiter.limit("30/minute")
+    def finance_analytics():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            return jsonify({"error": "month required"}), 400
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month invalid (YYYY-MM)"}), 400
+        try:
+            payload = repo.get_fin_analytics(month)
+            return jsonify(payload or {})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.get("/api/finance/budget-check")
+    @limiter.limit("30/minute")
+    def finance_budget_check():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            return jsonify({"error": "month required"}), 400
+        try:
+            alerts = repo.get_budget_alerts(month)
+            return jsonify({"alerts": alerts or []})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.get("/api/finance/health-score")
+    @limiter.limit("30/minute")
+    def finance_health_score():
+        cache_key = "finance:health-score"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            payload = repo.get_fin_health_score()
+            cache.set(cache_key, payload, FINANCE_CACHE_TTLS["summary"])
+            return jsonify(payload)
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.get("/api/finance/savings-suggestions")
+    @limiter.limit("30/minute")
+    def finance_savings_suggestions():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if month and not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month invalid (YYYY-MM)"}), 400
+        target_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+        cache_key = f"finance:savings-suggestions:{target_month}"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            payload = repo.get_fin_savings_suggestions(target_month)
+            cache.set(cache_key, payload, FINANCE_CACHE_TTLS["cashflow_analytics"])
+            return jsonify(payload)
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.patch("/api/finance/cashflow/<int:entry_id>")
+    @require_finance_key
+    def finance_update_cashflow_inline(entry_id: int):
+        data = request.get_json(silent=True) or {}
+        allowed_fields = {"category", "description", "amount", "account_id", "credit_card_id"}
+        updates = {k: v for k, v in data.items() if k in allowed_fields}
+        if not updates:
+            return jsonify({"error": "no updates"}), 400
+        try:
+            result = repo.update_fin_cashflow_entry(entry_id, updates)
+            if result:
+                _invalidate_cashflow_cache()
+                return jsonify({"status": "ok"}), 200
+            return jsonify({"error": "not found"}), 404
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
+    @app.get("/api/finance/report/pdf")
+    @limiter.limit("10/minute")
+    def finance_report_pdf():
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month or not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month invalid"}), 400
+        try:
+            pdf_buffer = io.BytesIO()
+            pdf_buffer.write(b"%PDF-1.4\n")
+            pdf_buffer.write(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >> endobj\n")
+            pdf_buffer.write(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
+            pdf_buffer.write(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n")
+            pdf_buffer.write(f"4 0 obj\nBT /F1 12 Tf 50 750 Td (Relatorio Financeiro {month}) Tj ET\nendobj\n".encode())
+            pdf_buffer.write(b"xref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000085 00000 n\n0000000174 00000 n\n0000000278 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >> startxref\n400\n%%EOF")
+            pdf_buffer.seek(0)
+            return pdf_buffer.getvalue(), 200, {
+                "Content-Type": "application/pdf",
+                "Content-Disposition": f"attachment; filename=relatorio-{month}.pdf",
+            }
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
 
     @app.get("/api/finance/cashflow/budget")
     @limiter.limit("30/minute")
@@ -4530,6 +4771,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "category": sanitize_text(str(body.get("category", "")), 60),
             "subcategory": sanitize_text(str(body.get("subcategory", "")), 60),
             "cost_center": sanitize_text(str(body.get("cost_center", "")), 60),
+            "account_id": int(body["account_id"]) if body.get("account_id") else None,
             "description": sanitize_text(str(body.get("description", "")), 160),
             "entry_date": entry_date,
             "notes": sanitize_text(str(body.get("notes", "")), 500),
@@ -4598,6 +4840,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             data["subcategory"] = sanitize_text(str(body.get("subcategory", "")), 60)
         if "cost_center" in body:
             data["cost_center"] = sanitize_text(str(body.get("cost_center", "")), 60)
+        if "account_id" in body:
+            data["account_id"] = int(body["account_id"]) if body.get("account_id") else None
         if "description" in body:
             data["description"] = sanitize_text(str(body.get("description", "")), 160)
         if "notes" in body:
@@ -7533,162 +7777,8 @@ def _recalc_portfolio(repo: Repository, asset_id: int) -> None:
                 qty -= sell_qty
                 total_cost -= avg * sell_qty
 
-
-    # Filter management endpoints
-    @app.post("/api/finance/filters")
-    @require_finance_key
-    def finance_save_filter():
-        """Save a custom filter (cashflow, expenses, etc)."""
-        data = request.get_json() or {}
-        name = sanitize_text(str(data.get("name", "")), 100).strip()
-        filter_data = data.get("filter", {})
-        is_fav = bool(data.get("is_favorite", False))
-        
-        if not name:
-            return jsonify({"error": "name required"}), 400
-        
-        try:
-            # Store in localStorage on client (stateless), or in DB if desired
-            return jsonify({"status": "ok", "name": name}), 201
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-    
-    @app.get("/api/finance/filters")
-    @limiter.limit("30/minute")
-    def finance_list_filters():
-        """List saved filters."""
-        return jsonify([])  # Stored in localStorage on client
-    
-    # Template management endpoints
-    @app.post("/api/finance/templates")
-    @require_finance_key
-    def finance_save_template():
-        """Save a cashflow entry as a template."""
-        data = request.get_json() or {}
-        name = sanitize_text(str(data.get("name", "")), 100).strip()
-        template = data.get("template", {})
-        
-        if not name:
-            return jsonify({"error": "name required"}), 400
-        
-        try:
-            return jsonify({"status": "ok", "name": name}), 201
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-    
-    @app.get("/api/finance/templates")
-    @limiter.limit("30/minute")
-    def finance_list_templates():
-        """List saved templates."""
-        return jsonify([])  # Stored in localStorage on client
-    
-    # Analytics endpoint
-    @app.get("/api/finance/analytics")
-    @limiter.limit("30/minute")
-    def finance_analytics():
-        """Get analytics and insights."""
-        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
-        
-        if not month:
-            return jsonify({"error": "month required"}), 400
-        
-        if not re.match(r"^\d{4}-\d{2}$", month):
-            return jsonify({"error": "month invalid (YYYY-MM)"}), 400
-        
-        try:
-            payload = repo.get_fin_analytics(month)
-            return jsonify(payload or {})
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-    
-    # Budget alerts endpoint
-    @app.get("/api/finance/budget-check")
-    @limiter.limit("30/minute")
-    def finance_budget_check():
-        """Check budget status and return alerts."""
-        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
-        
-        if not month:
-            return jsonify({"error": "month required"}), 400
-        
-        try:
-            alerts = repo.get_budget_alerts(month)
-            return jsonify({"alerts": alerts or []})
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-
-    # Health score endpoint
-    @app.get("/api/finance/health-score")
-    @limiter.limit("30/minute")
-    def finance_health_score():
-        """Get financial health score (0-100) based on 4 pillars: liquidity, solvency, profitability, efficiency."""
-        cache_key = "finance:health-score"
-        cached = cache.get(cache_key)
-        if cached:
-            return jsonify(cached)
-        
-        try:
-            payload = repo.get_fin_health_score()
-            cache.set(cache_key, payload, FINANCE_CACHE_TTLS["summary"])
-            return jsonify(payload)
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-
     if qty > 0:
         avg_price = total_cost / qty
         repo.upsert_fin_portfolio(asset_id, qty, avg_price, total_cost)
     else:
         repo.delete_fin_portfolio(asset_id)
-
-    # Inline editing endpoint
-    @app.patch("/api/finance/cashflow/<int:entry_id>")
-    @require_finance_key
-    def finance_update_cashflow_inline(entry_id):
-        """Update single field via inline editing."""
-        data = request.get_json() or {}
-        allowed_fields = ["category", "description", "amount"]
-        updates = {k: v for k, v in data.items() if k in allowed_fields}
-        
-        if not updates:
-            return jsonify({"error": "no updates"}), 400
-        
-        try:
-            result = repo.update_fin_cashflow_entry(entry_id, updates)
-            if result:
-                return jsonify({"status": "ok"}), 200
-            return jsonify({"error": "not found"}), 404
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
-    
-    # PDF report endpoint
-    @app.get("/api/finance/report/pdf")
-    @limiter.limit("10/minute")
-    def finance_report_pdf():
-        """Generate PDF report for a given month."""
-        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
-        include_charts = request.args.get("includeCharts", "false").lower() == "true"
-        include_analytics = request.args.get("includeAnalytics", "false").lower() == "true"
-        
-        if not month or not re.match(r"^\d{4}-\d{2}$", month):
-            return jsonify({"error": "month invalid"}), 400
-        
-        try:
-            # For now, return a simple placeholder PDF
-            # In production, use reportlab or similar
-            from io import BytesIO
-            
-            pdf_buffer = BytesIO()
-            pdf_buffer.write(b"%PDF-1.4\n")  # Simple PDF header
-            pdf_buffer.write(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >> endobj\n")
-            pdf_buffer.write(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
-            pdf_buffer.write(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n")
-            pdf_buffer.write(f"4 0 obj\nBT /F1 12 Tf 50 750 Td (Relatório Financeiro {month}) Tj ET\nendobj\n".encode())
-            pdf_buffer.write(b"xref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000085 00000 n\n0000000174 00000 n\n0000000278 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >> startxref\n400\n%%EOF")
-            
-            pdf_buffer.seek(0)
-            return pdf_buffer.getvalue(), 200, {
-                "Content-Type": "application/pdf",
-                "Content-Disposition": f"attachment; filename=relatorio-{month}.pdf"
-            }
-        except Exception as ex:
-            return jsonify({"error": str(ex)}), 500
