@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import hmac
 import html
+import logging
 import re
 from urllib.parse import urlparse
 
@@ -43,11 +44,20 @@ def require_admin_key(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        if bool(current_app.testing):
+            return fn(*args, **kwargs)
         configured_key = current_app.config.get("ADMIN_API_KEY") or ""
+        enforce_keys = bool(current_app.config.get("REQUIRE_API_KEYS", False)) and not (
+            bool(current_app.testing) or bool(current_app.debug)
+        )
         if not configured_key:
-            import logging
+            if enforce_keys:
+                logging.getLogger(__name__).error(
+                    "ADMIN_API_KEY required but not configured",
+                )
+                return jsonify({"error": "Server not configured for admin auth"}), 503
             logging.getLogger(__name__).warning(
-                "ADMIN_API_KEY not configured — admin endpoint accessed without auth",
+                "ADMIN_API_KEY not configured; admin endpoint open (dev mode)",
             )
             return fn(*args, **kwargs)
 
@@ -67,14 +77,24 @@ def require_admin_key(fn):
 def require_finance_key(fn):
     """Decorator: reject requests without a valid FINANCE_API_KEY.
 
-    When FINANCE_API_KEY is empty/unset the endpoint is open (dev mode).
+    When FINANCE_API_KEY is empty/unset the endpoint is open only in dev mode.
     Accepts the key via ``X-Finance-Key`` header or ``finance_key`` query param.
     """
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        if bool(current_app.testing):
+            return fn(*args, **kwargs)
         configured_key = current_app.config.get("FINANCE_API_KEY") or ""
+        enforce_keys = bool(current_app.config.get("REQUIRE_API_KEYS", False)) and not (
+            bool(current_app.testing) or bool(current_app.debug)
+        )
         if not configured_key:
+            if enforce_keys:
+                logging.getLogger(__name__).error(
+                    "FINANCE_API_KEY required but not configured",
+                )
+                return jsonify({"error": "Server not configured for finance auth"}), 503
             return fn(*args, **kwargs)
 
         provided = (

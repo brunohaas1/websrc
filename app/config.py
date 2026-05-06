@@ -17,6 +17,9 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_JSON = os.getenv("LOG_JSON", "1") == "1"
     APP_ROLE = os.getenv("APP_ROLE", "all")
+    APP_ENV = os.getenv("APP_ENV", os.getenv("FLASK_ENV", "development")).strip().lower()
+    REQUIRE_API_KEYS = os.getenv("REQUIRE_API_KEYS", "1" if APP_ENV == "production" else "0") == "1"
+    ALLOW_RUNTIME_SCHEMA_EVOLUTION = os.getenv("ALLOW_RUNTIME_SCHEMA_EVOLUTION", "1") == "1"
 
     QUEUE_ENABLED = os.getenv("QUEUE_ENABLED", "0") == "1"
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

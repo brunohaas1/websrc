@@ -73,7 +73,10 @@ def run_ai_backfill_once(
     )
 
     app = RuntimeApp(config=runtime_config)
-    repo = Repository(database_target)
+    repo = Repository(
+        database_target,
+        enable_runtime_schema_evolution=runtime_config.get("ALLOW_RUNTIME_SCHEMA_EVOLUTION", True),
+    )
     enricher = LocalAIEnricher(app)
 
     scanned = 0

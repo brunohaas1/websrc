@@ -4,6 +4,7 @@ import queue as _queue
 import json as _json
 import secrets
 from datetime import datetime, timezone, timedelta
+from typing import Any, cast
 
 import feedparser
 import requests as http_requests
@@ -26,7 +27,10 @@ from .security import (
 
 def register_routes(app: Flask) -> None:
     logger = logging.getLogger(__name__)
-    repo = Repository(app.config["DATABASE_TARGET"])
+    repo = Repository(
+        app.config["DATABASE_TARGET"],
+        enable_runtime_schema_evolution=app.config.get("ALLOW_RUNTIME_SCHEMA_EVOLUTION", True),
+    )
     cache = get_cache(app.config)
 
     # ── In-memory log buffer for log viewer ──────────────
@@ -1110,10 +1114,10 @@ def register_routes(app: Flask) -> None:
             try:
                 import redis as _redis
                 r = _redis.from_url(app.config["REDIS_URL"])
-                info = r.info("server")
+                info = cast(dict[str, Any], r.info("server"))
                 checks["redis"] = {
                     "status": "ok",
-                    "uptime_seconds": info.get("uptime_in_seconds", 0),
+                    "uptime_seconds": int(info.get("uptime_in_seconds", 0) or 0),
                 }
             except Exception as exc:
                 checks["redis"] = {"status": "error", "detail": str(exc)[:100]}
@@ -1207,16 +1211,16 @@ def register_routes(app: Flask) -> None:
     @limiter.limit("10/minute")
     def cache_stats():
         """Return cache statistics."""
-        stats = cache.get_stats() if hasattr(cache, "get_stats") else {}
+        stats = dict(cache.get_stats())
         # Try Redis INFO if available
         if app.config.get("QUEUE_ENABLED"):
             try:
                 import redis as _redis
                 r = _redis.from_url(app.config["REDIS_URL"])
-                info = r.info("stats")
-                memory = r.info("memory")
-                stats["redis_hits"] = info.get("keyspace_hits", 0)
-                stats["redis_misses"] = info.get("keyspace_misses", 0)
+                info = cast(dict[str, Any], r.info("stats"))
+                memory = cast(dict[str, Any], r.info("memory"))
+                stats["redis_hits"] = int(info.get("keyspace_hits", 0) or 0)
+                stats["redis_misses"] = int(info.get("keyspace_misses", 0) or 0)
                 total = stats["redis_hits"] + stats["redis_misses"]
                 stats["hit_rate_pct"] = round(stats["redis_hits"] / max(total, 1) * 100, 1)
                 stats["used_memory_human"] = memory.get("used_memory_human", "?")

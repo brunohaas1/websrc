@@ -10,6 +10,8 @@ _MAX_MEMORY_ENTRIES = 512
 class MemoryTTLCache:
     def __init__(self) -> None:
         self._store: dict[str, tuple[float, str]] = {}
+        self._hits = 0
+        self._misses = 0
 
     def _evict_expired(self) -> None:
         now = time.time()
@@ -20,13 +22,16 @@ class MemoryTTLCache:
     def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
         if not entry:
+            self._misses += 1
             return None
 
         expires_at, payload = entry
         if expires_at < time.time():
             self._store.pop(key, None)
+            self._misses += 1
             return None
 
+        self._hits += 1
         return json.loads(payload)
 
     def set(self, key: str, value: Any, ttl: int) -> None:
@@ -45,24 +50,42 @@ class MemoryTTLCache:
         for key in keys:
             self._store.pop(key, None)
 
+    def get_stats(self) -> dict[str, Any]:
+        total = self._hits + self._misses
+        hit_rate = (self._hits / total) if total else 0.0
+        return {
+            "backend": "memory",
+            "hits": self._hits,
+            "misses": self._misses,
+            "total": total,
+            "hit_rate": round(hit_rate, 4),
+            "size": len(self._store),
+            "max_entries": _MAX_MEMORY_ENTRIES,
+        }
+
 
 class RedisJSONCache:
     def __init__(self, redis_client):
         self.redis = redis_client
+        self._hits = 0
+        self._misses = 0
 
     def get(self, key: str) -> Any | None:
         try:
             payload = self.redis.get(key)
             if not payload:
+                self._misses += 1
                 return None
             if isinstance(payload, bytes):
                 payload = payload.decode("utf-8")
+            self._hits += 1
             return json.loads(payload)
         except Exception:
             try:
                 self.redis.delete(key)
             except Exception:
                 pass
+            self._misses += 1
             return None
 
     def set(self, key: str, value: Any, ttl: int) -> None:
@@ -85,6 +108,17 @@ class RedisJSONCache:
                 self.redis.delete(*keys)
         except Exception:
             pass
+
+    def get_stats(self) -> dict[str, Any]:
+        total = self._hits + self._misses
+        hit_rate = (self._hits / total) if total else 0.0
+        return {
+            "backend": "redis",
+            "hits": self._hits,
+            "misses": self._misses,
+            "total": total,
+            "hit_rate": round(hit_rate, 4),
+        }
 
 
 _shared_redis = None

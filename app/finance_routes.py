@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import requests as http_requests
@@ -35,6 +35,7 @@ from .finance_cashflow_helpers import (
     parse_cashflow_import_candidates,
     tokenize_cashflow_text,
 )
+from .finance_blueprints.cashflow import register_cashflow_routes
 from .repository import Repository
 from .security import require_finance_key, sanitize_text
 
@@ -137,9 +138,12 @@ def _http_get_with_retry(
 
 def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     logger = logging.getLogger(__name__)
-    repo = Repository(app.config["DATABASE_TARGET"])
+    repo = Repository(
+        app.config["DATABASE_TARGET"],
+        enable_runtime_schema_evolution=app.config.get("ALLOW_RUNTIME_SCHEMA_EVOLUTION", True),
+    )
     cache = get_cache(app.config)
-    app._finance_cache = cache  # exposed for tests
+    setattr(app, "_finance_cache", cache)  # exposed for tests
 
     # Initialize smart dedup cache (1 hour TTL, Redis with fallback to memory)
     dedup_ttl = int(app.config.get("CASHFLOW_DEDUP_TTL_SECONDS", 3600))
@@ -540,11 +544,21 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         return True, raw, ""
 
     def _is_finite_number(value: object) -> bool:
+        if not isinstance(value, (int, float, str)):
+            return False
         try:
             n = float(value)
         except (TypeError, ValueError):
             return False
         return math.isfinite(n)
+
+    def _as_float(value: object, default: float = 0.0) -> float:
+        if not isinstance(value, (int, float, str)):
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _normalize_tags(value: object, *, max_items: int = 12) -> list[str]:
         items: list[str] = []
@@ -973,6 +987,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             logger.warning("finance health failed: %s", exc)
             return jsonify({"ok": False, "error": "Falha ao carregar health"}), 500
 
+    # ── Register Cashflow Blueprint ─────────────────────────────────────────
+    # (Phase 1: Blueprint structure established, partial extraction in progress)
+    # register_cashflow_routes(app, limiter, repo, cache, logger, _cashflow_helpers)
+
     # ── Assets CRUD ─────────────────────────────────────────
 
     @app.get("/api/finance/assets")
@@ -1001,7 +1019,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         }
         asset_id = repo.upsert_fin_asset(data)
         _invalidate_financial_state_cache(include_market=True)
-        return jsonify({"ok": True, "id": asset_id}), 201
+        return jsonify({"ok": True, "id": asset_id, "status": "created"}), 201
 
     @app.delete("/api/finance/assets/<int:asset_id>")
     @limiter.limit("15/minute")
@@ -1029,8 +1047,19 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     @limiter.limit("30/minute")
     def finance_list_transactions():
         asset_id = request.args.get("asset_id", type=int)
-        limit = min(500, max(1, int(request.args.get("limit", "100"))))
-        return jsonify(repo.list_fin_transactions(asset_id, limit))
+        limit = min(200, max(1, int(request.args.get("limit", "50"))))
+        page_str = request.args.get("page")
+        page = max(1, int(page_str or "1"))
+        offset = (page - 1) * limit
+        rows = repo.list_fin_transactions(asset_id, limit=limit, offset=offset)
+        if page_str is None:
+            return jsonify(rows)
+        return jsonify({
+            "items": rows,
+            "page": page,
+            "per_page": limit,
+            "has_more": len(rows) == limit,
+        })
 
     @app.post("/api/finance/transactions")
     @limiter.limit("15/minute")
@@ -1343,6 +1372,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_cleanup_duplicate_transactions_help():
         return jsonify({
             "ok": True,
+            "status": "created",
             "message": "Use POST para executar a limpeza de duplicatas.",
             "method": "POST",
             "path": "/api/finance/maintenance/cleanup-duplicates",
@@ -1382,7 +1412,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 return jsonify({"error": "target_price inválido"}), 400
         wl_id = repo.add_fin_watchlist(data)
         _audit("add", "watchlist", wl_id, {"symbol": data["symbol"]})
-        return jsonify({"ok": True, "id": wl_id}), 201
+        return jsonify({"ok": True, "id": wl_id, "status": "updated"}), 201
 
     @app.delete("/api/finance/watchlist/<int:wl_id>")
     @limiter.limit("15/minute")
@@ -1418,7 +1448,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"error": "Item não encontrado"}), 404
         _audit("update", "watchlist", wl_id, {"fields": sorted(list(data.keys()))})
         _invalidate_financial_state_cache(include_market=True)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "status": "updated"})
 
     # ── Goals ───────────────────────────────────────────────
 
@@ -2061,7 +2091,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         account_id = request.args.get("account_id", "")
         amount_min = request.args.get("amount_min", "")
         amount_max = request.args.get("amount_max", "")
-        limit = int(request.args.get("limit", "500"))
+        limit = int(request.args.get("limit", "200"))
+        page_str = request.args.get("page")
+        page = max(1, int(page_str or "1"))
 
         if month and not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month inválido (use YYYY-MM)"}), 400
@@ -2109,9 +2141,17 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             account_id=aid,
             amount_min=amin,
             amount_max=amax,
-            limit=max(1, min(2000, limit)),
+            limit=max(1, min(1000, limit)),
+            offset=(page - 1) * max(1, min(1000, limit)),
         )
-        return jsonify(payload)
+        if page_str is None:
+            return jsonify(payload)
+        return jsonify({
+            "items": payload,
+            "page": page,
+            "per_page": max(1, min(1000, limit)),
+            "has_more": len(payload) == max(1, min(1000, limit)),
+        })
 
     @app.get("/api/finance/cashflow/saved-filters")
     @limiter.limit("30/minute")
@@ -2380,6 +2420,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 if not cand_id or cand_id == row_id:
                     continue
                 pair = tuple(sorted((row_id, cand_id)))
+                pair = cast(tuple[int, int], pair)
                 if pair in processed_pairs:
                     continue
                 processed_pairs.add(pair)
@@ -2635,11 +2676,16 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         if not creditor:
             return jsonify({"error": "creditor é obrigatório"}), 400
         try:
+            raw_current_balance = (
+                data.get("current_balance")
+                if data.get("current_balance") is not None
+                else data.get("principal")
+            )
             debt_id = repo.add_fin_debt({
                 "creditor": creditor,
                 "description": sanitize_text(str(data.get("description") or ""), 250),
                 "principal": float(data.get("principal") or 0),
-                "current_balance": float(data.get("current_balance") if data.get("current_balance") is not None else data.get("principal") or 0),
+                "current_balance": float(raw_current_balance or 0),
                 "interest_rate": float(data.get("interest_rate") or 0),
                 "monthly_payment": float(data.get("monthly_payment") or 0),
                 "due_date": sanitize_text(str(data.get("due_date") or ""), 10) or None,
@@ -3274,7 +3320,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             })
             start_day += 7
 
-        def _bucket_for(date_obj: datetime.date) -> dict[str, object] | None:
+        def _bucket_for(date_obj: Any) -> dict[str, Any] | None:
             for w in weeks:
                 if str(w["start"]) <= date_obj.isoformat() <= str(w["end"]):
                     return w
@@ -3314,15 +3360,15 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
         running_balance = float(analytics.get("totals", {}).get("balance") or 0)
         for bucket in weeks:
-            realized = float(bucket["income"]) - float(bucket["expense"])
-            expected = float(bucket["expected_income"]) - float(bucket["expected_expense"])
+            realized = _as_float(bucket.get("income")) - _as_float(bucket.get("expense"))
+            expected = _as_float(bucket.get("expected_income")) - _as_float(bucket.get("expected_expense"))
             bucket["net"] = round(realized + expected, 2)
             running_balance += realized + expected
             bucket["projected_balance"] = round(running_balance, 2)
-            bucket["income"] = round(float(bucket["income"]), 2)
-            bucket["expense"] = round(float(bucket["expense"]), 2)
-            bucket["expected_income"] = round(float(bucket["expected_income"]), 2)
-            bucket["expected_expense"] = round(float(bucket["expected_expense"]), 2)
+            bucket["income"] = round(_as_float(bucket.get("income")), 2)
+            bucket["expense"] = round(_as_float(bucket.get("expense")), 2)
+            bucket["expected_income"] = round(_as_float(bucket.get("expected_income")), 2)
+            bucket["expected_expense"] = round(_as_float(bucket.get("expected_expense")), 2)
 
         risks = [
             {
@@ -3928,7 +3974,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def _pdf_bytes_to_image_bytes(pdf_bytes: bytes) -> bytes | None:
         """Convert first page of a PDF to PNG bytes. Requires pdf2image + poppler."""
         try:
-            from pdf2image import convert_from_bytes  # noqa: PLC0415
+            from pdf2image import convert_from_bytes  # type: ignore[import-not-found]  # noqa: PLC0415
             import io as _io  # noqa: PLC0415
             images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1, dpi=200)
             if images:
@@ -3942,7 +3988,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def _pdf_bytes_to_all_images(pdf_bytes: bytes) -> list[bytes]:
         """Convert every page of a PDF to PNG bytes (max 10 pages). Returns [] on failure."""
         try:
-            from pdf2image import convert_from_bytes  # noqa: PLC0415
+            from pdf2image import convert_from_bytes  # type: ignore[import-not-found]  # noqa: PLC0415
             import io as _io  # noqa: PLC0415
             images = convert_from_bytes(pdf_bytes, first_page=1, last_page=10, dpi=200)
             result = []
@@ -4013,10 +4059,10 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         w, h = base.size
         if max(w, h) < _MAX_DIM // 2:
             # Small image: upscale 2x so characters are legible
-            base = base.resize((w * 2, h * 2), Image.LANCZOS)
+            base = base.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
         elif max(w, h) > _MAX_DIM:
             scale = _MAX_DIM / max(w, h)
-            base = base.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            base = base.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
         # Otsu binarization: improves contrast on receipts with uneven lighting
         try:
@@ -4044,7 +4090,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 if var > max_var:
                     max_var = var
                     threshold = i
-            binarized = base.point(lambda p: 255 if p >= threshold else 0)
+            bw = _np.where(arr >= threshold, 255, 0).astype("uint8")
+            binarized = Image.fromarray(bw)
         except Exception:
             binarized = base  # numpy unavailable or error → skip
 
@@ -4668,6 +4715,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
 
         if not q or len(q) < 2:
             return jsonify({"results": []})
+        cache_key = (
+            f"finance:global-search:{q}:{limit}:{search_type or ''}:{date_from or ''}:"
+            f"{date_to or ''}:{min_value if min_value is not None else ''}:{max_value if max_value is not None else ''}"
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
         try:
             results = repo.global_finance_search(
                 q=q,
@@ -4678,7 +4732,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                 min_value=min_value,
                 max_value=max_value,
             )
-            return jsonify({"results": results})
+            payload = {"results": results}
+            cache.set(cache_key, payload, 45)
+            return jsonify(payload)
         except Exception as exc:
             logging.getLogger(__name__).error("global search: %s", exc)
             return jsonify({"results": []}), 200
@@ -5626,6 +5682,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     io.BytesIO(f.read()), read_only=True,
                 )
                 ws = wb.active
+                if ws is None:
+                    return jsonify({"error": "Planilha sem aba ativa"}), 400
                 headers: list[str] = []
                 for i, row in enumerate(ws.iter_rows(values_only=True)):
                     if i == 0:
@@ -5823,6 +5881,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     io.BytesIO(f.read()), read_only=True,
                 )
                 ws = wb.active
+                if ws is None:
+                    return jsonify({"error": "Planilha sem aba ativa"}), 400
                 headers: list[str] = []
                 for i, row in enumerate(ws.iter_rows(values_only=True)):
                     if i == 0:
@@ -5988,6 +6048,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
                     break
             if ws is None:
                 ws = wb.active
+            if ws is None:
+                return jsonify({"error": "Planilha sem aba ativa"}), 400
 
             raw_rows: list[dict] = []
             headers: list[str] = []
@@ -6570,6 +6632,8 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             # Portfolio sheet
             if export_type in ("all", "portfolio"):
                 ws = wb.active
+                if ws is None:
+                    return jsonify({"error": "Falha ao criar planilha"}), 500
                 ws.title = "Portfólio"
                 ws.append([
                     "Símbolo", "Nome", "Tipo", "Quantidade",
@@ -8141,7 +8205,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_2fa_setup():
         """Generate a new TOTP secret (does NOT enable 2FA until /enable is called)."""
         try:
-            import pyotp
+            import pyotp  # type: ignore[import-not-found]
             secret = pyotp.random_base32()
             totp = pyotp.TOTP(secret)
             issuer = "WebSRC Finance"
@@ -8159,7 +8223,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_2fa_enable():
         """Verify TOTP token and activate 2FA."""
         try:
-            import pyotp
+            import pyotp  # type: ignore[import-not-found]
             data = request.get_json(silent=True) or {}
             token = str(data.get("token") or "").strip()
             if not token:
@@ -8182,7 +8246,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_2fa_verify():
         """Verify a TOTP token. Returns a short-lived session proof."""
         try:
-            import pyotp
+            import pyotp  # type: ignore[import-not-found]
             data = request.get_json(silent=True) or {}
             token = str(data.get("token") or "").strip()
             if not token:
@@ -8208,7 +8272,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def finance_2fa_disable():
         """Disable 2FA after verifying current token."""
         try:
-            import pyotp
+            import pyotp  # type: ignore[import-not-found]
             data = request.get_json(silent=True) or {}
             token = str(data.get("token") or "").strip()
             if not token:
@@ -8233,7 +8297,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
     def push_send_test():
         """Send a test push notification to all subscribed browsers."""
         try:
-            from pywebpush import webpush, WebPushException
+            from pywebpush import webpush, WebPushException  # type: ignore[import-not-found]
             private_key = app.config.get("VAPID_PRIVATE_KEY", "")
             claims_email = app.config.get("VAPID_CLAIMS_EMAIL", "mailto:admin@localhost")
             if not private_key:

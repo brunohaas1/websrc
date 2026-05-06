@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import calendar
+import logging
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Any
@@ -52,10 +53,16 @@ class Repository:
         "open_source",
     }
 
-    def __init__(self, database_target: str):
+    def __init__(
+        self,
+        database_target: str,
+        *,
+        enable_runtime_schema_evolution: bool = True,
+    ):
         self.database_target = database_target
         self.is_postgres = is_postgres_target(database_target)
-        self._ensure_fin_cashflow_schema_evolution()
+        if enable_runtime_schema_evolution:
+            self._ensure_fin_cashflow_schema_evolution()
 
     def _ensure_fin_cashflow_schema_evolution(self) -> None:
         statements: list[str] = []
@@ -2391,7 +2398,7 @@ class Repository:
 
             tx_indices = {aid: 0 for aid in all_assets}
             qty_state = {aid: 0.0 for aid in all_assets}
-            last_price = {aid: None for aid in all_assets}
+            last_price: dict[int, float | None] = {aid: None for aid in all_assets}
 
             rows: list[dict[str, Any]] = []
             for date_key in all_dates:
@@ -2601,8 +2608,13 @@ class Repository:
             return int(cursor.lastrowid or 0)
 
     def list_fin_transactions(
-        self, asset_id: int | None = None, limit: int = 100,
+        self,
+        asset_id: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
         with get_connection(self.database_target) as conn:
             if asset_id:
                 rows = conn.execute(
@@ -2611,9 +2623,9 @@ class Repository:
                         FROM fin_transactions t
                         JOIN fin_assets a ON a.id = t.asset_id
                         WHERE t.asset_id = ?
-                        ORDER BY t.tx_date DESC LIMIT ?
+                        ORDER BY t.tx_date DESC LIMIT ? OFFSET ?
                     """),
-                    (asset_id, limit),
+                    (asset_id, safe_limit, safe_offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -2621,9 +2633,9 @@ class Repository:
                         SELECT t.*, a.symbol, a.name AS asset_name
                         FROM fin_transactions t
                         JOIN fin_assets a ON a.id = t.asset_id
-                        ORDER BY t.tx_date DESC LIMIT ?
+                        ORDER BY t.tx_date DESC LIMIT ? OFFSET ?
                     """),
-                    (limit,),
+                    (safe_limit, safe_offset),
                 ).fetchall()
             return [dict(r) for r in rows]
 
@@ -3005,7 +3017,10 @@ class Repository:
         amount_min: float | None = None,
         amount_max: float | None = None,
         limit: int = 500,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
         query = (
             "SELECT e.*, "
             "COALESCE(r.status, CASE WHEN e.entry_type = 'income' THEN 'paid' ELSE 'pending' END) AS payment_status, "
@@ -3089,8 +3104,9 @@ class Repository:
             query += " AND e.amount <= ?"
             params.append(float(amount_max))
 
-        query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
-        params.append(max(1, int(limit)))
+        query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ? OFFSET ?"
+        params.append(safe_limit)
+        params.append(safe_offset)
 
         fallback_query = (
             "SELECT e.*, "
@@ -3171,8 +3187,9 @@ class Repository:
             fallback_query += " AND e.amount <= ?"
             fallback_params.append(float(amount_max))
 
-        fallback_query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
-        fallback_params.append(max(1, int(limit)))
+        fallback_query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ? OFFSET ?"
+        fallback_params.append(safe_limit)
+        fallback_params.append(safe_offset)
 
         with get_connection(self.database_target) as conn:
             try:
@@ -4642,7 +4659,12 @@ class Repository:
         if not creditor:
             raise ValueError("creditor é obrigatório")
         principal = float(data.get("principal") or 0)
-        current_balance = float(data.get("current_balance") if data.get("current_balance") is not None else principal)
+        raw_current_balance = (
+            data.get("current_balance")
+            if data.get("current_balance") is not None
+            else principal
+        )
+        current_balance = float(raw_current_balance or 0)
         interest_rate = float(data.get("interest_rate") or 0)
         monthly_payment = float(data.get("monthly_payment") or 0)
         due_date = str(data.get("due_date") or "").strip() or None
@@ -4892,7 +4914,7 @@ class Repository:
             conn.commit()
             return True
 
-    def get_fin_dividend_summary(self) -> dict[str, Any]:
+    def get_fin_dividend_summary(self) -> list[dict[str, Any]]:
         """Get total dividends grouped by asset and type."""
         with get_connection(self.database_target) as conn:
             rows = conn.execute("""
@@ -5025,10 +5047,8 @@ class Repository:
             ORDER BY amount DESC
         """)
         
-        conn = get_connection(self.database_target)
-        cursor = conn.cursor()
-        rows = cursor.execute(query, (month,)).fetchall()
-        conn.close()
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(query, (month,)).fetchall()
         
         categories = {"income": [], "expense": []}
         for row in rows:
@@ -5057,10 +5077,8 @@ class Repository:
             GROUP BY category
         """)
         
-        conn = get_connection(self.database_target)
-        cursor = conn.cursor()
-        rows = cursor.execute(query, (month,)).fetchall()
-        conn.close()
+        with get_connection(self.database_target) as conn:
+            rows = conn.execute(query, (month,)).fetchall()
         
         alerts = []
         for row in rows:
