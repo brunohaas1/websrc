@@ -66,6 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bind("btnCashflowAutoClassify", runCashflowAutoClassify);
   bind("btnCashflowAutoReconcile", runCashflowAutoReconcile);
   bind("btnCashflowClosingPdf", exportCashflowClosingPdf);
+  bind("btnAccounts", openAccountsModal);
   bind("btnPassiveIncomeGoal", openPassiveIncomeGoalModal);
   bind("btnGoalScenario", openGoalScenarioModal);
   bind("btnAddDividend", openAddDividendModal);
@@ -115,6 +116,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const cashflowQ = byId("finCashflowQ");
   const cashflowCostCenter = byId("finCashflowCostCenter");
   const cashflowTag = byId("finCashflowTag");
+  const cashflowAccount = byId("finCashflowAccount");
   const histBenchmarkSel = byId("historyBenchmarkSelect");
   const histViewMode = byId("historyViewMode");
   const histInvested = byId("historyShowInvested");
@@ -139,6 +141,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (cashflowTag) {
     cashflowTag.addEventListener("change", () => refreshByDomains(["cashflow"]));
+  }
+  if (cashflowAccount) {
+    cashflowAccount.addEventListener("change", () => refreshByDomains(["cashflow"]));
   }
   if (histBenchmarkSel) histBenchmarkSel.addEventListener("change", loadHistoryFromControls);
   if (histViewMode) histViewMode.addEventListener("change", loadHistoryFromControls);

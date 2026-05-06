@@ -413,6 +413,13 @@ function renderCashflow(entries) {
     };
   };
 
+  const accountNameById = new Map(
+    (Array.isArray(FIN.accounts) ? FIN.accounts : []).map((a) => [
+      Number(a.id || 0),
+      String(a.name || `Conta ${a.id || ""}`),
+    ]),
+  );
+
   const html = rows.map((entry) => {
     const type = String(entry.entry_type || "");
     const isIncome = type === "income";
@@ -428,6 +435,7 @@ function renderCashflow(entries) {
         <td>${escapeHtml(entry.category || "—")}</td>
         <td>${escapeHtml(entry.subcategory || "—")}</td>
         <td>${escapeHtml(entry.cost_center || "—")}</td>
+        <td>${escapeHtml(accountNameById.get(Number(entry.account_id || 0)) || "—")}</td>
         <td>${escapeHtml(Array.isArray(entry.tags) ? entry.tags.join(", ") : "")}</td>
         <td>${escapeHtml(entry.description || "—")}${entry.installment_index && entry.installment_total ? ` <span class="fin-badge" style="font-size:.7em;opacity:.75;vertical-align:middle;">${entry.installment_index}/${entry.installment_total}</span>` : ""}</td>
         <td class="text-right mono ${amountCls}">${formatBRL(entry.amount || 0)}</td>
@@ -454,6 +462,7 @@ function renderCashflow(entries) {
             <th>Categoria</th>
             <th>Subcategoria</th>
             <th>Centro de custo</th>
+            <th>Conta</th>
             <th>Tags</th>
             <th>Descrição</th>
             <th class="text-right">Valor</th>
@@ -3335,6 +3344,242 @@ async function submitAddCreditCard(e) {
     showToast("Cartão adicionado!", "success");
     await openCreditCardsModal();
   } catch { showToast("Erro de rede"); }
+}
+
+async function _refreshAccountsState() {
+  const [accounts, balances] = await Promise.all([
+    finFetch("/api/finance/accounts").then((r) => (r.ok ? r.json() : [])),
+    finFetch("/api/finance/accounts/balances").then((r) => (r.ok ? r.json() : { accounts: [], total_balance: 0, count: 0 })),
+  ]);
+  FIN.accounts = Array.isArray(accounts) ? accounts : [];
+  FIN.accountsBalanceSummary = balances || { accounts: [], total_balance: 0, count: 0 };
+  if (typeof renderAccountsBalances === "function") {
+    renderAccountsBalances(FIN.accountsBalanceSummary);
+  }
+  if (typeof syncCashflowAccountFilterOptions === "function") {
+    syncCashflowAccountFilterOptions();
+  }
+}
+
+async function openAccountsModal() {
+  openFinModal("🏦 Contas", '<p style="text-align:center;padding:20px;">Carregando contas...</p>');
+  try {
+    await _refreshAccountsState();
+  } catch {
+    showToast("Erro ao carregar contas");
+    return;
+  }
+
+  let accounts = Array.isArray(FIN.accounts) ? FIN.accounts : [];
+
+  const renderAccountsHtml = () => {
+    const balances = new Map(
+      (FIN.accountsBalanceSummary?.accounts || []).map((a) => [Number(a.id || 0), a]),
+    );
+    const rows = accounts.length
+      ? accounts.map((a) => {
+        const bal = balances.get(Number(a.id || 0)) || {};
+        const balance = Number(bal.balance || a.initial_balance || 0);
+        const bcls = balance >= 0 ? "fin-up" : "fin-down";
+        return `
+          <tr>
+            <td><strong>${escapeHtml(a.name || "—")}</strong></td>
+            <td>${escapeHtml(String(a.account_type || "bank"))}</td>
+            <td>${escapeHtml(String(a.currency || "BRL"))}</td>
+            <td class="text-right mono">${formatBRL(a.initial_balance || 0)}</td>
+            <td class="text-right mono ${bcls}">${formatBRL(balance)}</td>
+            <td class="text-center">
+              <button class="fin-del-btn" data-account-edit="${a.id}" title="Editar">✎</button>
+              <button class="fin-del-btn" data-account-delete="${a.id}" title="Excluir">✕</button>
+            </td>
+          </tr>
+        `;
+      }).join("")
+      : '<tr><td colspan="6" class="text-center" style="opacity:.75;">Nenhuma conta cadastrada.</td></tr>';
+
+    return `
+      <div class="fin-table-wrap" style="margin-bottom:12px;">
+        <table class="fin-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Tipo</th>
+              <th>Moeda</th>
+              <th class="text-right">Saldo inicial</th>
+              <th class="text-right">Saldo atual</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button id="btnOpenAddAccountModal" class="fin-form-submit" type="button">＋ Nova conta</button>
+      </div>
+    `;
+  };
+
+  const overlay = byId("finModalOverlay");
+  const modalBody = overlay?.querySelector(".fin-modal-body");
+  if (modalBody) modalBody.innerHTML = renderAccountsHtml();
+
+  const bindLocal = () => {
+    byId("btnOpenAddAccountModal")?.addEventListener("click", () => openAddAccountModal());
+  };
+  bindLocal();
+
+  overlay?.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest("[data-account-edit]");
+    const delBtn = e.target.closest("[data-account-delete]");
+
+    if (editBtn) {
+      const id = Number(editBtn.dataset.accountEdit || 0);
+      const acc = accounts.find((a) => Number(a.id) === id);
+      if (!acc) return;
+      openEditAccountModal(acc);
+      return;
+    }
+
+    if (delBtn) {
+      const id = Number(delBtn.dataset.accountDelete || 0);
+      const acc = accounts.find((a) => Number(a.id) === id);
+      if (!acc) return;
+      withUndoDelete(`Conta "${acc.name}" será excluída.`, async () => {
+        try {
+          const resp = await finFetch(`/api/finance/accounts/${id}`, { method: "DELETE" });
+          const data = await resp.json();
+          if (!resp.ok) { showToast(data.error || "Erro ao excluir conta"); return; }
+          showToast("Conta excluída.", "success");
+          await _refreshAccountsState();
+          accounts = Array.isArray(FIN.accounts) ? FIN.accounts : [];
+          if (modalBody) modalBody.innerHTML = renderAccountsHtml();
+          bindLocal();
+          await refreshByDomains(["cashflow"]);
+        } catch {
+          showToast("Erro de rede");
+        }
+      });
+    }
+  }, { once: false });
+}
+
+function openAddAccountModal() {
+  openFinModal("🏦 Nova Conta", `
+    <form data-form-action="submitAddAccount">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Nome</label>
+          <input id="fmAccountName" type="text" placeholder="Ex.: Nubank, Carteira" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmAccountType">
+            <option value="bank">Banco</option>
+            <option value="wallet">Carteira</option>
+            <option value="cash">Dinheiro</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Moeda</label>
+          <input id="fmAccountCurrency" type="text" value="BRL" maxlength="10" />
+        </div>
+        <div class="fin-form-group">
+          <label>Saldo inicial (R$)</label>
+          <input id="fmAccountInitialBalance" type="number" step="0.01" value="0" />
+        </div>
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar conta</button>
+    </form>
+  `);
+}
+
+function openEditAccountModal(account) {
+  const acc = account || {};
+  openFinModal("🏦 Editar Conta", `
+    <form data-form-action="submitEditAccount" data-form-arg="${Number(acc.id || 0)}">
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Nome</label>
+          <input id="fmAccountName" type="text" value="${escapeHtml(String(acc.name || ""))}" required />
+        </div>
+        <div class="fin-form-group">
+          <label>Tipo</label>
+          <select id="fmAccountType">
+            <option value="bank" ${String(acc.account_type || "") === "bank" ? "selected" : ""}>Banco</option>
+            <option value="wallet" ${String(acc.account_type || "") === "wallet" ? "selected" : ""}>Carteira</option>
+            <option value="cash" ${String(acc.account_type || "") === "cash" ? "selected" : ""}>Dinheiro</option>
+          </select>
+        </div>
+      </div>
+      <div class="fin-form-row">
+        <div class="fin-form-group">
+          <label>Moeda</label>
+          <input id="fmAccountCurrency" type="text" value="${escapeHtml(String(acc.currency || "BRL"))}" maxlength="10" />
+        </div>
+        <div class="fin-form-group">
+          <label>Saldo inicial (R$)</label>
+          <input id="fmAccountInitialBalance" type="number" step="0.01" value="${Number(acc.initial_balance || 0)}" />
+        </div>
+      </div>
+      <button type="submit" class="fin-form-submit">💾 Salvar alterações</button>
+    </form>
+  `);
+}
+
+async function submitAddAccount(e) {
+  e.preventDefault();
+  const body = {
+    name: String(byId("fmAccountName")?.value || "").trim(),
+    account_type: String(byId("fmAccountType")?.value || "bank").trim(),
+    currency: String(byId("fmAccountCurrency")?.value || "BRL").trim(),
+    initial_balance: Number(byId("fmAccountInitialBalance")?.value || 0),
+  };
+  if (!body.name) { showToast("Informe o nome da conta"); return; }
+  try {
+    const resp = await finFetch("/api/finance/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao salvar conta"); return; }
+    showToast("Conta criada!", "success");
+    await _refreshAccountsState();
+    await refreshByDomains(["cashflow"]);
+    await openAccountsModal();
+  } catch {
+    showToast("Erro de rede");
+  }
+}
+
+async function submitEditAccount(e, accountId) {
+  e.preventDefault();
+  const id = Number(accountId || 0);
+  if (!id) { showToast("Conta inválida"); return; }
+  const body = {
+    name: String(byId("fmAccountName")?.value || "").trim(),
+    account_type: String(byId("fmAccountType")?.value || "bank").trim(),
+    currency: String(byId("fmAccountCurrency")?.value || "BRL").trim(),
+    initial_balance: Number(byId("fmAccountInitialBalance")?.value || 0),
+  };
+  if (!body.name) { showToast("Informe o nome da conta"); return; }
+  try {
+    const resp = await finFetch(`/api/finance/accounts/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showToast(data.error || "Erro ao atualizar conta"); return; }
+    showToast("Conta atualizada!", "success");
+    await _refreshAccountsState();
+    await refreshByDomains(["cashflow"]);
+    await openAccountsModal();
+  } catch {
+    showToast("Erro de rede");
+  }
 }
 
 // ── Split Cashflow Entry ───────────────────────────────

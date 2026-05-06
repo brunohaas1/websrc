@@ -453,6 +453,9 @@
           <input id="finCashflowQ" class="fin-inline-select" placeholder="Buscar descrição/categoria" title="Busca avançada" />
           <input id="finCashflowCostCenter" class="fin-inline-select" placeholder="Centro de custo" title="Filtrar por centro de custo" />
           <input id="finCashflowTag" class="fin-inline-select" placeholder="Tag" title="Filtrar por tag" />
+          <select id="finCashflowAccount" class="fin-inline-select" title="Filtrar por conta">
+            <option value="">Todas as contas</option>
+          </select>
           <button id="btnCashflowRollover" class="btn-text" title="Copiar lançamentos recorrentes de outro mês">↻ Virada de mês</button>
           <button id="btnCashflowBudget" class="btn-text" title="Configurar orçamento por categoria">⚙ Orçamento</button>
           <button id="btnBudgetMethodology" class="btn-text" title="Aplicar metodologia de orçamento pessoal">📐 Metodologia</button>
@@ -470,6 +473,7 @@
           <button id="btnCashflowExportCsv" class="btn-text" title="Exportar lançamentos do mês como CSV">📊 CSV</button>
           <button id="btnInstallments" class="btn-text" title="Parcelar um valor em várias parcelas mensais">📅 Parcelar</button>
           <button id="btnSavingsGoals" class="btn-text" title="Gerenciar metas de poupança com depósito">🎯 Metas Poupança</button>
+          <button id="btnAccounts" class="btn-text" title="Gerenciar contas bancárias e saldos iniciais">🏦 Contas</button>
           <button id="btnCreditCards" class="btn-text" title="Gerenciar limite de cartões de crédito">💳 Cartões</button>
           <button id="btnMonthlyComparison" class="btn-text" title="Comparativo mensal de receitas e despesas">📊 Comparativo</button>
         </h2>
@@ -484,6 +488,7 @@
         </div>
         <div id="finCashflowAnalytics" class="fin-cashflow-analytics"></div>
         <div id="finCashflowDataQuality" class="fin-cashflow-analytics"></div>
+        <div id="finSavingsSuggestions" class="fin-cashflow-analytics"></div>
         <div id="finCashflowBudgetStatus" class="fin-cashflow-budget-status"></div>
         <div id="finCashflowContent" class="fin-card-body">
           <p class="fin-empty">Carregando gestor financeiro...</p>
