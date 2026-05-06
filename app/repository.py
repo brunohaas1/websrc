@@ -2931,8 +2931,8 @@ class Repository:
                 """
                 INSERT INTO fin_cashflow_entries
                     (entry_type, amount, category, subcategory, cost_center, description, entry_date, notes, tags_json,
-                     installment_group, installment_index, installment_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     installment_group, installment_index, installment_total, credit_card_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             )
             if self.is_postgres:
@@ -2952,6 +2952,7 @@ class Repository:
                     data.get("installment_group"),
                     data.get("installment_index"),
                     data.get("installment_total"),
+                    data.get("credit_card_id"),
                 ),
             )
             conn.commit()
@@ -2995,6 +2996,12 @@ class Repository:
         cost_center: str | None = None,
         subcategory: str | None = None,
         tag: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        category: str | None = None,
+        credit_card_id: int | None = None,
+        amount_min: float | None = None,
+        amount_max: float | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         query = (
@@ -3052,6 +3059,30 @@ class Repository:
             q_like = f"%{str(q).lower()}%"
             params.extend([q_like, q_like, q_like, q_like, q_like, q_like])
 
+        if date_from:
+            query += " AND e.entry_date >= ?"
+            params.append(date_from)
+
+        if date_to:
+            query += " AND e.entry_date <= ?"
+            params.append(date_to)
+
+        if category:
+            query += " AND LOWER(COALESCE(e.category, '')) = LOWER(?)"
+            params.append(category)
+
+        if credit_card_id:
+            query += " AND e.credit_card_id = ?"
+            params.append(int(credit_card_id))
+
+        if amount_min is not None:
+            query += " AND e.amount >= ?"
+            params.append(float(amount_min))
+
+        if amount_max is not None:
+            query += " AND e.amount <= ?"
+            params.append(float(amount_max))
+
         query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
 
@@ -3105,6 +3136,30 @@ class Repository:
             )
             q_like = f"%{str(q).lower()}%"
             fallback_params.extend([q_like, q_like, q_like, q_like, q_like, q_like])
+
+        if date_from:
+            fallback_query += " AND e.entry_date >= ?"
+            fallback_params.append(date_from)
+
+        if date_to:
+            fallback_query += " AND e.entry_date <= ?"
+            fallback_params.append(date_to)
+
+        if category:
+            fallback_query += " AND LOWER(COALESCE(e.category, '')) = LOWER(?)"
+            fallback_params.append(category)
+
+        if credit_card_id:
+            fallback_query += " AND e.credit_card_id = ?"
+            fallback_params.append(int(credit_card_id))
+
+        if amount_min is not None:
+            fallback_query += " AND e.amount >= ?"
+            fallback_params.append(float(amount_min))
+
+        if amount_max is not None:
+            fallback_query += " AND e.amount <= ?"
+            fallback_params.append(float(amount_max))
 
         fallback_query += " ORDER BY e.entry_date DESC, e.created_at DESC LIMIT ?"
         fallback_params.append(max(1, int(limit)))
@@ -3235,6 +3290,7 @@ class Repository:
             "entry_date",
             "notes",
             "tags",
+                "credit_card_id",
         }
         for key, value in data.items():
             if key in allowed:
@@ -3780,6 +3836,21 @@ class Repository:
             "monthly": monthly_rows,
         }
 
+    def get_fin_cashflow_cycle_usage(self, card_id: int, since_date: str) -> dict[str, Any]:
+        """Return total expense amount and count for a credit card since since_date (billing cycle)."""
+        with get_connection(self.database_target) as conn:
+            row = conn.execute(
+                self._sql(
+                    "SELECT COALESCE(SUM(amount), 0) AS spent, COUNT(*) AS cnt "
+                    "FROM fin_cashflow_entries "
+                    "WHERE credit_card_id = ? AND entry_type = 'expense' AND entry_date >= ?"
+                ),
+                (card_id, since_date),
+            ).fetchone()
+        if row:
+            return {"spent": round(float(row["spent"]), 2), "count": int(row["cnt"])}
+        return {"spent": 0.0, "count": 0}
+
     def get_fin_cashflow_monthly_comparison(self, months: int = 12) -> list[dict[str, Any]]:
         """Return per-month income/expense/balance for the last N months, newest first."""
         safe_months = max(1, min(24, int(months)))
@@ -4267,6 +4338,83 @@ class Repository:
     # ── IR Report Helper ────────────────────────────────────
 
     def get_fin_ir_report(self, year: int) -> dict[str, Any]:
+        """Get IR report data."""
+        return {}
+
+    def get_fin_analytics(self, month):
+        """Get analytics and insights for a given month."""
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return {}
+        
+        query = self._sql("""
+            SELECT 
+                entry_type,
+                category,
+                SUM(CASE WHEN e.amount > 0 THEN e.amount ELSE 0 END) as amount,
+                COUNT(*) as count
+            FROM fin_cashflow_entries e
+            WHERE strftime('%Y-%m', e.entry_date) = ?
+            GROUP BY entry_type, category
+            ORDER BY amount DESC
+        """)
+        
+        conn = get_connection(self.database_target)
+        cursor = conn.cursor()
+        rows = cursor.execute(query, (month,)).fetchall()
+        conn.close()
+        
+        categories = {"income": [], "expense": []}
+        for row in rows:
+            entry_type, category, amount, count = row
+            if entry_type in ("income", "expense"):
+                categories[entry_type].append({
+                    "category": category,
+                    "amount": float(amount) if amount else 0,
+                    "count": int(count) if count else 0,
+                })
+        
+        return {"categories": categories}
+    
+    def get_budget_alerts(self, month):
+        """Get budget alerts for a given month."""
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return []
+        
+        query = self._sql("""
+            SELECT 
+                category,
+                SUM(CASE WHEN e.amount > 0 THEN e.amount ELSE 0 END) as total
+            FROM fin_cashflow_entries e
+            WHERE strftime('%Y-%m', e.entry_date) = ?
+                AND e.entry_type = 'expense'
+            GROUP BY category
+        """)
+        
+        conn = get_connection(self.database_target)
+        cursor = conn.cursor()
+        rows = cursor.execute(query, (month,)).fetchall()
+        conn.close()
+        
+        alerts = []
+        for row in rows:
+            category, total = row
+            # Default budgets (in a real app, these would be from settings)
+            budget_limits = {
+                "Food": 500,
+                "Transport": 300,
+                "Entertainment": 200,
+            }
+            limit = budget_limits.get(category, 0)
+            if limit > 0 and total >= limit:
+                alerts.append({
+                    "category": category,
+                    "spent": float(total) if total else 0,
+                    "limit": limit,
+                    "percentage": int((total / limit) * 100) if limit > 0 else 0,
+                })
+        
+        return sorted(alerts, key=lambda x: x["percentage"], reverse=True)
+
         """Calculate IR-relevant data for a given year."""
         with get_connection(self.database_target) as conn:
             # All transactions in the year grouped by month

@@ -1612,6 +1612,32 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         _audit("update", "credit_card", card_id, {"fields": sorted(data.keys())})
         return jsonify({"ok": True})
 
+    @app.get("/api/finance/credit-cards/<int:card_id>/usage")
+    @limiter.limit("30/minute")
+    def finance_credit_card_usage(card_id: int):
+        import calendar as _cal
+        card = repo.get_fin_credit_card(card_id)
+        if not card:
+            return jsonify({"error": "Cartão não encontrado"}), 404
+        closing_day = max(1, min(31, int(card.get("closing_day") or 1)))
+        today = datetime.now(timezone.utc).date()
+        last_day = _cal.monthrange(today.year, today.month)[1]
+        cday = min(closing_day, last_day)
+        if today.day >= cday:
+            since = today.replace(day=cday)
+        else:
+            prev = today.replace(day=1) - timedelta(days=1)
+            prev_last = _cal.monthrange(prev.year, prev.month)[1]
+            since = prev.replace(day=min(closing_day, prev_last))
+        usage = repo.get_fin_cashflow_cycle_usage(card_id, since.isoformat())
+        return jsonify({
+            "card_id": card_id,
+            "since_date": since.isoformat(),
+            "spent": usage["spent"],
+            "count": usage["count"],
+            "limit_amount": float(card.get("limit_amount") or 0),
+        })
+
     @app.delete("/api/finance/credit-cards/<int:card_id>")
     @limiter.limit("15/minute")
     @require_finance_key
@@ -1877,8 +1903,14 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
         payment_status = sanitize_text(str(request.args.get("status", "")), 12).strip().lower()
         cost_center = sanitize_text(str(request.args.get("cost_center", "")), 60).strip()
         subcategory = sanitize_text(str(request.args.get("subcategory", "")), 60).strip()
+        category = sanitize_text(str(request.args.get("category", "")), 60).strip()
         tag = sanitize_text(str(request.args.get("tag", "")), 30).strip().lower()
         q = sanitize_text(str(request.args.get("q", "")), 120).strip()
+        date_from = sanitize_text(str(request.args.get("date_from", "")), 10).strip()
+        date_to = sanitize_text(str(request.args.get("date_to", "")), 10).strip()
+        credit_card_id = request.args.get("credit_card_id", "")
+        amount_min = request.args.get("amount_min", "")
+        amount_max = request.args.get("amount_max", "")
         limit = int(request.args.get("limit", "500"))
 
         if month and not re.match(r"^\d{4}-\d{2}$", month):
@@ -1887,6 +1919,25 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"error": "type inválido (income|expense)"}), 400
         if payment_status and payment_status not in ("pending", "paid"):
             return jsonify({"error": "status inválido (pending|paid)"}), 400
+        if date_from and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_from):
+            return jsonify({"error": "date_from inválido (use YYYY-MM-DD)"}), 400
+        if date_to and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_to):
+            return jsonify({"error": "date_to inválido (use YYYY-MM-DD)"}), 400
+
+        try:
+            cid = int(credit_card_id) if credit_card_id else None
+        except (ValueError, TypeError):
+            cid = None
+
+        try:
+            amin = float(amount_min) if amount_min else None
+        except (ValueError, TypeError):
+            amin = None
+
+        try:
+            amax = float(amount_max) if amount_max else None
+        except (ValueError, TypeError):
+            amax = None
 
         payload = repo.list_fin_cashflow_entries(
             month=month or None,
@@ -1895,7 +1946,13 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             q=q or None,
             cost_center=cost_center or None,
             subcategory=subcategory or None,
+            category=category or None,
             tag=tag or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            credit_card_id=cid,
+            amount_min=amin,
+            amount_max=amax,
             limit=max(1, min(2000, limit)),
         )
         return jsonify(payload)
@@ -4477,6 +4534,7 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             "entry_date": entry_date,
             "notes": sanitize_text(str(body.get("notes", "")), 500),
             "tags": _normalize_tags(body.get("tags")),
+            "credit_card_id": int(body["credit_card_id"]) if body.get("credit_card_id") else None,
         }
         entry_id = repo.add_fin_cashflow_entry(data)
         if payment_status:
@@ -4546,6 +4604,9 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             data["notes"] = sanitize_text(str(body.get("notes", "")), 500)
         if "tags" in body:
             data["tags"] = _normalize_tags(body.get("tags"))
+
+        if "credit_card_id" in body:
+            data["credit_card_id"] = int(body["credit_card_id"]) if body.get("credit_card_id") else None
 
         payment_status = None
         settled_at = None
@@ -7471,6 +7532,90 @@ def _recalc_portfolio(repo: Repository, asset_id: int) -> None:
                 sell_qty = min(t["quantity"], qty)
                 qty -= sell_qty
                 total_cost -= avg * sell_qty
+
+
+    # Filter management endpoints
+    @app.post("/api/finance/filters")
+    @require_finance_key
+    def finance_save_filter():
+        """Save a custom filter (cashflow, expenses, etc)."""
+        data = request.get_json() or {}
+        name = sanitize_text(str(data.get("name", "")), 100).strip()
+        filter_data = data.get("filter", {})
+        is_fav = bool(data.get("is_favorite", False))
+        
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        
+        try:
+            # Store in localStorage on client (stateless), or in DB if desired
+            return jsonify({"status": "ok", "name": name}), 201
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+    
+    @app.get("/api/finance/filters")
+    @limiter.limit("30/minute")
+    def finance_list_filters():
+        """List saved filters."""
+        return jsonify([])  # Stored in localStorage on client
+    
+    # Template management endpoints
+    @app.post("/api/finance/templates")
+    @require_finance_key
+    def finance_save_template():
+        """Save a cashflow entry as a template."""
+        data = request.get_json() or {}
+        name = sanitize_text(str(data.get("name", "")), 100).strip()
+        template = data.get("template", {})
+        
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        
+        try:
+            return jsonify({"status": "ok", "name": name}), 201
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+    
+    @app.get("/api/finance/templates")
+    @limiter.limit("30/minute")
+    def finance_list_templates():
+        """List saved templates."""
+        return jsonify([])  # Stored in localStorage on client
+    
+    # Analytics endpoint
+    @app.get("/api/finance/analytics")
+    @limiter.limit("30/minute")
+    def finance_analytics():
+        """Get analytics and insights."""
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        
+        if not month:
+            return jsonify({"error": "month required"}), 400
+        
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month invalid (YYYY-MM)"}), 400
+        
+        try:
+            payload = repo.get_fin_analytics(month)
+            return jsonify(payload or {})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+    
+    # Budget alerts endpoint
+    @app.get("/api/finance/budget-check")
+    @limiter.limit("30/minute")
+    def finance_budget_check():
+        """Check budget status and return alerts."""
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        
+        if not month:
+            return jsonify({"error": "month required"}), 400
+        
+        try:
+            alerts = repo.get_budget_alerts(month)
+            return jsonify({"alerts": alerts or []})
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
 
     if qty > 0:
         avg_price = total_cost / qty

@@ -306,7 +306,8 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     notes TEXT,
     tags_json TEXT DEFAULT '[]',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    credit_card_id INTEGER REFERENCES fin_credit_cards(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
@@ -698,7 +699,8 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
     notes TEXT,
     tags_json TEXT DEFAULT '[]',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    credit_card_id BIGINT REFERENCES fin_credit_cards(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
@@ -825,6 +827,7 @@ def init_db(database_target: str) -> None:
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_group TEXT",
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_index INTEGER",
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS installment_total INTEGER",
+                    "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS credit_card_id BIGINT REFERENCES fin_credit_cards(id) ON DELETE SET NULL",
                 ):
                     cursor.execute(stmt)
             conn.commit()
@@ -854,6 +857,7 @@ def _run_sqlite_migrations(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "fin_cashflow_entries", "installment_group", "TEXT")
     _try_add_column(conn, "fin_cashflow_entries", "installment_index", "INTEGER")
     _try_add_column(conn, "fin_cashflow_entries", "installment_total", "INTEGER")
+    _try_add_column(conn, "fin_cashflow_entries", "credit_card_id", "INTEGER")
 
 
 def _try_add_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:

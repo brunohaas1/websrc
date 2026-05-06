@@ -381,6 +381,7 @@ function renderCashflow(entries) {
   if (!el) return;
   renderCashflowChart(FIN.cashflowSummary);
   const rows = Array.isArray(entries) ? entries : [];
+    _syncDescriptionDatalist();
   if (!rows.length) {
     el.innerHTML = renderEmptyState(
       "Nenhum lançamento no Gestor Financeiro para este mês.",
@@ -428,7 +429,7 @@ function renderCashflow(entries) {
         <td>${escapeHtml(entry.subcategory || "—")}</td>
         <td>${escapeHtml(entry.cost_center || "—")}</td>
         <td>${escapeHtml(Array.isArray(entry.tags) ? entry.tags.join(", ") : "")}</td>
-        <td>${escapeHtml(entry.description || "—")}</td>
+        <td>${escapeHtml(entry.description || "—")}${entry.installment_index && entry.installment_total ? ` <span class="fin-badge" style="font-size:.7em;opacity:.75;vertical-align:middle;">${entry.installment_index}/${entry.installment_total}</span>` : ""}</td>
         <td class="text-right mono ${amountCls}">${formatBRL(entry.amount || 0)}</td>
         <td>${escapeHtml(entry.notes || "")}</td>
         <td class="text-center">
@@ -563,6 +564,14 @@ function openAddCashflowModal(prefill = {}) {
   const _pdesc = String(prefill.description || "");
   const _pcat = String(prefill.category || "");
   const _ptype = String(prefill.entry_type || "expense");
+  const _pcard = Number(prefill.credit_card_id || 0);
+  const _cardOptions = ['<option value="">Sem cartão</option>']
+    .concat((Array.isArray(FIN.creditCards) ? FIN.creditCards : []).map((c) => {
+      const cid = Number(c.id || 0);
+      const sel = cid === _pcard ? " selected" : "";
+      return `<option value="${cid}"${sel}>${escapeHtml(c.name || `Cartão ${cid}`)}</option>`;
+    }))
+    .join("");
   openFinModal("Novo Lançamento (Gestor Financeiro)", `
     <form data-form-action="submitAddCashflow">
       <div class="fin-form-row">
@@ -613,7 +622,11 @@ function openAddCashflowModal(prefill = {}) {
       </div>
       <div class="fin-form-group">
         <label>Descrição</label>
-        <input id="fmCfDescription" placeholder="Resumo do lançamento" value="${escapeHtml(_pdesc)}" required />
+        <input id="fmCfDescription" list="finCfDescriptionsDatalist" placeholder="Resumo do lançamento" value="${escapeHtml(_pdesc)}" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Cartão (opcional)</label>
+        <select id="fmCfCreditCard">${_cardOptions}</select>
       </div>
       <div class="fin-form-group">
         <label>Tags</label>
@@ -626,6 +639,25 @@ function openAddCashflowModal(prefill = {}) {
       <button type="submit" class="fin-form-submit">💾 Salvar Lançamento</button>
     </form>
   `);
+
+  if (!Array.isArray(FIN.creditCards) || !FIN.creditCards.length) {
+    finFetch("/api/finance/credit-cards")
+      .then((resp) => resp.ok ? resp.json() : [])
+      .then((cards) => {
+        FIN.creditCards = Array.isArray(cards) ? cards : [];
+        const sel = byId("fmCfCreditCard");
+        if (!sel) return;
+        const current = Number(prefill.credit_card_id || 0);
+        sel.innerHTML = ['<option value="">Sem cartão</option>']
+          .concat(FIN.creditCards.map((c) => {
+            const cid = Number(c.id || 0);
+            const mark = cid === current ? " selected" : "";
+            return `<option value="${cid}"${mark}>${escapeHtml(c.name || `Cartão ${cid}`)}</option>`;
+          }))
+          .join("");
+      })
+      .catch(() => { /* ignore */ });
+  }
 }
 
 function openCashflowBudgetModal() {
@@ -907,6 +939,7 @@ async function submitAddCashflow(e) {
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    credit_card_id: Number(byId("fmCfCreditCard")?.value) || null,
     tags: parseTagsInput(byId("fmCfTags")?.value || ""),
     payment_status: paymentStatus,
     settled_at: paymentStatus === "paid" ? settledAt : null,
@@ -1884,6 +1917,14 @@ function openEditCashflowModal(entryId) {
     showToast("Lançamento não encontrado");
     return;
   }
+  const _ecard = Number(entry.credit_card_id || 0);
+  const _ecardOptions = ['<option value="">Sem cartão</option>']
+    .concat((Array.isArray(FIN.creditCards) ? FIN.creditCards : []).map((c) => {
+      const cid = Number(c.id || 0);
+      const sel = cid === _ecard ? " selected" : "";
+      return `<option value="${cid}"${sel}>${escapeHtml(c.name || `Cartão ${cid}`)}</option>`;
+    }))
+    .join("");
   openFinModal("Editar Lançamento (Gestor Financeiro)", `
     <form data-form-action="submitEditCashflow" data-form-arg="${entryId}">
       <div class="fin-form-row">
@@ -1934,7 +1975,11 @@ function openEditCashflowModal(entryId) {
       </div>
       <div class="fin-form-group">
         <label>Descrição</label>
-        <input id="fmCfDescription" value="${escapeHtml(entry.description || "")}" required />
+        <input id="fmCfDescription" list="finCfDescriptionsDatalist" value="${escapeHtml(entry.description || "")}" required />
+      </div>
+      <div class="fin-form-group">
+        <label>Cartão (opcional)</label>
+        <select id="fmCfCreditCard">${_ecardOptions}</select>
       </div>
       <div class="fin-form-group">
         <label>Tags</label>
@@ -1947,6 +1992,25 @@ function openEditCashflowModal(entryId) {
       <button type="submit" class="fin-form-submit">💾 Salvar Alterações</button>
     </form>
   `);
+
+  if (!Array.isArray(FIN.creditCards) || !FIN.creditCards.length) {
+    finFetch("/api/finance/credit-cards")
+      .then((resp) => resp.ok ? resp.json() : [])
+      .then((cards) => {
+        FIN.creditCards = Array.isArray(cards) ? cards : [];
+        const sel = byId("fmCfCreditCard");
+        if (!sel) return;
+        const current = Number(entry.credit_card_id || 0);
+        sel.innerHTML = ['<option value="">Sem cartão</option>']
+          .concat(FIN.creditCards.map((c) => {
+            const cid = Number(c.id || 0);
+            const mark = cid === current ? " selected" : "";
+            return `<option value="${cid}"${mark}>${escapeHtml(c.name || `Cartão ${cid}`)}</option>`;
+          }))
+          .join("");
+      })
+      .catch(() => { /* ignore */ });
+  }
 }
 
 async function submitEditCashflow(e, entryId) {
@@ -1962,6 +2026,7 @@ async function submitEditCashflow(e, entryId) {
     description: String(byId("fmCfDescription")?.value || "").trim(),
     entry_date: String(byId("fmCfDate")?.value || "").trim(),
     notes: String(byId("fmCfNotes")?.value || "").trim(),
+    credit_card_id: Number(byId("fmCfCreditCard")?.value) || null,
     tags: parseTagsInput(byId("fmCfTags")?.value || ""),
     payment_status: paymentStatus,
     settled_at: paymentStatus === "paid" ? settledAt : null,
@@ -2068,19 +2133,30 @@ async function submitCashflowRollover(e) {
 }
 
 async function deleteCashflowEntry(entryId) {
-  if (!confirm("Excluir este lançamento?")) return;
-  try {
-    const resp = await finFetch(`/api/finance/cashflow/${entryId}`, { method: "DELETE" });
-    if (!resp.ok) {
-      const data = await resp.json();
-      showToast(data.error || "Erro ao excluir lançamento");
-      return;
+  withUndoDelete("Lançamento será excluído.", async () => {
+    try {
+      const resp = await finFetch(`/api/finance/cashflow/${entryId}`, { method: "DELETE" });
+      if (!resp.ok) {
+        const data = await resp.json();
+        showToast(data.error || "Erro ao excluir lançamento");
+        return;
+      }
+      await refreshByDomains(["cashflow"]);
+      showToast("Lançamento removido.", "success");
+    } catch {
+      showToast("Erro de rede");
     }
-    await refreshByDomains(["cashflow"]);
-    showToast("Lançamento removido.", "success");
-  } catch {
-    showToast("Erro de rede");
-  }
+  });
+}
+
+function withUndoDelete(label, onDelete, delayMs = 5000) {
+  let cancelled = false;
+  showToast(label, "warn", {
+    actionLabel: "Desfazer",
+    timeout: delayMs,
+    onAction: () => { cancelled = true; },
+  });
+  setTimeout(() => { if (!cancelled) onDelete(); }, delayMs);
 }
 
 async function toggleCashflowStatus(entryId, btnEl) {
@@ -2801,6 +2877,14 @@ function _populateCfDatalist(id, values) {
   dl.innerHTML = values.map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
 }
 
+function _syncDescriptionDatalist() {
+  const entries = Array.isArray(FIN.cashflowEntries) ? FIN.cashflowEntries : [];
+  const descs = [...new Set(
+    entries.map((e) => String(e.description || "").trim()).filter(Boolean)
+  )].sort().slice(0, 100);
+  _populateCfDatalist("finCfDescriptionsDatalist", descs);
+}
+
 // ── CSV export ────────────────────────────────────────
 function exportCashflowCsv() {
   const month = getSelectedCashflowMonth();
@@ -2923,7 +3007,10 @@ function openInstallmentsModal() {
     const el = byId("fmInstPreview");
     if (!el) return;
     if (total > 0 && n >= 2) {
-      el.textContent = `${n}x de ${formatBRL(total / n)} (≈ ${formatBRL(total / n)} por mês)`;
+      const each = Math.round(total / n * 100) / 100;
+      const last = Math.round((total - each * (n - 1)) * 100) / 100;
+      const lastNote = Math.abs(last - each) > 0.005 ? ` • última ${formatBRL(last)}` : "";
+      el.textContent = `${n}× ${formatBRL(each)} = ${formatBRL(total)}${lastNote}`;
     } else {
       el.textContent = "";
     }
@@ -3040,6 +3127,15 @@ async function openCreditCardsModal() {
     const resp = await finFetch("/api/finance/credit-cards");
     cards = await resp.json();
     if (!Array.isArray(cards)) cards = [];
+    FIN.creditCards = cards;
+    for (const c of cards) {
+      try {
+        const uResp = await finFetch(`/api/finance/credit-cards/${c.id}/usage`);
+        c._usage = uResp.ok ? await uResp.json() : null;
+      } catch {
+        c._usage = null;
+      }
+    }
   } catch {
     showToast("Erro ao carregar cartões");
     return;
@@ -3054,6 +3150,23 @@ async function openCreditCardsModal() {
         </div>
         <div style="font-size:.8em;color:#94a3b8;margin:4px 0;">Fechamento dia ${escapeHtml(String(c.closing_day || "—"))} • Vencimento dia ${escapeHtml(String(c.due_day || "—"))}</div>
         ${c.notes ? `<div style="font-size:.8em;color:#64748b;">${escapeHtml(c.notes)}</div>` : ""}
+        ${(() => {
+          const spent = Number(c._usage?.spent || 0);
+          const limit = Number(c.limit_amount || 0);
+          const pct = limit > 0 ? Math.min(100, Math.round((spent / limit) * 100)) : 0;
+          const barColor = pct >= 90 ? "#ef4444" : pct >= 70 ? "#f59e0b" : "#22c55e";
+          const usageText = limit > 0 ? `${formatBRL(spent)} de ${formatBRL(limit)} (${pct}%)` : `${formatBRL(spent)} usado`;
+          return `
+            <div style="margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:.78em;color:#94a3b8;margin-bottom:4px;">
+                <span>Uso do ciclo</span><span>${usageText}</span>
+              </div>
+              <div style="height:8px;background:rgba(148,163,184,0.22);border-radius:999px;overflow:hidden;">
+                <div style="height:100%;width:${pct}%;background:${barColor};transition:width .25s ease;"></div>
+              </div>
+            </div>
+          `;
+        })()}
         <div style="display:flex;gap:6px;margin-top:8px;">
           <button class="btn-text" style="font-size:.8em;" data-card-edit="${c.id}">✎ Editar</button>
           <button class="btn-text" style="font-size:.8em;color:#ef4444;" data-card-delete="${c.id}">✕ Excluir</button>
@@ -3112,21 +3225,25 @@ async function openCreditCardsModal() {
         if (idx >= 0) {
           cards[idx] = { ...cards[idx], name: newName, limit_amount: parseFloat(newLimit) || 0, closing_day: parseInt(newClosing) || 1, due_day: parseInt(newDue) || 10 };
         }
+        FIN.creditCards = cards;
         if (modalBody) modalBody.innerHTML = renderCardHtml();
       } catch { showToast("Erro de rede"); }
     }
     if (delBtn) {
       const cid = Number(delBtn.dataset.cardDelete);
       const card = cards.find((c) => Number(c.id) === cid);
-      if (!card || !confirm(`Excluir cartão "${card.name}"?`)) return;
-      try {
-        const resp = await finFetch(`/api/finance/credit-cards/${cid}`, { method: "DELETE" });
-        const data = await resp.json();
-        if (!resp.ok) { showToast(data.error || "Erro ao excluir"); return; }
-        showToast("Cartão excluído.", "success");
-        cards = cards.filter((c) => Number(c.id) !== cid);
-        if (modalBody) modalBody.innerHTML = renderCardHtml();
-      } catch { showToast("Erro de rede"); }
+      if (!card) return;
+      withUndoDelete(`Cartão "${card.name}" será excluído.`, async () => {
+        try {
+          const resp = await finFetch(`/api/finance/credit-cards/${cid}`, { method: "DELETE" });
+          const data = await resp.json();
+          if (!resp.ok) { showToast(data.error || "Erro ao excluir"); return; }
+          showToast("Cartão excluído.", "success");
+          cards = cards.filter((c) => Number(c.id) !== cid);
+          FIN.creditCards = cards;
+          if (modalBody) modalBody.innerHTML = renderCardHtml();
+        } catch { showToast("Erro de rede"); }
+      });
     }
   }, { once: false });
 }
@@ -3252,3 +3369,20 @@ async function submitSplitCashflow(e) {
     showToast("Erro de rede");
   }
 }
+
+document.addEventListener("blur", (e) => {
+  const inp = e.target;
+  if (!(inp instanceof HTMLInputElement) || inp.type !== "number") return;
+  if (!inp.closest("#finModalOverlay, .fin-modal")) return;
+  const val = parseFloat(inp.value);
+  if (!isNaN(val) && val > 0) {
+    let hint = inp.nextElementSibling;
+    if (!(hint instanceof HTMLElement) || !hint.classList.contains("fin-brl-hint")) {
+      hint = document.createElement("span");
+      hint.className = "fin-brl-hint";
+      hint.style.cssText = "font-size:.78em;color:#94a3b8;display:block;margin-top:2px;";
+      inp.after(hint);
+    }
+    hint.textContent = formatBRL(val);
+  }
+}, true);
