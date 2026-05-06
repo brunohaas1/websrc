@@ -672,7 +672,170 @@ def register_cashflow_routes(
         _audit("add", "cashflow_recurring", recurring_id, payload)
         return jsonify({"ok": True, "id": recurring_id}), 201
     
-    logger_obj.info("Registered 18+ cashflow routes (Phase 1 complete)")
+    # ─────────────────────────────────────────────────────
+    # Route: Summary
+    # ─────────────────────────────────────────────────────
+    
+    @app.get("/api/finance/cashflow/summary")
+    @limiter.limit("30/minute")
+    def finance_cashflow_summary():
+        """Get cashflow summary."""
+        months = int(request.args.get("months", "6"))
+        safe_months = max(1, min(24, months))
+        cache_key = f"finance:cashflow-summary:{safe_months}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+        
+        payload = repo.get_fin_cashflow_summary(months=safe_months)
+        cache.set(cache_key, payload, FINANCE_CACHE_TTLS.get("cashflow_summary", 60))
+        return jsonify(payload)
+    
+    # ─────────────────────────────────────────────────────
+    # Route: Alerts
+    # ─────────────────────────────────────────────────────
+    
+    @app.get("/api/finance/cashflow/alerts")
+    @limiter.limit("30/minute")
+    def finance_cashflow_alerts():
+        """Get due/overdue alerts."""
+        days = min(60, max(1, int(request.args.get("days", "7"))))
+        today = datetime.now(timezone.utc).date()
+        
+        rows = repo.list_fin_cashflow_entries(
+            entry_type="expense",
+            payment_status="pending",
+            limit=5000,
+        )
+        
+        due_items = []
+        for row in rows:
+            entry_date = str(row.get("entry_date") or "")[:10]
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
+                continue
+            try:
+                due_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            
+            days_to_due = (due_date - today).days
+            if days_to_due < 0:
+                severity = "overdue"
+            elif days_to_due <= days:
+                severity = "due_soon"
+            else:
+                continue
+            
+            due_items.append({
+                "id": int(row.get("id") or 0),
+                "entry_date": entry_date,
+                "days_to_due": days_to_due,
+                "severity": severity,
+                "amount": round(float(row.get("amount") or 0), 2),
+                "category": str(row.get("category") or ""),
+                "description": str(row.get("description") or ""),
+            })
+        
+        return jsonify({
+            "days_window": days,
+            "counts": {
+                "overdue": len([i for i in due_items if i["severity"] == "overdue"]),
+                "due_soon": len([i for i in due_items if i["severity"] == "due_soon"]),
+                "total": len(due_items),
+            },
+            "items": due_items,
+        })
+    
+    # ─────────────────────────────────────────────────────
+    # Route: Saved Filters
+    # ─────────────────────────────────────────────────────
+    
+    @app.get("/api/finance/cashflow/saved-filters")
+    @limiter.limit("30/minute")
+    def finance_cashflow_saved_filters_list():
+        """List saved cashflow filters."""
+        rows = repo.list_saved_filters()
+        payload = []
+        for row in rows:
+            name = str(row.get("name") or "")
+            if not name.startswith("cashflow:"):
+                continue
+            payload.append({
+                "id": int(row.get("id") or 0),
+                "name": name.replace("cashflow:", "", 1),
+                "filter": row.get("filter") if isinstance(row.get("filter"), dict) else {},
+                "is_favorite": bool(row.get("is_favorite")),
+                "use_count": int(row.get("use_count") or 0),
+                "last_used_at": row.get("last_used_at"),
+            })
+        return jsonify(payload)
+    
+    @app.post("/api/finance/cashflow/saved-filters")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_saved_filters_add():
+        """Add saved cashflow filter."""
+        body = request.get_json(silent=True) or {}
+        name = sanitize_text(str(body.get("name", "")), 80).strip()
+        raw_filter = body.get("filter", {})
+        if not name:
+            return jsonify({"error": "name obrigatório"}), 400
+        if not isinstance(raw_filter, dict):
+            return jsonify({"error": "filter deve ser objeto"}), 400
+        
+        filter_id = repo.add_saved_filter(f"cashflow:{name}", raw_filter)
+        return jsonify({"ok": True, "id": filter_id}), 201
+    
+    @app.delete("/api/finance/cashflow/saved-filters/<int:filter_id>")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_saved_filters_delete(filter_id: int):
+        """Delete saved cashflow filter."""
+        rows = repo.list_saved_filters()
+        target = next((r for r in rows if int(r.get("id") or 0) == filter_id), None)
+        if not target or not str(target.get("name") or "").startswith("cashflow:"):
+            return jsonify({"error": "Filtro não encontrado"}), 404
+        repo.delete_saved_filter(filter_id)
+        return jsonify({"ok": True})
+    
+    # ─────────────────────────────────────────────────────
+    # Route: KPIs
+    # ─────────────────────────────────────────────────────
+    
+    @app.get("/api/finance/cashflow/kpis")
+    @limiter.limit("30/minute")
+    def finance_cashflow_kpis():
+        """Get cashflow KPIs."""
+        month = sanitize_text(str(request.args.get("month", "")), 7).strip()
+        if not month:
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            return jsonify({"error": "month inválido"}), 400
+        
+        try:
+            payload = repo.get_fin_cashflow_kpis(month=month)
+            return jsonify(payload or {})
+        except Exception:
+            return jsonify({"error": "Erro ao calcular KPIs"}), 500
+    
+    # ─────────────────────────────────────────────────────
+    # Route: Audit Logs
+    # ─────────────────────────────────────────────────────
+    
+    @app.get("/api/finance/cashflow/audit")
+    @limiter.limit("20/minute")
+    @require_finance_key
+    def finance_cashflow_audit_logs():
+        """Get cashflow audit logs."""
+        limit = min(300, max(1, int(request.args.get("limit", "100"))))
+        entry_id = request.args.get("entry_id", type=int)
+        payload = repo.list_fin_audit_logs(limit)
+        payload = [r for r in payload if str(r.get("target_type") or "").lower() == "cashflow"]
+        if entry_id is not None:
+            payload = [r for r in payload if int(r.get("target_id") or 0) == entry_id]
+        return jsonify(payload)
+    
+    logger_obj.info("Registered 24+ cashflow routes (Phase 1 near-complete)")
 
 
 # ──────────────────────────────────────────────────────────────

@@ -988,7 +988,17 @@ def register_finance_routes(app: Flask, limiter: Limiter) -> None:
             return jsonify({"ok": False, "error": "Falha ao carregar health"}), 500
 
     # ── Register Cashflow Blueprint ─────────────────────────────────────────
-    # (Phase 1: Blueprint structure established, partial extraction in progress)
+    # Phase 1 Foundation: Blueprint structure complete, 22 routes implemented
+    # Note: Blueprint currently disabled to preserve all tests passing during transition
+    # Next Step (Phase 1 Route Cutover): Remove duplicate routes from original file (~3000 lines)
+    # then uncomment: register_cashflow_routes(app, limiter, repo, cache, logger, _cashflow_helpers)
+    
+    # _cashflow_helpers = {
+    #     '_audit': _audit,
+    #     '_invalidate_cashflow_cache': _invalidate_cashflow_cache,
+    #     '_as_float': _as_float,
+    #     'FINANCE_CACHE_TTLS': FINANCE_CACHE_TTLS,
+    # }
     # register_cashflow_routes(app, limiter, repo, cache, logger, _cashflow_helpers)
 
     # ── Assets CRUD ─────────────────────────────────────────
