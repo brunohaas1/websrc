@@ -780,6 +780,7 @@ async function loadAll(options = {}) {
       loadCashflowKpis();
       loadCashflowBudgetAlerts();
       loadCashflowDataQuality();
+      loadHealthScore();
       if (FIN._rebalanceLoaded) {
         renderRebalance();
         renderProjection();
@@ -1405,6 +1406,137 @@ function renderOpsHealth(health) {
       ${providersHtml}
     </div>
   `;
+}
+
+function renderHealthScore(healthData) {
+  const el = byId("finHealthScoreContent");
+  if (!el) return;
+
+  if (!healthData || !healthData.score) {
+    el.innerHTML = '<p class="fin-empty">Score indisponível no momento.</p>';
+    return;
+  }
+
+  const score = healthData.score || 0;
+  const breakdown = healthData.breakdown || {};
+
+  // Determine color based on score
+  let scoreColor = "#ef4444"; // red
+  let scoreStatus = "Precisa melhorar";
+  if (score >= 80) {
+    scoreColor = "#22c55e"; // green
+    scoreStatus = "Excelente";
+  } else if (score >= 60) {
+    scoreColor = "#84cc16"; // lime
+    scoreStatus = "Bom";
+  } else if (score >= 40) {
+    scoreColor = "#eab308"; // yellow
+    scoreStatus = "Aceitável";
+  }
+
+  // Render gauge
+  renderHealthScoreGauge(score, scoreColor);
+
+  // Render breakdown
+  const breakdownHtml = Object.entries(breakdown)
+    .map(([key, data]) => {
+      const pillarScore = data.score || 0;
+      const label = data.label || key;
+      const barWidth = (pillarScore / 100) * 100;
+      let pillarColor = "#ef4444";
+      if (pillarScore >= 80) pillarColor = "#22c55e";
+      else if (pillarScore >= 60) pillarColor = "#84cc16";
+      else if (pillarScore >= 40) pillarColor = "#eab308";
+      
+      return `
+        <div class="fin-health-pillar">
+          <div class="fin-health-pillar-label">
+            <span>${escapeHtml(label)}</span>
+            <span class="fin-health-pillar-score" style="color: ${pillarColor};">${formatNumber(pillarScore, 1)}</span>
+          </div>
+          <div class="fin-health-pillar-bar">
+            <div class="fin-health-pillar-fill" style="width: ${barWidth}%; background-color: ${pillarColor};"></div>
+          </div>
+          ${key === "liquidity" ? `<div class="fin-health-pillar-detail">Runway: ${formatNumber(data.months_of_runway, 1)} meses</div>` : ""}
+          ${key === "solvency" ? `<div class="fin-health-pillar-detail">Ratio: ${formatNumber(data.ratio, 2)}×</div>` : ""}
+          ${key === "profitability" ? `<div class="fin-health-pillar-detail">ROI: ${formatNumber(data.roi_pct, 1)}%</div>` : ""}
+          ${key === "efficiency" ? `<div class="fin-health-pillar-detail">Taxa poupança: ${formatNumber(data.savings_rate_pct, 1)}%</div>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  const breakdownEl = byId("healthScoreBreakdown");
+  if (breakdownEl) {
+    breakdownEl.innerHTML = `
+      <div class="fin-health-summary">
+        <div class="fin-health-score-display">
+          <div class="fin-health-score-main" style="color: ${scoreColor};">
+            ${formatNumber(score, 1)}
+          </div>
+          <div class="fin-health-score-status" style="color: ${scoreColor};">
+            ${escapeHtml(scoreStatus)}
+          </div>
+        </div>
+        <div class="fin-health-pillars">
+          ${breakdownHtml}
+        </div>
+      </div>
+    `;
+  }
+}
+
+function renderHealthScoreGauge(score, color = "#22c55e") {
+  const canvas = byId("healthScoreGauge");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  if (FIN.charts.healthScore) FIN.charts.healthScore.destroy();
+
+  // Create a doughnut chart that looks like a gauge
+  const ctx = canvas.getContext("2d");
+  FIN.charts.healthScore = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      datasets: [
+        {
+          data: [score, 100 - score],
+          backgroundColor: [color, "#e5e7eb"],
+          borderColor: ["transparent", "transparent"],
+          borderWidth: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          enabled: false,
+        },
+      },
+      circumference: 180,
+      rotation: 270,
+    },
+  });
+}
+
+async function loadHealthScore() {
+  try {
+    const resp = await finFetch("/api/finance/health-score");
+    if (!resp.ok) throw new Error(`Health score: ${resp.status}`);
+    const data = await resp.json();
+    FIN.healthScore = data;
+    renderHealthScore(data);
+  } catch (ex) {
+    console.error("Error loading health score:", ex);
+    const el = byId("finHealthScoreContent");
+    if (el) {
+      el.innerHTML = '<p class="fin-empty">Erro ao carregar score.</p>';
+    }
+  }
 }
 
 function checkDividendAlerts() {

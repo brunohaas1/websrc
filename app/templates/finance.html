@@ -12,6 +12,7 @@
     <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ asset_hash('style.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='finance.css') }}?v={{ asset_hash('finance.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='finance_health_score.css') }}?v={{ asset_hash('finance_health_score.css') }}" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" defer></script>
     <script src="{{ url_for('static', filename='finance.js') }}?v={{ asset_hash('finance.js') }}" defer></script>
     <script src="{{ url_for('static', filename='finance_cashflow.js') }}?v={{ asset_hash('finance_cashflow.js') }}" defer></script>
@@ -134,7 +135,16 @@
     </section>
 
     <main class="fin-grid" id="financeMain">
-
+      <!-- ── Health Score ─────────────────────────────── -->
+      <section class="fin-card" id="finHealthScoreCard">
+        <h2>💪 Saúde Financeira</h2>
+        <div id="finHealthScoreContent" class="fin-card-body">
+          <div style="text-align: center; padding: 20px;">
+            <canvas id="healthScoreGauge" width="200" height="200" style="max-width: 100%;"></canvas>
+            <div id="healthScoreBreakdown" style="margin-top: 20px;"></div>
+          </div>
+        </div>
+      </section>
       <!-- ── Currency ─────────────────────────────────── -->
       <section class="fin-card" id="finCurrencyCard">
         <h2>💱 Câmbio</h2>

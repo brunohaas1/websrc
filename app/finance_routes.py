@@ -7617,6 +7617,23 @@ def _recalc_portfolio(repo: Repository, asset_id: int) -> None:
         except Exception as ex:
             return jsonify({"error": str(ex)}), 500
 
+    # Health score endpoint
+    @app.get("/api/finance/health-score")
+    @limiter.limit("30/minute")
+    def finance_health_score():
+        """Get financial health score (0-100) based on 4 pillars: liquidity, solvency, profitability, efficiency."""
+        cache_key = "finance:health-score"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        
+        try:
+            payload = repo.get_fin_health_score()
+            cache.set(cache_key, payload, FINANCE_CACHE_TTLS["summary"])
+            return jsonify(payload)
+        except Exception as ex:
+            return jsonify({"error": str(ex)}), 500
+
     if qty > 0:
         avg_price = total_cost / qty
         repo.upsert_fin_portfolio(asset_id, qty, avg_price, total_cost)

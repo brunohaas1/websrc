@@ -4070,6 +4070,116 @@ class Repository:
             "portfolio": portfolio,
         }
 
+    def get_fin_health_score(self) -> dict[str, Any]:
+        """Calculate financial health score (0-100) based on 4 pillars."""
+        # Get current analytics for the month
+        current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        analytics = self.get_fin_cashflow_analytics(month=current_month)
+        
+        # Get 6-month analytics for averages
+        six_months_analytics = []
+        for i in range(6):
+            month_date = (datetime.now(timezone.utc) - timedelta(days=30*i)).strftime("%Y-%m")
+            six_months_analytics.append(self.get_fin_cashflow_analytics(month=month_date))
+        
+        # Get portfolio for ROI calculation
+        portfolio = self.get_fin_portfolio()
+        total_invested = sum(p.get("total_invested", 0) for p in portfolio)
+        current_value = sum(
+            (p.get("current_price") or 0) * p.get("quantity", 0)
+            for p in portfolio
+        )
+        roi_pct = ((current_value - total_invested) / total_invested * 100) if total_invested > 0 else 0
+        
+        # Get current balance (as proxy for liquidity)
+        current_balance = float(analytics.get("totals", {}).get("balance", 0))
+        current_expense = float(analytics.get("totals", {}).get("expense", 0))
+        current_income = float(analytics.get("totals", {}).get("income", 0))
+        
+        # Get average monthly expense (from 6 months)
+        avg_monthly_expense = sum(
+            float(a.get("totals", {}).get("expense", 0)) 
+            for a in six_months_analytics
+        ) / max(1, len(six_months_analytics))
+        
+        # ─── PILLAR 1: LIQUIDITY (25%) ───
+        # How many months of expenses can be covered with current balance?
+        # Target: 3 months = 100%
+        months_of_runway = (current_balance / max(1, avg_monthly_expense)) if avg_monthly_expense > 0 else 0
+        liquidity_score = min(100, (months_of_runway / 3) * 100)  # Cap at 100
+        
+        # ─── PILLAR 2: SOLVENCY (25%) ───
+        # Can income cover expenses?
+        # Target: income >= expense = 100%
+        # If income < expense, penalty applies
+        solvency_ratio = (current_income / max(1, current_expense)) if current_expense > 0 else 1
+        solvency_score = min(100, solvency_ratio * 100)  # Cap at 100
+        
+        # ─── PILLAR 3: PROFITABILITY (25%) ───
+        # ROI on investments
+        # Target: Positive ROI = better score
+        # 0% ROI = 0 points, 20% ROI = 100 points (reasonable expectation)
+        profitability_score = min(100, max(0, (roi_pct / 20) * 100))  # 20% = 100 points
+        
+        # ─── PILLAR 4: EFFICIENCY (25%) ───
+        # What % of income is saved?
+        # Target: 30%+ savings = 100%
+        savings_rate = (current_income - current_expense) / max(1, current_income) * 100 if current_income > 0 else 0
+        efficiency_score = min(100, (savings_rate / 30) * 100)  # 30% = 100 points
+        
+        # ─── FINAL SCORE ───
+        final_score = (
+            (liquidity_score * 0.25) +
+            (solvency_score * 0.25) +
+            (profitability_score * 0.25) +
+            (efficiency_score * 0.25)
+        )
+        final_score = round(max(0, min(100, final_score)), 1)
+        
+        # Determine health status
+        if final_score >= 80:
+            health_status = "excellent"
+        elif final_score >= 60:
+            health_status = "good"
+        elif final_score >= 40:
+            health_status = "fair"
+        else:
+            health_status = "needs_improvement"
+        
+        return {
+            "score": final_score,
+            "status": health_status,
+            "breakdown": {
+                "liquidity": {
+                    "score": round(liquidity_score, 1),
+                    "months_of_runway": round(months_of_runway, 1),
+                    "current_balance": round(current_balance, 2),
+                    "avg_monthly_expense": round(avg_monthly_expense, 2),
+                    "label": "Liquidez",
+                },
+                "solvency": {
+                    "score": round(solvency_score, 1),
+                    "income": round(current_income, 2),
+                    "expense": round(current_expense, 2),
+                    "ratio": round(solvency_ratio, 2),
+                    "label": "Solvência",
+                },
+                "profitability": {
+                    "score": round(profitability_score, 1),
+                    "roi_pct": round(roi_pct, 2),
+                    "invested": round(total_invested, 2),
+                    "current_value": round(current_value, 2),
+                    "label": "Rentabilidade",
+                },
+                "efficiency": {
+                    "score": round(efficiency_score, 1),
+                    "savings_rate_pct": round(savings_rate, 1),
+                    "label": "Eficiência",
+                },
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     # ── Dividends ───────────────────────────────────────────
 
     def is_duplicate_fin_dividend(self, data: dict[str, Any]) -> bool:
