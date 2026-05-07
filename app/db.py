@@ -342,8 +342,6 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account
-ON fin_cashflow_entries(account_id);
 
 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -768,8 +766,6 @@ CREATE TABLE IF NOT EXISTS fin_cashflow_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_cashflow_entry_date
 ON fin_cashflow_entries(entry_date DESC, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account
-ON fin_cashflow_entries(account_id);
 
 CREATE TABLE IF NOT EXISTS fin_cashflow_recurring (
     id BIGSERIAL PRIMARY KEY,
@@ -897,6 +893,9 @@ def init_db(database_target: str) -> None:
                     "ALTER TABLE fin_cashflow_entries ADD COLUMN IF NOT EXISTS account_id BIGINT REFERENCES fin_accounts(id) ON DELETE SET NULL",
                 ):
                     cursor.execute(stmt)
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account ON fin_cashflow_entries(account_id)",
+                )
             conn.commit()
 
         global _pg_pool
@@ -916,6 +915,9 @@ def init_db(database_target: str) -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SQLITE_SCHEMA)
         _run_sqlite_migrations(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fin_cashflow_account ON fin_cashflow_entries(account_id)",
+        )
         conn.commit()
 
 
