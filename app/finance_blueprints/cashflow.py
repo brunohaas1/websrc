@@ -129,7 +129,17 @@ def register_cashflow_routes(
         month = sanitize_text(str(request.args.get("month", "")), 7).strip()
         entry_type = sanitize_text(str(request.args.get("type", "")), 12).strip().lower()
         payment_status = sanitize_text(str(request.args.get("status", "")), 12).strip().lower()
+        cost_center = sanitize_text(str(request.args.get("cost_center", "")), 60).strip()
+        subcategory = sanitize_text(str(request.args.get("subcategory", "")), 60).strip()
+        category = sanitize_text(str(request.args.get("category", "")), 60).strip()
+        tag = sanitize_text(str(request.args.get("tag", "")), 30).strip().lower()
         q = sanitize_text(str(request.args.get("q", "")), 120).strip()
+        date_from = sanitize_text(str(request.args.get("date_from", "")), 10).strip()
+        date_to = sanitize_text(str(request.args.get("date_to", "")), 10).strip()
+        credit_card_id = request.args.get("credit_card_id", "")
+        account_id = request.args.get("account_id", "")
+        amount_min = request.args.get("amount_min", "")
+        amount_max = request.args.get("amount_max", "")
         limit = int(request.args.get("limit", "200"))
         page_str = request.args.get("page")
         page = max(1, int(page_str or "1"))
@@ -141,6 +151,30 @@ def register_cashflow_routes(
             return jsonify({"error": "type inválido (income|expense)"}), 400
         if payment_status and payment_status not in ("pending", "paid"):
             return jsonify({"error": "status inválido (pending|paid)"}), 400
+        if date_from and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_from):
+            return jsonify({"error": "date_from inválido (use YYYY-MM-DD)"}), 400
+        if date_to and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_to):
+            return jsonify({"error": "date_to inválido (use YYYY-MM-DD)"}), 400
+
+        try:
+            cid = int(credit_card_id) if credit_card_id else None
+        except (ValueError, TypeError):
+            cid = None
+
+        try:
+            aid = int(account_id) if account_id else None
+        except (ValueError, TypeError):
+            aid = None
+
+        try:
+            amin = float(amount_min) if amount_min else None
+        except (ValueError, TypeError):
+            amin = None
+
+        try:
+            amax = float(amount_max) if amount_max else None
+        except (ValueError, TypeError):
+            amax = None
         
         # Pagination
         offset = (page - 1) * max(1, min(1000, limit))
@@ -151,6 +185,16 @@ def register_cashflow_routes(
             entry_type=entry_type or None,
             payment_status=payment_status or None,
             q=q or None,
+            cost_center=cost_center or None,
+            subcategory=subcategory or None,
+            category=category or None,
+            tag=tag or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            credit_card_id=cid,
+            account_id=aid,
+            amount_min=amin,
+            amount_max=amax,
             limit=max(1, min(1000, limit)),
             offset=offset,
         )
@@ -219,12 +263,27 @@ def register_cashflow_routes(
             "entry_type": entry_type,
             "amount": amount,
             "category": sanitize_text(str(body.get("category", "")), 60),
+            "subcategory": sanitize_text(str(body.get("subcategory", "")), 60),
+            "cost_center": sanitize_text(str(body.get("cost_center", "")), 60),
             "description": sanitize_text(str(body.get("description", "")), 160),
             "entry_date": entry_date,
             "notes": sanitize_text(str(body.get("notes", "")), 500),
+            "tags": _normalize_tags(body.get("tags")),
         }
         
         entry_id = repo.add_fin_cashflow_entry(data)
+
+        payment_status = sanitize_text(str(body.get("payment_status", "pending")), 12).strip().lower()
+        if payment_status in ("pending", "paid"):
+            settled_at = None
+            if payment_status == "paid":
+                settled_at = sanitize_text(
+                    str(body.get("settled_at") or entry_date),
+                    10,
+                )
+                if not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at):
+                    return jsonify({"error": "settled_at inválida (use YYYY-MM-DD)"}), 400
+            repo.set_fin_cashflow_status(entry_id, payment_status, settled_at)
         
         # Audit and cache invalidation
         _audit("add", "cashflow", entry_id, {"entry_type": entry_type, "amount": amount})
@@ -362,6 +421,20 @@ def register_cashflow_routes(
             "installments": installments,
             "ids": created_ids,
         }), 201
+
+    @app.get("/api/finance/cashflow/installments/<string:group_id>")
+    @limiter.limit("30/minute")
+    def finance_list_installments(group_id: str):
+        safe_group = sanitize_text(str(group_id), 64).strip()
+        if not safe_group:
+            return jsonify({"error": "group_id inválido"}), 400
+        entries = repo.list_fin_cashflow_entries(limit=200)
+        group_entries = [
+            e for e in entries
+            if str(e.get("installment_group") or "") == safe_group
+        ]
+        group_entries.sort(key=lambda e: int(e.get("installment_index") or 0))
+        return jsonify(group_entries)
     
     # ─────────────────────────────────────────────────────
     # Route: Split Entry (Complex)
@@ -555,7 +628,8 @@ def register_cashflow_routes(
         """Bulk update/delete cashflow entries."""
         body = request.get_json(silent=True) or {}
         ids_raw = body.get("ids", [])
-        action = sanitize_text(str(body.get("action", "update")), 20).strip().lower()
+        action_raw = body.get("action", body.get("operation", "update"))
+        action = sanitize_text(str(action_raw), 20).strip().lower()
         updates = body.get("updates", {})
         
         ok, ids, err_msg = validate_bulk_operation_ids(ids_raw, max_ids=500)
@@ -568,18 +642,123 @@ def register_cashflow_routes(
                 _invalidate_cashflow_cache()
             _audit("bulk_delete", "cashflow", None, result)
             return jsonify({**result, "action": "delete"})
+
+        if action == "status":
+            if not isinstance(updates, dict):
+                return jsonify({"error": "updates obrigatório"}), 400
+
+            raw_status = sanitize_text(
+                str(updates.get("status", updates.get("payment_status", ""))),
+                12,
+            ).strip().lower()
+            if raw_status not in ("pending", "paid"):
+                return jsonify({"error": "status inválido (pending|paid)"}), 400
+
+            settled_at_input = sanitize_text(str(updates.get("settled_at", "")), 10).strip()
+            if settled_at_input and not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at_input):
+                return jsonify({"error": "settled_at inválida (use YYYY-MM-DD)"}), 400
+
+            updated = 0
+            failed = 0
+            errors: list[str] = []
+            for entry_id in ids:
+                try:
+                    entry = repo.get_fin_cashflow_entry(entry_id)
+                    if not entry:
+                        failed += 1
+                        errors.append(f"Entry {entry_id} not found")
+                        continue
+
+                    settled_at = None
+                    if raw_status == "paid":
+                        settled_at = settled_at_input or str(entry.get("entry_date") or "")[:10]
+                        if not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at):
+                            settled_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+                    repo.set_fin_cashflow_status(entry_id, raw_status, settled_at)
+                    updated += 1
+                except Exception as ex:
+                    failed += 1
+                    errors.append(f"Entry {entry_id}: {str(ex)}")
+
+            result = {"updated": updated, "failed": failed, "errors": errors[:10]}
+            if updated > 0:
+                _invalidate_cashflow_cache()
+            _audit("bulk_status", "cashflow", None, {"status": raw_status, **result})
+            return jsonify({**result, "action": "status"})
         
         if action == "update":
             if not isinstance(updates, dict) or not updates:
                 return jsonify({"error": "updates obrigatório e não vazio"}), 400
-            
-            result = apply_bulk_cashflow_updates(ids, updates, repo)
+
+            status_update = updates.get("status", updates.get("payment_status"))
+            settled_at_update = updates.get("settled_at")
+            entry_updates = dict(updates)
+            entry_updates.pop("status", None)
+            entry_updates.pop("payment_status", None)
+            entry_updates.pop("settled_at", None)
+
+            updated = 0
+            failed = 0
+            errors: list[str] = []
+
+            # Field updates on cashflow entry itself
+            if entry_updates:
+                result_fields = apply_bulk_cashflow_updates(ids, entry_updates, repo)
+                updated += int(result_fields.get("updated") or 0)
+                failed += int(result_fields.get("failed") or 0)
+                errors.extend(list(result_fields.get("errors") or []))
+
+            # Optional payment status updates in same request
+            if status_update is not None:
+                raw_status = sanitize_text(str(status_update), 12).strip().lower()
+                if raw_status not in ("pending", "paid"):
+                    return jsonify({"error": "status inválido (pending|paid)"}), 400
+
+                settled_at_input = sanitize_text(str(settled_at_update or ""), 10).strip()
+                if settled_at_input and not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at_input):
+                    return jsonify({"error": "settled_at inválida (use YYYY-MM-DD)"}), 400
+
+                status_updated = 0
+                status_failed = 0
+                status_errors: list[str] = []
+                for entry_id in ids:
+                    try:
+                        entry = repo.get_fin_cashflow_entry(entry_id)
+                        if not entry:
+                            status_failed += 1
+                            status_errors.append(f"Entry {entry_id} not found")
+                            continue
+
+                        settled_at = None
+                        if raw_status == "paid":
+                            settled_at = settled_at_input or str(entry.get("entry_date") or "")[:10]
+                            if not re.match(r"^\d{4}-\d{2}-\d{2}$", settled_at):
+                                settled_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+                        repo.set_fin_cashflow_status(entry_id, raw_status, settled_at)
+                        status_updated += 1
+                    except Exception as ex:
+                        status_failed += 1
+                        status_errors.append(f"Entry {entry_id}: {str(ex)}")
+
+                if not entry_updates:
+                    updated = status_updated
+                    failed = status_failed
+                errors.extend(status_errors)
+
+            result = {
+                "updated": updated,
+                "failed": failed,
+                "errors": errors[:10],
+            }
+
             if int(result.get("updated") or 0) > 0:
                 _invalidate_cashflow_cache()
             _audit("bulk_update", "cashflow", None, result)
             return jsonify({**result, "action": "update"})
-        
-        return jsonify({"error": "action inválida (update|delete)"}), 400
+
+        return jsonify({"error": "action inválida (update|status|delete)"}), 400
     
     # ─────────────────────────────────────────────────────
     # Route: Categories listing
@@ -637,7 +816,9 @@ def register_cashflow_routes(
     @limiter.limit("30/minute")
     def finance_cashflow_recurring_list():
         """List recurring transaction templates."""
-        return jsonify(repo.list_fin_cashflow_recurring(active_only=False))
+        active_only_raw = sanitize_text(str(request.args.get("active_only", "0")), 5).strip().lower()
+        active_only = active_only_raw in ("1", "true", "yes")
+        return jsonify(repo.list_fin_cashflow_recurring(active_only=active_only))
     
     @app.post("/api/finance/cashflow/recurring")
     @limiter.limit("20/minute")
@@ -663,9 +844,17 @@ def register_cashflow_routes(
             "entry_type": entry_type,
             "amount": amount,
             "category": sanitize_text(str(body.get("category", "")), 60),
+            "subcategory": sanitize_text(str(body.get("subcategory", "")), 60),
+            "cost_center": sanitize_text(str(body.get("cost_center", "")), 60),
             "description": sanitize_text(str(body.get("description", "")), 160),
             "frequency": sanitize_text(str(body.get("frequency", "monthly")), 20),
             "day_of_month": int(body.get("day_of_month", 1)),
+            "day_rule": sanitize_text(str(body.get("day_rule", "exact")), 20),
+            "start_date": sanitize_text(
+                str(body.get("start_date") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")),
+                10,
+            ),
+            "tags": _normalize_tags(body.get("tags")),
         }
         
         recurring_id = repo.add_fin_cashflow_recurring(payload)
@@ -700,7 +889,7 @@ def register_cashflow_routes(
     def finance_cashflow_alerts():
         """Get due/overdue alerts."""
         days = min(60, max(1, int(request.args.get("days", "7"))))
-        today = datetime.now(timezone.utc).date()
+        today = datetime.datetime.now(datetime.timezone.utc).date()
         
         rows = repo.list_fin_cashflow_entries(
             entry_type="expense",
@@ -714,7 +903,7 @@ def register_cashflow_routes(
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", entry_date):
                 continue
             try:
-                due_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+                due_date = datetime.datetime.strptime(entry_date, "%Y-%m-%d").date()
             except ValueError:
                 continue
             
@@ -808,13 +997,37 @@ def register_cashflow_routes(
         """Get cashflow KPIs."""
         month = sanitize_text(str(request.args.get("month", "")), 7).strip()
         if not month:
-            month = datetime.now(timezone.utc).strftime("%Y-%m")
+            month = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
         if not re.match(r"^\d{4}-\d{2}$", month):
             return jsonify({"error": "month inválido"}), 400
         
         try:
-            payload = repo.get_fin_cashflow_kpis(month=month)
-            return jsonify(payload or {})
+            analytics = repo.get_fin_cashflow_analytics(month=month)
+            totals = analytics.get("totals") if isinstance(analytics, dict) else {}
+            totals = totals if isinstance(totals, dict) else {}
+
+            income = float(totals.get("income") or 0)
+            expense = float(totals.get("expense") or 0)
+            balance = float(totals.get("balance") or (income - expense))
+            savings_rate_pct = float(totals.get("savings_rate_pct") or 0)
+
+            burn_rate = expense
+            accounts_summary = repo.get_fin_accounts_balance_summary()
+            cash_reserve = float((accounts_summary or {}).get("total_balance") or 0)
+            runway_months = None
+            if burn_rate > 0:
+                runway_months = round(cash_reserve / burn_rate, 1)
+
+            payload = {
+                "month": month,
+                "income": round(income, 2),
+                "expense": round(expense, 2),
+                "balance": round(balance, 2),
+                "burn_rate": round(burn_rate, 2),
+                "runway_months": runway_months,
+                "savings_rate_pct": round(savings_rate_pct, 2),
+            }
+            return jsonify(payload)
         except Exception:
             return jsonify({"error": "Erro ao calcular KPIs"}), 500
     

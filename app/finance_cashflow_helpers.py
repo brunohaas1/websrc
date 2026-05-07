@@ -4,7 +4,7 @@ import csv
 import hashlib
 import io
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .security import sanitize_text
@@ -268,7 +268,7 @@ def build_reconcile_suggestions(
     min_score: float,
 ) -> list[dict]:
     """Build reconciliation suggestions with scoring heuristics."""
-    today = datetime.now().date()
+    today = datetime.now(timezone.utc).date()
     keyword_pattern = re.compile(
         r"\b(pix|debito|débito|cartao|cartão|boleto|pagamento"
         r"|ifood|uber|99|transferencia|transferência)\b",

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 def _normalize_tags(raw_tags: Any) -> list[str]:
     """Normalize tags input to list of strings."""
-    from .security import sanitize_text
+    from ..security import sanitize_text
     if isinstance(raw_tags, list):
         return [sanitize_text(str(t), 30).strip().lower() for t in raw_tags if t]
     if isinstance(raw_tags, str):

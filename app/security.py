@@ -44,8 +44,6 @@ def require_admin_key(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        if bool(current_app.testing):
-            return fn(*args, **kwargs)
         configured_key = current_app.config.get("ADMIN_API_KEY") or ""
         enforce_keys = bool(current_app.config.get("REQUIRE_API_KEYS", False)) and not (
             bool(current_app.testing) or bool(current_app.debug)
@@ -83,8 +81,6 @@ def require_finance_key(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        if bool(current_app.testing):
-            return fn(*args, **kwargs)
         configured_key = current_app.config.get("FINANCE_API_KEY") or ""
         enforce_keys = bool(current_app.config.get("REQUIRE_API_KEYS", False)) and not (
             bool(current_app.testing) or bool(current_app.debug)
